@@ -11,7 +11,7 @@ It is not investment advice. Signals come from fixed rules on free, delayed data
 | Feature | Source | Notes |
 |---|---|---|
 | Prices, signals, patterns, risk, backtest | Yahoo Finance (free) | Prices can be up to 15 minutes late |
-| News and tone | Google News | Only headlines that name the company count toward a stock's news tone or alerts |
+| News and tone | Google News | A headline counts toward a stock's news tone or alerts only if it is clearly about the company: the full name, a ticker that is not an ordinary word, or a single name word together with business wording (shares, results, Q2, dividend). Stories about people or sports that share a name are ignored. Breaking-news alerts need a headline from the last 6 hours; older ones still count toward the tone for up to 48 hours |
 | Buying / selling pressure | Volume (Chaikin Money Flow, up-volume share) | A proxy. The exchange order book is not published for free |
 | NSE delivery % and bulk/block deals | NSE end-of-day files | India only, updated after each trading day |
 | Dividends | Actual payments from Yahoo | Frequency, amount, 12-month and recurring yield, specials, overdue payments |

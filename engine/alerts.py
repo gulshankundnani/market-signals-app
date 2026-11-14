@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
-from . import signals
+from . import news, signals
 
 SEEN_LIMIT = 500
 DIGEST_LINES = 15
@@ -189,7 +189,7 @@ def build_messages(previous, current, watch, seen, first_run, news_tones=NEWS_TO
             seen_list.append(key)
             if not first_run and item["strong"] in news_tones:
                 tone = "Negative" if item["strong"] == "neg" else "Positive"
-                lines.append(f"{tone} news, {record['name']} ({symbol}): {item['title']} ({item['source']}, {item['age_min']} min ago)")
+                lines.append(f"{tone} news, {record['name']} ({symbol}): {item['title']} ({item['source']}, {news.age_text(item['age_min'])})")
                 items.append({"symbol": symbol, "kind": "news"})
     return lines, seen_list[-SEEN_LIMIT:]
 

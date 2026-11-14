@@ -32,6 +32,7 @@ STRONG_POSITIVE = ["surge", "soar", "upgrade", "buyback", "record profit", "reco
 
 HALF_LIFE_HOURS = 12
 MAX_AGE_HOURS = 48
+ALERT_MAX_AGE_HOURS = 6    # older than this is not "breaking"; it still counts toward the stock's news tone
 
 
 def _compile(words):
@@ -53,30 +54,93 @@ GENERIC_WORDS = {
 }
 
 
+# A company name is often also a surname or a place. Sports and celebrity stories that happen to share the name
+# must not count as news about the company.
+PERSON_SUFFIXES = {"jr", "sr"}
+SPORT_WORDS = {"nba", "nfl", "mlb", "nhl", "wnba", "ncaa", "mls", "fifa", "uefa", "playoffs", "quarterback", "midfielder",
+               "striker", "goalkeeper", "linebacker", "touchdown"}
+
+
 def _words(text):
     return re.findall(r"[a-z0-9&]+", text.lower())
 
 
-def is_relevant(title, name, ticker_base=None):
-    """True when the headline names the company, so its tone can fairly be credited to the stock.
+def _about_a_person_or_sport(words, source):
+    if "sport" in (source or "").lower() or SPORT_WORDS.intersection(words):
+        return True
+    return any(words[i] in PERSON_SUFFIXES for i in range(len(words)))
 
-    Search results often match a company only in the article body. Those headlines may be about
-    something unrelated, so they must not trigger alerts or move the sentiment score.
+
+def age_text(minutes):
+    """'45 min ago', '14 h ago' or '3 d ago'. Empty when the age is unknown."""
+    if minutes is None:
+        return ""
+    if minutes < 90:
+        return f"{minutes} min ago"
+    if minutes < 48 * 60:
+        return f"{round(minutes / 60)} h ago"
+    return f"{round(minutes / 1440)} d ago"
+
+
+# A single shared word (Trent, Titan, Apple) is not enough to say a headline is about the company: it may be a person,
+# a place or a product. Such headlines count only when they also read like business news.
+CONTEXT_WORDS = {
+    "share", "shares", "stock", "stocks", "nifty", "sensex", "nse", "bse", "nasdaq", "nyse", "crore", "crores", "quarter",
+    "quarterly", "results", "earnings", "ebitda", "revenue", "profit", "profits", "dividend", "dividends", "buyback",
+    "investor", "investors", "brokerage", "analyst", "analysts", "valuation", "ipo", "sebi", "rbi", "ltd", "limited", "inc",
+    "corp", "plc", "ceo", "cfo", "chairman", "shareholder", "shareholders", "rating", "upgrade", "downgrade", "upgrades",
+    "downgrades", "stake", "acquisition", "acquire", "acquires", "merger", "guidance", "forecast", "outlook", "margin",
+    "margins", "rs", "usd", "billion", "bn", "mcap", "order", "orders", "contract", "capex", "market", "markets",
+    "bond", "bonds", "funding", "loan", "loans", "raise", "raises", "raising", "trading", "customers", "vehicles",
+    "investment", "investments", "invest", "invests",
+}
+# A long, distinctive name word proves the headline is about the company, unless it is also an ordinary word or place.
+DISTINCTIVE_MIN_LEN = 6
+COMMON_WORDS = {"reliance", "target", "eternal", "britannia", "premier", "delta", "baroda", "empire", "global", "central",
+                "apollo", "jubilant", "universal", "supreme", "crompton", "polycab", "oberoi", "sobha"}
+_CONTEXT_PATTERN = re.compile(r"^(q[1-4]|fy\d{2,4}|\d+(?:bn|mn|cr|crore|lakh))$")
+
+
+def _has_context(words):
+    return any(w in CONTEXT_WORDS or _CONTEXT_PATTERN.match(w) for w in words)
+
+
+def is_relevant(title, name, ticker_base=None, source=None):
+    """True when the headline is about the company, so its tone can fairly be credited to the stock.
+
+    Search results often match a company only in the article body, or only share a word with its name. Those
+    headlines must not trigger alerts or move the sentiment score, so the match has to be confident:
+    the full multi-word name, a ticker that is an abbreviation (TCS), or a single name word (or a ticker that is
+    also a plain word, like Trent) together with business wording. People and sports stories never count.
     """
     words = _words(title)
+    if _about_a_person_or_sport(words, source):
+        return False
     text = " " + " ".join(words) + " "
     name_words = [w for w in _words(name) if w not in NAME_SUFFIXES]
-    if name_words and " " + " ".join(name_words) + " " in text:
+    phrase = " ".join(name_words)
+    ticker = (ticker_base or "").lower() if ticker_base and len(ticker_base) >= 3 else ""
+    if len(name_words) >= 2 and " " + phrase + " " in text:
         return True
-    if any(w in words for w in name_words if len(w) >= 4 and w not in GENERIC_WORDS):
+    if ticker and ticker not in name_words and ticker in words:
         return True
-    return bool(ticker_base) and len(ticker_base) >= 3 and ticker_base.lower() in words
+    if ticker_base and re.search(r"\((?:[A-Za-z]+:)?" + re.escape(ticker_base) + r"\)", title):
+        return True
+    distinctive = [w for w in name_words if len(w) >= DISTINCTIVE_MIN_LEN and w not in GENERIC_WORDS and w not in COMMON_WORDS]
+    if any(w in words for w in distinctive):
+        return True
+    shares_a_word = (
+        bool(name_words) and " " + phrase + " " in text
+        or any(w in words for w in name_words if len(w) >= 4 and w not in GENERIC_WORDS)
+        or bool(ticker) and ticker in words
+    )
+    return shares_a_word and _has_context(words)
 
 
 def mark_relevance(items, name, ticker_base=None):
     """Tag each headline with `relevant`. Unrelated ones lose their breaking-news flag."""
     for item in items:
-        item["relevant"] = is_relevant(item["title"], name, ticker_base)
+        item["relevant"] = is_relevant(item["title"], name, ticker_base, item.get("source"))
         if not item["relevant"]:
             item["strong"] = None
     return items
@@ -155,6 +219,6 @@ def news_score(items):
     return total / weight_sum if weight_sum else None
 
 
-def strong_alerts(items, max_age_hours=24):
+def strong_alerts(items, max_age_hours=ALERT_MAX_AGE_HOURS):
     return [i for i in items if i["strong"] and i.get("relevant", True) and i["age_min"] is not None
             and i["age_min"] <= max_age_hours * 60][:3]

@@ -621,7 +621,8 @@ class NewsTests(unittest.TestCase):
 
     def test_relevance_requires_the_company_name(self):
         rel = news.is_relevant
-        self.assertTrue(rel("Apple unveils new iPhone", "Apple"))
+        self.assertFalse(rel("Apple unveils new iPhone", "Apple"), "one shared word and no business wording is not enough")
+        self.assertTrue(rel("Apple shares rise after iPhone launch", "Apple", "AAPL"))
         self.assertFalse(rel("3 Favorite Buffett Stocks Hit Record Highs As Nvidia Sinks", "Apple"))
         self.assertTrue(rel("State Bank of India raises lending rate", "State Bank of India", "SBIN"))
         self.assertFalse(rel("Online fraud drains woman's account; bank ordered to pay", "State Bank of India", "SBIN"))
@@ -631,6 +632,39 @@ class NewsTests(unittest.TestCase):
         self.assertFalse(rel("Tata Motors shares fall", "Tata Steel", "TATASTEEL"))
         self.assertTrue(rel("ITC announces dividend", "ITC", "ITC"))
         self.assertFalse(rel("Marketing campaign launches", "ITC", "ITC"))
+
+    def test_a_surname_or_place_sharing_the_name_is_not_the_company(self):
+        rel = news.is_relevant
+        self.assertFalse(rel("The Gary Trent Jr. Investigation Could DESTROY the Franchise", "Trent", "TRENT", "Yahoo Sports"))
+        self.assertFalse(rel("Gary Trent scores 30 as team wins", "Trent", "TRENT"))
+        self.assertFalse(rel("Trent Alexander-Arnold injury probe", "Trent", "TRENT", "Sky Sports"))
+        self.assertFalse(rel("Mars mission to Titan announced", "Titan Company", "TITAN"))
+        self.assertFalse(rel("Overreliance on AI is a risk", "Reliance Industries", "RELIANCE"))
+        self.assertFalse(rel("Baroda city floods after heavy rain", "Bank of Baroda", "BANKBARODA"))
+        self.assertFalse(rel("Lakers star in NBA playoffs probe", "Lakers Corp", "LAKE"))
+
+    def test_the_same_names_count_when_the_headline_is_business_news(self):
+        rel = news.is_relevant
+        self.assertTrue(rel("Trent shares jump after Q2 results", "Trent", "TRENT"))
+        self.assertTrue(rel("Titan Company shares rally on festive demand", "Titan Company", "TITAN"))
+        self.assertTrue(rel("Reliance plans $4.6bn investment in coal-to-gas project", "Reliance Industries", "RELIANCE"))
+        self.assertTrue(rel("Mastercard (MA) Opens Singapore Innovation Centre", "Mastercard", "MA"))
+        self.assertTrue(rel("Microsoft outage eases, but recovery timeline remains unclear", "Microsoft", "MSFT"))
+        self.assertTrue(rel("Nvidia exposed to possible lawsuits", "Nvidia", "NVDA"))
+        self.assertTrue(rel("TCS wins large deal", "Tata Consultancy Services", "TCS"))
+
+    def test_breaking_alerts_are_only_for_the_last_few_hours(self):
+        item = lambda age: {"title": "Acme probe", "strong": "neg", "relevant": True, "age_min": age}
+        found = news.strong_alerts([item(30), item(5 * 60), item(7 * 60), item(14 * 60), item(None)])
+        self.assertEqual([i["age_min"] for i in found], [30, 300])
+
+    def test_ages_are_written_for_people(self):
+        self.assertEqual(news.age_text(5), "5 min ago")
+        self.assertEqual(news.age_text(89), "89 min ago")
+        self.assertEqual(news.age_text(876), "15 h ago")
+        self.assertEqual(news.age_text(47 * 60), "47 h ago")
+        self.assertEqual(news.age_text(60 * 24 * 4), "4 d ago")
+        self.assertEqual(news.age_text(None), "")
 
     def test_irrelevant_headlines_do_not_alert_or_score(self):
         items = news.parse_rss(RSS, self.NOW)
