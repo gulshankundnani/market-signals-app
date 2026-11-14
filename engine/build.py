@@ -309,17 +309,19 @@ def run(args):
     watch = [s for s in alert_cfg.get("symbols", []) if s in {x["symbol"] for x in records}]
     lines, seen = alerts.build_messages(previous, {x["symbol"]: x for x in records}, watch,
                                         state.get("seen_alerts", []), first_run)
+    alert_log, added = alerts.update_log(state.get("alert_log", []), lines, int(now.timestamp()))
+    print(f"Alerts: {len(added)} new, {len(watch)} stocks watched")
     token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
     if lines and token and chat:
         print("Telegram alert sent" if alerts.send_telegram(token, chat, "\n\n".join(lines)) else "Telegram alert failed")
     elif lines:
-        print(f"{len(lines)} alerts ready but TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set")
-
+        print("New alerts are in the app. Telegram is not set up (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID).")
     data = {"version": 1, "generated_at": now.isoformat(timespec="seconds"), "market": overview, "ipos": ipos,
             "stocks": records, "errors": [{"symbol": e["symbol"], "error": e["error"]} for e in errors],
+            "alerts": alert_log,
             "exchange_data": {"delivery_dates": sorted(delivery)[-3:], "note": "NSE delivery data and bulk/block deals. The exchange order book (bid/ask depth) is not published for free."}}
     new_state = {"seen_alerts": seen, "delivery": delivery, "us_symbols": us_list, "new_listings": registry,
-                 "fundamentals": fund_cache, "ipo_gmp": ipo_cache}
+                 "fundamentals": fund_cache, "ipo_gmp": ipo_cache, "alert_log": alert_log}
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -329,12 +331,25 @@ def run(args):
     return 0
 
 
+def send_test_alert():
+    """Send one test message to Telegram. Returns 0 only if it was delivered."""
+    token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
+    if not (token and chat):
+        print("Telegram is not set up. Add the TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID secrets.")
+        return 1
+    ok = alerts.send_telegram(token, chat, "Test alert from Stock Signals. If you can read this, alerts are working.")
+    print("Telegram test alert sent" if ok else "Telegram test alert FAILED")
+    return 0 if ok else 1
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
+    parser.add_argument("--test-alert", action="store_true", help="send a test message to Telegram and exit")
     parser.add_argument("--out", default="site")
     parser.add_argument("--prev", default=os.environ.get("SITE_URL", ""), help="URL or folder holding the previous data.json/state.json")
     parser.add_argument("--limit", type=int, default=0, help="analyse only N stocks (testing)")
-    return run(parser.parse_args(argv))
+    args = parser.parse_args(argv)
+    return send_test_alert() if args.test_alert else run(args)
 
 
 if __name__ == "__main__":

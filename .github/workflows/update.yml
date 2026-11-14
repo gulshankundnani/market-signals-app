@@ -5,6 +5,11 @@ on:
     # Every 15 minutes on weekdays, 03:00-20:59 UTC (covers Indian and US market hours).
     - cron: "*/15 3-20 * * 1-5"
   workflow_dispatch:
+    inputs:
+      test_alert:
+        description: "Send a test message to Telegram first"
+        type: boolean
+        default: false
   push:
     branches: [main]
 
@@ -28,6 +33,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Send a test alert
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.test_alert }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m engine.build --test-alert
+
       - name: Test (the site is not published if a test fails)
         run: |
           python -m unittest discover -s tests -t .
@@ -40,7 +52,7 @@ jobs:
         run: |
           OWNER=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
           REPO="${GITHUB_REPOSITORY#*/}"
-          python -m engine.build --out site --prev "https://$OWNER.github.io/$REPO"
+          python -m engine.build --out site --prev "https://$OWNER.github.io/$REPO/"
 
       - uses: actions/configure-pages@v5
 

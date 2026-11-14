@@ -1,7 +1,12 @@
+import contextlib
+import io
+import json
 import unittest
+import urllib.error
 from datetime import date
+from unittest.mock import patch
 
-from engine import alerts, discover, exchange, ipo
+from engine import alerts, build, discover, exchange, ipo
 from engine.fetch import FetchError
 
 BHAV = """SYMBOL, SERIES, DATE1, PREV_CLOSE, OPEN_PRICE, HIGH_PRICE, LOW_PRICE, LAST_PRICE, CLOSE_PRICE, AVG_PRICE, TTL_TRD_QNTY, TURNOVER_LACS, NO_OF_TRADES, DELIV_QTY, DELIV_PER
@@ -193,6 +198,105 @@ class AlertTests(unittest.TestCase):
         cur = {f"S{i}": record(f"S{i}", "Buy", "Hold") for i in range(30)}
         lines, _ = alerts.build_messages(prev, cur, list(cur), [], False)
         self.assertEqual(len(lines), alerts.MAX_LINES)
+
+
+class AlertLogTests(unittest.TestCase):
+    NOW = 1_800_000_000
+
+    def test_log_adds_new_entries_with_stable_ids(self):
+        log, added = alerts.update_log([], ["A: Hold -> Buy", "B: Buy -> Sell"], self.NOW)
+        self.assertEqual([e["text"] for e in log], ["A: Hold -> Buy", "B: Buy -> Sell"])
+        self.assertEqual(len(added), 2)
+        self.assertEqual(len({e["id"] for e in log}), 2)
+        again, added_again = alerts.update_log(log, ["A: Hold -> Buy"], self.NOW + 60)
+        self.assertEqual(added_again, [])
+        self.assertEqual(len(again), 2)
+
+    def test_same_text_on_another_day_is_a_new_alert(self):
+        log, _ = alerts.update_log([], ["A: Hold -> Buy"], self.NOW)
+        _, added = alerts.update_log(log, ["A: Hold -> Buy"], self.NOW + 86400)
+        self.assertEqual(len(added), 1)
+
+    def test_old_entries_are_dropped_and_the_log_is_capped(self):
+        old = {"id": "old", "ts": self.NOW - 4 * 86400, "text": "old"}
+        log, _ = alerts.update_log([old], [], self.NOW)
+        self.assertEqual(log, [])
+        lines = [f"alert {i}" for i in range(alerts.LOG_LIMIT + 10)]
+        log, added = alerts.update_log([], lines, self.NOW)
+        self.assertEqual(len(log), alerts.LOG_LIMIT)
+        self.assertEqual(log[-1]["text"], lines[-1])
+        self.assertEqual(len(added), len(lines))
+
+    def test_log_survives_junk_in_saved_state(self):
+        log, added = alerts.update_log([None, "x", {"id": "k", "ts": self.NOW, "text": "kept"}], ["new"], self.NOW)
+        self.assertEqual([e["text"] for e in log], ["kept", "new"])
+        self.assertEqual(len(added), 1)
+
+    def test_log_is_json_safe(self):
+        import json
+        log, _ = alerts.update_log([], ["TCS (TCS.NS) short-term signal: Hold -> Buy. Price 2407.50 INR"], self.NOW)
+        json.dumps(log, allow_nan=False)
+
+
+
+class FakeResponse:
+    def __init__(self, status=200):
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class TelegramTests(unittest.TestCase):
+    URLOPEN = "engine.alerts.urllib.request.urlopen"
+
+    def test_sends_the_text_to_the_chat(self):
+        with patch(self.URLOPEN, return_value=FakeResponse()) as opened:
+            self.assertTrue(alerts.send_telegram("123:token", "-1001", "TCS: Hold -> Buy"))
+        request = opened.call_args[0][0]
+        self.assertEqual(request.full_url, "https://api.telegram.org/bot123:token/sendMessage")
+        body = json.loads(request.data)
+        self.assertEqual((body["chat_id"], body["text"]), ("-1001", "TCS: Hold -> Buy"))
+        self.assertEqual(request.get_header("Content-type"), "application/json")
+
+    def test_the_token_is_never_in_the_message_body(self):
+        with patch(self.URLOPEN, return_value=FakeResponse()) as opened:
+            alerts.send_telegram("123:secret-token", "1", "hello")
+        self.assertNotIn(b"secret-token", opened.call_args[0][0].data)
+
+    def test_long_messages_are_cut_to_telegrams_limit(self):
+        with patch(self.URLOPEN, return_value=FakeResponse()) as opened:
+            alerts.send_telegram("t", "1", "x" * 9000)
+        self.assertEqual(len(json.loads(opened.call_args[0][0].data)["text"]), alerts.TELEGRAM_MAX_CHARS)
+
+    def test_failures_return_false_instead_of_raising(self):
+        for error in (urllib.error.URLError("down"), TimeoutError(), ConnectionError()):
+            with patch(self.URLOPEN, side_effect=error):
+                self.assertFalse(alerts.send_telegram("t", "1", "x"))
+        with patch(self.URLOPEN, return_value=FakeResponse(500)):
+            self.assertFalse(alerts.send_telegram("t", "1", "x"))
+
+    def test_test_alert_needs_both_secrets_and_a_delivered_message(self):
+        quiet = contextlib.redirect_stdout(io.StringIO())
+        with quiet, patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(build.send_test_alert(), 1)
+        with quiet, patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "t"}, clear=True):
+            self.assertEqual(build.send_test_alert(), 1)
+        both = {"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "1"}
+        with quiet, patch.dict("os.environ", both, clear=True), patch("engine.build.alerts.send_telegram", return_value=True) as sent:
+            self.assertEqual(build.send_test_alert(), 0)
+        sent.assert_called_once()
+        with quiet, patch.dict("os.environ", both, clear=True), patch("engine.build.alerts.send_telegram", return_value=False):
+            self.assertEqual(build.send_test_alert(), 1)
+
+    def test_test_alert_flag_skips_the_full_build(self):
+        with patch("engine.build.send_test_alert", return_value=0) as test_alert, patch("engine.build.run") as full_run:
+            self.assertEqual(build.main(["--test-alert"]), 0)
+        test_alert.assert_called_once()
+        full_run.assert_not_called()
 
 
 class IpoTests(unittest.TestCase):

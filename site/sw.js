@@ -1,4 +1,4 @@
-const CACHE = 'signals-v1';
+const CACHE = 'signals-v2';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ipo.js', 'icon.svg', 'manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {
@@ -13,25 +13,11 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+/* Network first, so the page always gets fresh data. The cache is only a fallback when offline. */
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
-
-  if (url.pathname.endsWith('/data.json')) {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const copy = response.clone();
-            caches.open(CACHE).then((cache) => cache.put(request, copy));
-          }
-          return response;
-        })
-        .catch(() => caches.match(request)),
-    );
-    return;
-  }
   event.respondWith(
     fetch(request)
       .then((response) => {

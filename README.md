@@ -32,7 +32,7 @@ It is not investment advice. Signals come from fixed rules on free, delayed data
   source for Indian IPO dates and GMP. If its page layout changes, the parser returns nothing instead of
   guessing and the app keeps showing the last good data with a warning.
 * Order book depth, real-time ticks, and insider or bulk-deal data for the US.
-* Alerts when the app is closed need a one-time Telegram setup (below).
+* Alerts when the app is closed need the optional Telegram setup (see Alerts below).
 
 ## Set it up (about 10 minutes)
 
@@ -47,19 +47,27 @@ It is not investment advice. Signals come from fixed rules on free, delayed data
 The workflow then runs by itself every 15 minutes on weekdays. If a test fails or too many data
 sources fail, the site is not replaced and the previous version stays online.
 
-## Telegram alerts (optional, works when the app is closed)
+## Alerts
 
-1. In Telegram, message `@BotFather`, send `/newbot` and follow the steps. Keep the token private.
-2. Send any message to your new bot, then open `https://api.telegram.org/bot<TOKEN>/getUpdates` in a
-   browser (with your token) and note the number after `"chat":{"id":`.
-3. In the repository: **Settings > Secrets and variables > Actions > New repository secret**. Add
-   `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
-4. Edit `config/alerts.json` and list the stocks to watch, for example
-   `{"symbols": ["TCS.NS", "SBIN.NS", "AAPL"]}`.
+Edit `config/alerts.json` and list the stocks to watch, for example
+`{"symbols": ["TCS.NS", "SBIN.NS", "AAPL"]}`. An alert is raised when a watched stock's short- or long-term
+signal moves between buy, hold and sell, and when breaking news that names the company appears. The first run
+only records the current state and raises nothing.
 
-You are then messaged when a watched stock's short- or long-term signal moves between buy, hold and sell,
-and when breaking news that names the company appears. Delivery depends on the 15-minute schedule
-(GitHub may delay scheduled runs). The first run only records the current state and sends nothing.
+* **In the app:** the Alerts button turns on notifications for the stocks you starred, while the app is open.
+  Recent alerts for the watched list are also kept in the data file the site publishes.
+* **On your phone with the app closed (optional, uses Telegram):**
+  1. In Telegram, message `@BotFather`, send `/newbot` and follow the steps. Keep the token private.
+  2. Send any message to your new bot, then open `https://api.telegram.org/bot<TOKEN>/getUpdates` in a
+     browser (with your token) and note the number after `"chat":{"id":`. For a group or channel, add the bot
+     first (as an admin for a channel) and use that chat's ID.
+  3. In the repository: **Settings > Secrets and variables > Actions > New repository secret**. Add
+     `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
+  4. Check it: **Actions > Update signals > Run workflow**, tick **Send a test message to Telegram first**, then run.
+
+Delivery depends on the 15-minute schedule, and GitHub may delay scheduled runs. Without Telegram nothing is
+sent outside the app: a web page cannot push notifications to a closed browser without a push service or a
+server that stores each person's browser address, and this project uses neither.
 
 ## Change the stock list
 

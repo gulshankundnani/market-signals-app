@@ -13,19 +13,19 @@
 <body>
 <a class="skip" href="#view">Skip to content</a>
 <header class="top">
-  <div class="brand"><img src="icon.svg" alt="" width="28" height="28"><h1>Stock Signals</h1></div>
+  <div class="brand"><img src="icon.svg" alt="" width="24" height="24"><h1>Stock Signals</h1></div>
+  <nav class="tabs" aria-label="Sections">
+    <button type="button" data-tab="signals" aria-current="page">Signals</button>
+    <button type="button" data-tab="suggest">Suggestions</button>
+    <button type="button" data-tab="ipo">IPOs</button>
+    <button type="button" data-tab="market">Market</button>
+  </nav>
   <div class="status">
     <span id="updated" role="status">Loading data...</span>
     <button id="refresh" class="iconbtn" type="button" aria-label="Refresh data" title="Refresh data">&#8635;</button>
     <button id="notify" class="chip" type="button" aria-pressed="false">Alerts off</button>
   </div>
 </header>
-<nav class="tabs" aria-label="Sections">
-  <button type="button" data-tab="signals" aria-current="page">Signals</button>
-  <button type="button" data-tab="suggest">Suggestions</button>
-  <button type="button" data-tab="ipo">IPOs</button>
-  <button type="button" data-tab="market">Market</button>
-</nav>
 <div id="banner" class="banner" role="alert" hidden></div>
 <main id="view" tabindex="-1"></main>
 <dialog id="detail" aria-label="Stock details"></dialog>

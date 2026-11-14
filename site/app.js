@@ -74,7 +74,7 @@
     data: null,
     error: null,
     tab: 'signals',
-    filters: Object.assign({ market: 'ALL', horizon: 'short', signal: 'ALL', list: 'ALL', sort: 'score' }, store.get('filters', {})),
+    filters: Object.assign({ market: 'ALL', horizon: 'short', signal: 'ALL', list: 'ALL', sort: 'score', view: 'overview' }, store.get('filters', {})),
     q: '',
     watch: new Set(store.get('watch', [])),
     lists: store.get('lists', {}),
@@ -171,8 +171,27 @@
     return h('ul', { class: 'clean reasons' }, (reasons || []).map((r) => h('li', { class: r.tone }, r.text)));
   }
 
+  const slug = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
   function section(title, ...kids) {
-    return h('section', { class: 'card' }, h('h3', null, title), ...kids);
+    return h('section', { class: 'card', id: 'd-' + slug(title) }, h('h3', null, title), ...kids);
+  }
+
+  const JUMPS = [['Signals', 'signals'], ['Chart', 'price-chart'], ['Pressure', 'buying-and-selling-pressure'], ['Risk', 'levels-and-risk'],
+    ['Fundamentals', 'fundamentals'], ['Dividends', 'dividends'], ['Peers', 'peers-in-the-same-sector'], ['News', 'news'],
+    ['Backtest', 'how-have-these-rules-worked-on-this-stock']];
+
+  function jumpBar() {
+    return h('nav', { class: 'jump', 'aria-label': 'Jump to a section' }, JUMPS.map(([label, id]) => h('button', {
+      type: 'button', class: 'chip',
+      onclick: () => { const target = document.getElementById('d-' + id); if (target) target.scrollIntoView({ block: 'start', behavior: 'smooth' }); },
+    }, label)));
+  }
+
+  /* Marks a detail-view card to span the full width of the two-column layout. */
+  function wide(el) {
+    el.classList.add('wide');
+    return el;
   }
 
   function kv(pairs) {
@@ -213,6 +232,34 @@
     return rows;
   }
 
+  /* Text cells are guarded so a spreadsheet never runs one as a formula. Numbers pass through untouched. */
+  function csvCell(value) {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '';
+    let text = String(value);
+    if (/^[=+\-@\t\r]/.test(text)) text = "'" + text;
+    return /[",\n\r]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+  }
+
+  function exportCsv() {
+    const rows = visibleStocks();
+    const head = ['Symbol', 'Name', 'Market', 'Sector', 'Currency', 'Price', 'Day change %', 'Short-term signal', 'Short-term score', 'Long-term signal',
+      'Long-term score', 'Pressure', 'Dividend yield (12m)', 'P/E', 'ROE', 'Debt/Equity', 'Yearly volatility', 'Last price date'];
+    const lines = [head.map(csvCell).join(',')];
+    for (const s of rows) {
+      const fund = s.fundamentals || {};
+      lines.push([s.symbol, s.name, s.market, s.sector, s.currency, s.price, s.change_pct, s.short.label, s.short.score, s.long.label, s.long.score,
+        s.pressure ? s.pressure.label : '', s.dividend_yield, fund.pe, fund.roe, fund.debt_to_equity, (s.risk || {}).annual_vol, s.as_of].map(csvCell).join(','));
+    }
+    const url = URL.createObjectURL(new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }));
+    const link = h('a', { href: url, download: `stock-signals-${todayIso()}.csv` });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast(`Exported ${rows.length} stock${rows.length === 1 ? '' : 's'}`);
+  }
+
   function listChips() {
     const f = S.filters;
     const pool = S.data.stocks.filter((s) => f.market === 'ALL' || s.market === f.market);
@@ -223,16 +270,80 @@
     for (const name of FIXED_LISTS) if (counts.has(name)) chips.push([name, name, counts.get(name)]);
     const sectors = [...counts.keys()].filter((n) => !FIXED_LISTS.includes(n) && !['Other'].includes(n)).sort();
     for (const name of sectors) chips.push([name, name, counts.get(name)]);
-    return chips.map(([key, label, count]) => h('button', {
+    const buttons = chips.map(([key, label, count]) => h('button', {
       type: 'button', class: 'chip' + (f.list === key ? ' on' : ''), 'aria-pressed': f.list === key ? 'true' : 'false',
       onclick: () => { f.list = key; saveFilters(); updateSignals(); },
     }, `${label} (${count})`));
+    buttons.push(h('button', { type: 'button', class: 'chip', onclick: () => {
+      const name = (prompt('Name for the new list (for example "Retirement")') || '').trim().slice(0, 30);
+      if (!name) return;
+      if (S.lists[name]) { toast('A list with that name already exists'); return; }
+      S.lists[name] = []; store.set('lists', S.lists); f.list = 'C:' + name; saveFilters(); updateSignals();
+      toast('List created. Open a stock to add it to this list.');
+    } }, '+ New list'));
+    return buttons;
   }
+
+  const VIEWS = [['overview', 'Overview'], ['valuation', 'Valuation'], ['dividend', 'Dividends'], ['technical', 'Technical'], ['risk', 'Risk']];
+  const DASH = '–';
+
+  const pressureText = (s) => (s.pressure ? s.pressure.label.replace(' pressure', '') : DASH);
+  const pressureClass = (s) => (s.pressure && s.pressure.label.startsWith('Buying') ? 'pos' : s.pressure && s.pressure.label.startsWith('Selling') ? 'neg' : '');
+  const dividendCell = (s) => (isNum(s.dividend_yield) && s.dividend_yield > 0
+    ? [percent(s.dividend_yield, 2), s.dividend ? h('span', { class: 'muted small', title: `${s.dividend.frequency} dividend${s.dividend.overdue ? ', payment overdue' : ''}` }, ` ${FREQ_CODE[s.dividend.frequency] || ''}${s.dividend.overdue ? '!' : ''}`) : null]
+    : DASH);
+  const newsCell = (s) => [h('span', { class: `dot ${toneOf(s.news.score)}`, title: 'News tone' }), s.news.alerts.length ? h('span', { class: 'tag warn' }, '!') : null];
+
+  /* Extra columns for each table view, after the fixed Stock, Price, Day and Signal columns. */
+  function extraColumns(view) {
+    const fund = (s) => s.fundamentals || {};
+    const ind = (s) => s.indicators || {};
+    const risk = (s) => s.risk || {};
+    const sets = {
+      overview: [
+        { label: 'Pressure', render: pressureText, cls: pressureClass },
+        { label: 'Dividend', num: true, render: dividendCell },
+        { label: 'News', render: newsCell, hideMd: true },
+      ],
+      valuation: [
+        { label: 'Mkt cap', num: true, render: (s) => big(fund(s).market_cap, s.currency) },
+        { label: 'P/E', num: true, render: (s) => number(fund(s).pe, 1) },
+        { label: 'P/B', num: true, render: (s) => number(fund(s).pb, 1) },
+        { label: 'ROE', num: true, render: (s) => percent(fund(s).roe, 0) },
+        { label: 'Revenue growth', num: true, render: (s) => percent(fund(s).revenue_growth, 0) },
+        { label: 'Debt/Equity', num: true, render: (s) => number(fund(s).debt_to_equity) },
+      ],
+      dividend: [
+        { label: 'Yield (12m)', num: true, render: (s) => (s.dividend_yield > 0 ? percent(s.dividend_yield, 2) : DASH) },
+        { label: 'Recurring yield', num: true, render: (s) => (s.dividend && isNum(s.dividend.forward_yield) ? percent(s.dividend.forward_yield, 2) : DASH) },
+        { label: 'Pays', render: (s) => (s.dividend ? s.dividend.frequency + (s.dividend.overdue ? ' (overdue)' : '') : DASH) },
+        { label: 'Last payment', render: (s) => (s.dividend ? `${money(s.dividend.last_amount, s.currency)} on ${s.dividend.last_date}` : DASH), hideMd: true },
+        { label: 'Change', num: true, render: (s) => (s.dividend && isNum(s.dividend.growth) ? signed(s.dividend.growth * 100, 1) : DASH) },
+        { label: 'Payout', num: true, render: (s) => percent(fund(s).payout_ratio, 0) },
+      ],
+      technical: [
+        { label: 'RSI', num: true, render: (s) => number(ind(s).rsi, 0) },
+        { label: 'vs 200-day', num: true, render: (s) => (isNum(ind(s).sma200) ? signed((s.price / ind(s).sma200 - 1) * 100, 1) : DASH) },
+        { label: '6-month', num: true, render: (s) => (isNum(ind(s).momentum126) ? signed(ind(s).momentum126 * 100, 1) : DASH) },
+        { label: '52-week range', num: true, render: (s) => (isNum(ind(s).hi252) && ind(s).hi252 > ind(s).lo252 ? percent((s.price - ind(s).lo252) / (ind(s).hi252 - ind(s).lo252), 0) : DASH) },
+        { label: 'Pressure', render: pressureText, cls: pressureClass },
+        { label: 'Pattern', render: (s) => ((s.patterns || [])[0] ? s.patterns[0].name : DASH), hideMd: true },
+      ],
+      risk: [
+        { label: 'Volatility', num: true, render: (s) => percent(risk(s).annual_vol, 0) },
+        { label: '1-day VaR', num: true, render: (s) => percent(risk(s).var95, 1) },
+        { label: 'Worst fall', num: true, render: (s) => percent(risk(s).max_drawdown, 0) },
+        { label: 'Beta', num: true, render: (s) => number(risk(s).beta) },
+        { label: 'Stop-loss', num: true, render: (s) => (s.stop ? signed(s.stop.pct, 1) : DASH) },
+        { label: 'Rule vs hold', render: (s) => { const b = (s.backtest || {}).short; return b ? (b.beats_buy_hold_oos ? 'Beat' : 'Lagged') : DASH; }, hideMd: true },
+      ],
+    };
+    return sets[view] || sets.overview;
+  }
+  const columnClass = (column) => `${column.num ? 'num ' : ''}hide-sm${column.hideMd ? ' hide-md' : ''}`;
 
   function stockRow(s) {
     const f = S.filters;
-    const press = s.pressure ? s.pressure.label.replace(' pressure', '') : '–';
-    const pressCls = s.pressure && s.pressure.label.startsWith('Buying') ? 'pos' : s.pressure && s.pressure.label.startsWith('Selling') ? 'neg' : '';
     const star = h('button', {
       type: 'button', class: 'star' + (S.watch.has(s.symbol) ? ' on' : ''), 'aria-label': `${S.watch.has(s.symbol) ? 'Remove' : 'Add'} ${s.name} ${S.watch.has(s.symbol) ? 'from' : 'to'} watchlist`,
       'aria-pressed': S.watch.has(s.symbol) ? 'true' : 'false',
@@ -244,14 +355,33 @@
       h('td', { class: 'num' }, money(s.price, s.currency)),
       h('td', { class: `num ${isNum(s.change_pct) ? (s.change_pct >= 0 ? 'up' : 'down') : ''}` }, signed(s.change_pct)),
       h('td', null, badge(s[f.horizon])),
-      h('td', { class: `hide-sm ${pressCls}` }, press),
-      h('td', { class: 'num hide-sm' }, isNum(s.dividend_yield) && s.dividend_yield > 0
-        ? [percent(s.dividend_yield, 2), s.dividend ? h('span', { class: 'muted small', title: `${s.dividend.frequency} dividend${s.dividend.overdue ? ', payment overdue' : ''}` }, ` ${FREQ_CODE[s.dividend.frequency] || ''}${s.dividend.overdue ? '!' : ''}`) : null]
-        : '–'),
-      h('td', { class: 'hide-sm' }, h('span', { class: `dot ${toneOf(s.news.score)}`, title: 'News tone' }), s.news.alerts.length ? h('span', { class: 'tag warn' }, '!') : null));
+      extraColumns(f.view).map((column) => h('td', { class: `${columnClass(column)}${column.cls ? ' ' + column.cls(s) : ''}` }, column.render(s))));
     row.addEventListener('click', () => openDetail(s.symbol, row));
     row.addEventListener('keydown', (e) => { if (e.key === 'Enter') openDetail(s.symbol, row); });
     return row;
+  }
+
+  const MARKET_NAMES = { IN: 'India (NSE)', US: 'United States' };
+  const MARKET_INDEX = { IN: '^NSEI', US: '^GSPC' };
+
+  /* One panel per market: a header with buy/hold/sell counts and the index trend, then its table. */
+  function marketPanel(code, rows) {
+    const horizon = S.filters.horizon;
+    const count = { buy: 0, hold: 0, sell: 0 };
+    for (const s of rows) count[side(s[horizon].label)] += 1;
+    const index = ((S.data.market || {}).watch || []).find((w) => w.symbol === MARKET_INDEX[code]);
+    const head = h('div', { class: 'panelhead' },
+      h('h2', null, MARKET_NAMES[code]),
+      h('span', { class: 'muted small' }, `${rows.length} stock${rows.length === 1 ? '' : 's'}`),
+      h('span', { class: 'tag buy' }, `${count.buy} buy`), h('span', { class: 'tag' }, `${count.hold} hold`), h('span', { class: 'tag sell' }, `${count.sell} sell`),
+      index && index.regime ? h('span', { class: `tag ${index.regime === 'Downtrend' ? 'warn' : ''}`, title: `${index.name} ${signed(index.change_pct)} today` }, `${index.name}: ${index.regime}`) : null);
+    const body = rows.length
+      ? h('div', { class: 'tablewrap' }, h('table', null,
+        h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Stock'), h('th', { class: 'num' }, 'Price'), h('th', { class: 'num' }, 'Day'),
+          h('th', null, 'Signal'), extraColumns(S.filters.view).map((column) => h('th', { class: columnClass(column) }, column.label)))),
+        h('tbody', null, rows.map(stockRow))))
+      : h('div', { class: 'empty' }, 'No stocks match these filters.');
+    return h('section', { class: 'card panel', 'aria-label': MARKET_NAMES[code] }, head, body);
   }
 
   function updateSignals() {
@@ -270,10 +400,8 @@
       results.replaceChildren(head, h('div', { class: 'empty' }, f.list === 'WATCH' ? 'Your watchlist is empty. Tap the star next to a stock to add it.' : 'No stocks match these filters.'));
       return;
     }
-    results.replaceChildren(head, h('div', { class: 'card', style: 'padding:0;overflow-x:auto' }, h('table', null,
-      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Stock'), h('th', { class: 'num' }, 'Price'), h('th', { class: 'num' }, 'Day'),
-        h('th', null, 'Signal'), h('th', { class: 'hide-sm' }, 'Pressure'), h('th', { class: 'num hide-sm' }, 'Dividend'), h('th', { class: 'hide-sm' }, 'News'))),
-      h('tbody', null, rows.map(stockRow)))));
+    const codes = f.market === 'ALL' ? ['IN', 'US'] : [f.market];
+    results.replaceChildren(head, h('div', { class: 'cols' + (codes.length > 1 ? ' two' : '') }, codes.map((code) => marketPanel(code, rows.filter((s) => s.market === code)))));
   }
 
   function select(label, value, options, onChange) {
@@ -284,22 +412,17 @@
   function viewSignals() {
     const f = S.filters;
     const search = h('input', { type: 'search', placeholder: 'Name or symbol', value: S.q, 'aria-label': 'Search stocks', oninput: (e) => { S.q = e.target.value; updateSignals(); } });
-    const bar = h('div', { class: 'card' }, h('div', { class: 'row' },
+    const bar = h('div', { class: 'card filterbar' }, h('div', { class: 'row' },
       h('label', { class: 'field' }, 'Search', search),
       select('Market', f.market, [['ALL', 'All markets'], ['IN', 'India'], ['US', 'United States']], (v) => { f.market = v; f.list = 'ALL'; saveFilters(); updateSignals(); }),
       select('Signal', f.signal, [['ALL', 'Any'], ['BUY', 'Buy'], ['HOLD', 'Hold'], ['SELL', 'Sell']], (v) => { f.signal = v; saveFilters(); updateSignals(); }),
       select('Sort by', f.sort, [['score', 'Signal strength'], ['change', 'Day change'], ['dividend', 'Dividend yield'], ['name', 'Name']], (v) => { f.sort = v; saveFilters(); updateSignals(); }),
       h('div', { class: 'field' }, 'Horizon', h('div', { class: 'row', style: 'gap:6px' },
         ['short', 'long'].map((hz) => h('button', { type: 'button', class: 'chip' + (f.horizon === hz ? ' on' : ''), 'aria-pressed': f.horizon === hz ? 'true' : 'false',
-          onclick: () => { f.horizon = hz; saveFilters(); render(); } }, hz === 'short' ? 'Short-term' : 'Long-term'))))));
-    const makeList = h('button', { type: 'button', class: 'chip', onclick: () => {
-      const name = (prompt('Name for the new list (for example "Retirement")') || '').trim().slice(0, 30);
-      if (!name) return;
-      if (S.lists[name]) { toast('A list with that name already exists'); return; }
-      S.lists[name] = []; store.set('lists', S.lists); f.list = 'C:' + name; saveFilters(); updateSignals();
-      toast('List created. Open a stock to add it to this list.');
-    } }, '+ New list');
-    const root = h('div', null, bar, h('div', { class: 'chips', id: 'chips', role: 'group', 'aria-label': 'Lists' }), h('div', { class: 'row', style: 'margin-bottom:8px' }, makeList), h('div', { id: 'results' }));
+          onclick: () => { f.horizon = hz; saveFilters(); render(); } }, hz === 'short' ? 'Short-term' : 'Long-term')))),
+      select('Columns', f.view, VIEWS, (v) => { f.view = v; saveFilters(); updateSignals(); }),
+      h('button', { type: 'button', class: 'chip', title: 'Download the stocks shown as a spreadsheet file', onclick: exportCsv }, 'Export CSV')));
+    const root = h('div', null, bar, h('div', { class: 'chips', id: 'chips', role: 'group', 'aria-label': 'Lists' }), h('div', { id: 'results' }));
     queueMicrotask(updateSignals);
     return root;
   }
@@ -338,7 +461,7 @@
     for (const z of zones.resistance.slice(0, 1)) if (near(z.level)) overlays.push({ v: z.level, color: 'var(--muted)', dash: '2 4', label: 'Resistance' });
     const all = closes.concat(overlays.map((o) => o.v));
     const lo = Math.min(...all), hi = Math.max(...all), pad = (hi - lo) * 0.08 || 1;
-    const W = 640, H = 220, L = 8, R = 62, T = 10, B = 20;
+    const W = 640, H = 220, L = 8, R = 118, T = 10, B = 20;
     const x = (i) => L + (i / (closes.length - 1)) * (W - L - R);
     const y = (v) => T + (1 - (v - (lo - pad)) / (hi - lo + 2 * pad)) * (H - T - B);
     const line = (values) => values.map((v, i) => (isNum(v) ? `${i && isNum(values[i - 1]) ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}` : '')).join(' ');
@@ -469,12 +592,18 @@
         h('div', null, h('h2', { style: 'margin:0' }, s.name), h('div', { class: 'muted small' }, `${s.symbol} · ${s.exchange || ''} · ${s.sector}`),
           h('div', { style: 'font-size:22px;font-weight:700' }, money(s.price, s.currency), ' ', h('span', { class: `small ${isNum(s.change_pct) && s.change_pct >= 0 ? 'up' : 'down'}` }, signed(s.change_pct))),
           h('div', { class: 'muted small' }, `Last price date ${s.as_of}`, s.stale ? ' · price looks stale, the stock may be halted' : '')),
+        jumpBar(),
         h('button', { type: 'button', class: 'btn ghost', onclick: closeDetail }, 'Close')),
       h('div', { class: 'dbody' },
-        s.news.alerts.length ? h('section', { class: 'card', style: 'border-color:var(--sell)' }, h('h3', null, 'Breaking headlines'), newsList(s.news.alerts)) : null,
-        h('div', { class: 'grid' }, h('section', { class: 'card' }, signalCard('Short-term view (weeks)', s.short)), h('section', { class: 'card' }, signalCard('Long-term view (months to years)', s.long))),
-        s.new ? h('p', { class: 'tag warn' }, `New listing${s.listed ? ' (listed ' + s.listed + ')' : ''}: little price history, so signals are limited`) : null,
-        section('Price chart', chart(s)),
+        h('div', { class: 'card wide' }, kv([
+          ['Market cap', big((s.fundamentals || {}).market_cap, s.currency)], ['P/E', number((s.fundamentals || {}).pe, 1)], ['ROE', percent((s.fundamentals || {}).roe, 0)],
+          ['Dividend yield (12m)', percent(s.dividend_yield, 2)],
+          ['52-week range', s.indicators && isNum(s.indicators.lo252) ? `${money(s.indicators.lo252, s.currency)} – ${money(s.indicators.hi252, s.currency)}` : DASH],
+          ['Beta', s.risk ? number(s.risk.beta) : DASH]])),
+        s.news.alerts.length ? h('section', { class: 'card wide', style: 'border-color:var(--sell)' }, h('h3', null, 'Breaking headlines'), newsList(s.news.alerts)) : null,
+        h('div', { class: 'grid wide', id: 'd-signals' }, h('section', { class: 'card' }, signalCard('Short-term view (weeks)', s.short)), h('section', { class: 'card' }, signalCard('Long-term view (months to years)', s.long))),
+        s.new ? h('p', { class: 'tag warn wide' }, `New listing${s.listed ? ' (listed ' + s.listed + ')' : ''}: little price history, so signals are limited`) : null,
+        wide(section('Price chart', chart(s))),
         section('Buying and selling pressure', ...pressureBlock(s)),
         positionCalculator(s),
         section('Levels and risk', kv([
@@ -484,12 +613,12 @@
           ['Yearly volatility', r ? percent(r.annual_vol, 0) : '–'], ['1-day loss (95% VaR)', r ? percent(r.var95) : '–'],
           ['Bad-day average loss', r ? percent(r.expected_shortfall95) : '–'], ['Worst fall (1 year)', r ? percent(r.max_drawdown, 0) : '–'], ['Beta', r ? number(r.beta) : '–']])),
         section('Patterns', (s.patterns || []).length ? (s.patterns).map((p) => h('div', { title: p.note, style: 'margin-bottom:6px' }, h('span', { class: `tag ${p.bias === 'bearish' ? 'warn' : ''}` }, `${p.name} (${p.bias})`), h('span', { class: 'muted small' }, p.note))) : h('p', { class: 'muted small' }, 'No notable pattern on the latest candles.')),
-        section('Fundamentals', fundamentalsBlock(s)),
-        section('Dividends', dividendBlock(s)),
-        section('Peers in the same sector', peersBlock(s)),
+        wide(section('Fundamentals', fundamentalsBlock(s))),
+        wide(section('Dividends', dividendBlock(s))),
+        wide(section('Peers in the same sector', peersBlock(s))),
         section('News', newsList(s.news.items)),
-        section('How have these rules worked on this stock?', h('div', { class: 'grid' }, backtestBlock(bt.short, 'Short-term rule'), backtestBlock(bt.long, 'Long-term rule')),
-          h('p', { class: 'muted small' }, 'Fixed rules tested on up to 5 years of this stock, trading at the next open with 0.1% cost per trade. Past results do not guarantee future results.')),
+        wide(section('How have these rules worked on this stock?', h('div', { class: 'grid' }, backtestBlock(bt.short, 'Short-term rule'), backtestBlock(bt.long, 'Long-term rule')),
+          h('p', { class: 'muted small' }, 'Fixed rules tested on up to 5 years of this stock, trading at the next open with 0.1% cost per trade. Past results do not guarantee future results.'))),
         section('Lists', listsBlock(s))));
   }
 
@@ -774,7 +903,7 @@
       box,
       h('p', { class: 'muted small' }, 'Source: ', safeUrl(source.url) ? h('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, source.name || 'IPO data site') : 'IPO data site',
         isNum(fetched) ? `, read ${ago(fetched)}` : '', '. Premiums are cross-checked against recent news headlines that quote a figure. Dates and price bands should be confirmed in the offer document and on the NSE or BSE site.'),
-      h('p', { class: 'muted small' }, 'The grey-market premium (GMP) is an unofficial market rumour, not an exchange price. It can change daily or be wrong. Estimated profit is premium times lot size and applies only if shares are allotted; it ignores brokerage, taxes and moves on listing day. The demand label measures hype from the premium and subscription, not the quality of the business. SME IPOs are riskier, with larger minimum amounts and thin trading.'));
+      h('details', { class: 'muted small' }, h('summary', null, 'About GMP and these estimates (unofficial, can be wrong)'), 'The grey-market premium (GMP) is an unofficial market rumour, not an exchange price. It can change daily or be wrong. Estimated profit is premium times lot size and applies only if shares are allotted; it ignores brokerage, taxes and moves on listing day. The demand label measures hype from the premium and subscription, not the quality of the business. SME IPOs are riskier, with larger minimum amounts and thin trading.'));
   }
 
   function viewIpo() {
@@ -819,6 +948,8 @@
     return h('div', null,
       h('h2', null, 'Market conditions'), h('div', { class: 'grid' }, cards.length ? cards : h('div', { class: 'empty' }, 'Market data unavailable.')),
       h('p', { class: 'muted small' }, 'Uptrend means the index is above its 50 and 200-day averages. A fearful VIX (above 25) means large swings: use smaller positions.'),
+      (S.data.alerts || []).length ? [h('h2', null, 'Recent alerts'), h('div', { class: 'card' }, h('ul', { class: 'clean' },
+        [...S.data.alerts].reverse().map((a) => h('li', null, a.text, h('div', { class: 'muted small' }, ago(Math.max(0, Math.round((Date.now() / 1000 - a.ts) / 60))))))))] : null,
       h('h2', null, 'World and market news'), h('div', { class: 'card' }, newsList(m.news, true)),
       h('p', { class: 'muted small' }, (S.data.exchange_data || {}).note || ''));
   }
