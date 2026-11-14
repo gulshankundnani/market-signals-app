@@ -3,8 +3,14 @@
   "market_watch": [
     ["^NSEI", "Nifty 50", "index"], ["^GSPC", "S&P 500", "index"], ["^INDIAVIX", "India VIX", "fear"],
     ["^VIX", "US VIX", "fear"], ["USDINR=X", "USD/INR", "currency"], ["CL=F", "Crude oil", "commodity"],
-    ["GC=F", "Gold", "commodity"], ["^TNX", "US 10-year yield", "yield"]
+    ["GC=F", "Gold", "commodity"], ["^TNX", "US 10-year yield", "yield"], ["^NSEBANK", "Bank Nifty", "index"],
+    ["^BSESN", "Sensex", "index"], ["^IXIC", "Nasdaq", "index"], ["^N225", "Nikkei 225", "index"],
+    ["^HSI", "Hang Seng", "index"]
   ],
+  "regime": {
+    "IN": {"index": "^NSEI", "vix": "^INDIAVIX", "name": "Nifty 50"},
+    "US": {"index": "^GSPC", "vix": "^VIX", "name": "S&P 500"}
+  },
   "global_news_queries": [
     ["IN", "Indian stock market Sensex Nifty"], ["IN", "RBI repo rate inflation"], ["US", "Federal Reserve interest rates"],
     ["US", "crude oil prices OPEC"], ["US", "war sanctions geopolitical markets"], ["IN", "monsoon rainfall crops India"]

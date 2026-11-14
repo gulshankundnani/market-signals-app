@@ -151,3 +151,21 @@ tr.unsure td { color: var(--muted); }
 details.card summary { cursor: pointer; font-weight: 600; }
 details.card dl { margin: 8px 0 0; font-size: 13px; } details.card dt { margin-top: 6px; } details.card dd { margin: 0; color: var(--muted); }
 td > .tag { margin-left: 6px; }
+
+/* Market tab */
+.src { display: inline-block; border: 1px solid var(--line); color: var(--muted); border-radius: 5px; padding: 0 6px; font-size: 10.5px; font-weight: 600; letter-spacing: .04em; vertical-align: middle; cursor: help; }
+.regime { font-size: 20px; font-weight: 700; margin: 6px 0 2px; } .regime.up { color: var(--buy); } .regime.down { color: var(--sell); }
+.mini { width: 100%; height: 28px; display: block; margin: 4px 0; color: var(--muted); }
+ul.checks li { display: flex; gap: 8px; align-items: start; }
+.chk { flex: 0 0 auto; min-width: 28px; text-align: center; border-radius: 5px; padding: 0 4px; font-size: 12px; font-weight: 700; background: var(--hold-bg); color: var(--hold); }
+.chk.pos { background: var(--buy-bg); color: var(--buy); } .chk.neg { background: var(--sell-bg); color: var(--sell); }
+details.status .state { display: inline-block; min-width: 46px; margin-right: 8px; text-align: center; border-radius: 5px; padding: 0 6px; font-size: 11.5px; font-weight: 700; background: var(--hold-bg); color: var(--hold); }
+details.status .state.ok { background: var(--buy-bg); color: var(--buy); } details.status .state.warn { background: var(--warn-bg); color: var(--warn); }
+details.status { display: block; }
+details.status summary { cursor: pointer; display: block; margin-bottom: 6px; }
+
+/* Help notes next to section headings */
+.helpbtn { width: 20px; height: 20px; min-height: 0; padding: 0; margin-left: 4px; border: 1px solid var(--line); border-radius: 50%; background: none; color: var(--muted); font-size: 12px; font-weight: 700; line-height: 1; cursor: pointer; vertical-align: middle; }
+.helpbtn:hover, .helpbtn[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
+.helptext { margin: 4px 0 8px; padding: 8px 10px; border-left: 3px solid var(--accent); border-radius: 4px; background: var(--hold-bg); color: var(--text); font-size: 13px; line-height: 1.45; }
+@media (max-width: 720px) { .helpbtn { width: 28px; height: 28px; } }

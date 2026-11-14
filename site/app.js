@@ -183,6 +183,71 @@
     return h('section', { class: 'card', id: 'd-' + slug(title) }, h('h3', null, title), ...kids);
   }
 
+
+  /* ---------- help text: a "?" next to each section heading opens a plain-language note ---------- */
+  const HELP = [
+    [/^(India \(NSE\)|United States)$/, 'Every stock in this market for the time frame you chose. The label says how many of the fixed indicator rules point the same way: aligned bullish (most point up), mixed (they disagree) or aligned bearish (most point down). The number is the indicator alignment, from −100 to +100. It describes current conditions. It is not a forecast or a recommendation.'],
+    [/^Stock screens$/, 'A short ranked list built from your answers (goal, time frame, risk, market). It filters by readings, fundamentals and risk. It is a screen to study, not personal advice.'],
+    [/^Market conditions$/, 'How each market is behaving now, from seven simple checks on its main index. Each check is worth +1, 0 or −1 and the reason is shown. This describes the market. It is not a forecast and not a call on any stock.'],
+    [/market conditions$/, 'The seven check scores added up, from −7 to +7. +5 or more is strongly bullish conditions, +2 to +4 bullish, −1 to +1 sideways, −2 to −4 bearish and −5 or less strongly bearish. The bar shows where today sits.'],
+    [/^Indexes and global cues/, 'The latest close, today\'s move and the one-month move for the main indexes, volatility indexes, currency, oil, gold and the US 10-year yield. The line is the last 30 sessions. Uptrend means above the 50 and 200-day averages. A high volatility index (VIX above 25) means large swings.'],
+    [/^Breadth and sectors$/, 'Breadth shows how many stocks are taking part in a move, not just the index. Sectors show which industries are leading or lagging. Both are counted over the stocks in this app\'s list, not the whole exchange.'],
+    [/ breadth$/, 'Advancers rose today and decliners fell. The percentages show how many stocks are above their 20, 50 and 200-day averages. When most stocks are above their averages the move is broad. New 20-day highs and lows count stocks closing above or below the last 20 days\' range.'],
+    [/ sectors$/, 'The average move of the stocks in each sector over 1, 5 and 20 trading days, every stock counted the same. The last column is how many stocks are in the sector in this app\'s list.'],
+    [/^Recent alerts$/, 'The latest alerts the app has raised: a change in a stock\'s reading, breaking news, or a price reaching its reference or risk level. Use "View analysis" to open the stock.'],
+    [/^World and market news/, 'Headlines about markets, interest rates, oil, geopolitics and the economy, from outside news sources. They are not checked by this app.'],
+    [/^India IPOs, dates and grey-market premium/, 'Open and upcoming India IPOs with their dates, price band, lot size and subscription. Grey-market premium (GMP) is an unofficial rumour of where the shares may list, and it can be wrong. The listing price and profit or loss are illustrations only.'],
+    [/^Recently listed stocks/, 'Stocks that have listed recently, found automatically on the NSE and Nasdaq/NYSE lists. They need about 60 trading days of history before readings appear.'],
+    [/^US IPO calendar/, 'Upcoming US IPOs from the Nasdaq calendar: the date, price range and size. Financials for companies that have not listed yet are not available here.'],
+    [/^IPO headlines/, 'News headlines that mention IPOs, from outside sources. They are not checked by this app.'],
+    [/^Check an IPO yourself/, 'Optional. Free sources do not publish an unlisted company\'s financials, so you type the figures here and the same fixed rules check them. It is the one place where you enter data.'],
+    [/^IPO checker$/, 'Type in the figures of an IPO from its official documents and the fixed rules turn them into a reading for listing day and for holding long term. The reading is not a recommendation to apply.'],
+    [/^Dates, price and grey-market premium$/, 'Optional. Add the dates, price band, lot size and your own grey-market premium figure to see the estimated listing price and profit or loss per lot. The premium is an unofficial rumour and is never used in the reading.'],
+    [/^My IPO tracker$/, 'IPOs you saved from the checker. They are kept in this browser only, with their dates and the estimated profit or loss.'],
+    [/^Track record$/, 'How the app\'s own bullish and bearish readings played out afterwards, as a plain record. It is not a forecast. Figures from fewer than 30 readings are unreliable.'],
+    [/^By reading type$/, 'Results grouped by time frame (weeks view, months-to-years view) and direction (bullish, bearish). "Reference reached" means the price got to the reference level before the volatility risk level or the time limit.'],
+    [/^By indicator alignment$/, 'The same results grouped by how strong the alignment was when the alert went out. If stronger alignment does not do better, the rules need review.'],
+    [/^By market$/, 'The same results for India and the United States separately.'],
+    [/^Ideas to review$/, 'Observations drawn from the record, for you to judge. The app never changes its own rules.'],
+    [/^Which indicators lined up/, 'For each indicator, how readings it supported moved on average compared with readings it opposed. It shows which inputs have been helping.'],
+    [/^Latest results$/, 'The most recent readings that ended, with how they ended and the price move.'],
+    [/^Open readings$/, 'Readings still running: price at the alert, the reference level and the volatility risk level they are being checked against.'],
+    [/^Recent alerts for this stock$/, 'The latest alerts for this stock, with their reference level, volatility risk level and the indicator readings behind them.'],
+    [/^Breaking headlines$/, 'Recent news that names this company and reads as strongly positive or negative. Headlines come from outside sources and are not checked.'],
+    [/^(Short-term view|Long-term view)/, 'The label counts how many fixed indicator rules point the same way for this time frame. Weeks view uses trend, momentum, RSI, volume and news. Months-to-years view uses the 200-day average, golden or death cross, 6-month return, 52-week position and volatility. The bar runs from −100 to +100.'],
+    [/^Price chart$/, 'The last 90 trading days of closing prices. The dashed line is the 50-day average. Dotted lines mark the nearest support and resistance and the volatility risk level.'],
+    [/^Buying and selling pressure$/, 'An estimate from trading volume (money flow and the share of volume on up days) of whether buyers or sellers dominated recently. For India it adds the share of shares actually delivered. It is not exchange order-book data.'],
+    [/^Position size$/, 'A calculator, not advice. Enter your capital and the share you are willing to lose, and it works out how many shares keep a move to the volatility risk level within that amount. Prices can gap past the level.'],
+    [/^Levels and risk$/, 'Support and resistance are price areas from history where the price has turned before. The volatility risk level is 2 times the average daily range from the price. Volatility is the yearly size of swings. The 1-day loss (95%) is a loss a normal day has stayed within on 95% of days. The worst fall is the biggest drop over the last year.'],
+    [/^Patterns$/, 'Chart patterns spotted in the latest candles, with whether they lean bullish or bearish. Patterns are weak evidence on their own.'],
+    [/^Fundamentals$/, 'Company size, profit, debt and valuation figures, refreshed about once a day. They show "unavailable" when the free source has no data.'],
+    [/^Dividends$/, 'Actual dividend payments: how often they are paid, the yield over the last 12 months, special payments and any overdue one. Dividends are not guaranteed.'],
+    [/^Peers in the same sector$/, 'Other stocks in this app\'s list from the same sector, to compare readings and valuation.'],
+    [/^News$/, 'Recent headlines about this company with a positive, negative or neutral tone. They come from outside sources and are not checked.'],
+    [/^How have these rules worked on this stock\?/, 'The same fixed rules run over up to 5 years of this stock, trading at the next open with a 0.1% cost, compared with simply holding. The most recent 40% is reported on its own. It is past data only and does not predict the future.'],
+    [/^Lists$/, 'Tick the lists this stock belongs to, such as your watchlist or your own lists.'],
+  ];
+  let helpCount = 0;
+
+  function decorateHelp(root) {
+    for (const heading of root.querySelectorAll('h2, h3')) {
+      if (heading.querySelector('.helpbtn')) continue;
+      const own = [...heading.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim();
+      const entry = HELP.find(([pattern]) => pattern.test(own));
+      if (!entry) continue;
+      const note = h('p', { class: 'helptext', id: `help-${++helpCount}`, hidden: true }, entry[1]);
+      const button = h('button', { type: 'button', class: 'helpbtn', 'aria-expanded': 'false', 'aria-controls': note.id, 'aria-label': `What does "${own}" show?`, title: 'What is this?' }, '?');
+      button.addEventListener('click', (e) => {
+        e.stopPropagation();
+        note.hidden = !note.hidden;
+        button.setAttribute('aria-expanded', String(!note.hidden));
+      });
+      heading.append(' ', button);
+      const anchor = heading.parentElement && heading.parentElement.classList.contains('row') ? heading.parentElement : heading;
+      anchor.after(note);
+    }
+  }
+
   const JUMPS = [['Readings', 'signals'], ['Chart', 'price-chart'], ['Pressure', 'buying-and-selling-pressure'], ['Risk', 'levels-and-risk'],
     ['Fundamentals', 'fundamentals'], ['Dividends', 'dividends'], ['Peers', 'peers-in-the-same-sector'], ['News', 'news'],
     ['Backtest', 'how-have-these-rules-worked-on-this-stock']];
@@ -408,6 +473,7 @@
     }
     const codes = f.market === 'ALL' ? ['IN', 'US'] : [f.market];
     results.replaceChildren(head, h('div', { class: 'cols' + (codes.length > 1 ? ' two' : '') + (f.view !== 'overview' ? ' wide-view' : '') }, codes.map((code) => marketPanel(code, rows.filter((s) => s.market === code)))));
+    decorateHelp(results);
   }
 
   function select(label, value, options, onChange) {
@@ -441,6 +507,7 @@
     lastFocus = opener || document.activeElement;
     const dlg = $('#detail');
     dlg.replaceChildren(detailView(s));
+    decorateHelp(dlg);
     if (!dlg.open) dlg.showModal();
     dlg.scrollTop = 0;
   }
@@ -732,7 +799,7 @@
       select('Market', p.market, [['ALL', 'Both'], ['IN', 'India'], ['US', 'United States']], (v) => { p.market = v; draw(); })),
       h('p', { class: 'muted small', style: 'margin-bottom:0' }, 'A ranked screen using your answers, signals, fundamentals and risk. It is not personal advice. Check the stock page and your own situation before acting.'));
     queueMicrotask(draw);
-    return h('div', null, form, results);
+    return h('div', null, h('h2', null, 'Stock screens'), form, results);
   }
 
   /* ---------- IPO tab ---------- */
@@ -979,21 +1046,102 @@
   }
 
   /* ---------- market tab ---------- */
+  /* ---------- market tab ---------- */
+  const SRC_TEXT = {
+    DELAYED: 'Free market data, up to about 15 minutes late.',
+    DERIVED: 'Worked out by this app from the stocks in its own list, not from the whole exchange.',
+    EXTERNAL: 'Headlines from outside sources. They are not checked or endorsed by this app.',
+  };
+  const src = (kind) => h('span', { class: 'src', title: SRC_TEXT[kind] }, kind);
+  const moveClass = (v) => (isNum(v) ? (v >= 0 ? 'up' : 'down') : '');
+
+  function miniChart(values) {
+    const v = (values || []).filter(isNum);
+    if (v.length < 3) return null;
+    const lo = Math.min(...v), hi = Math.max(...v), span = hi - lo || 1;
+    const pts = v.map((x, i) => `${(i / (v.length - 1) * 100).toFixed(1)},${(26 - (x - lo) / span * 24).toFixed(1)}`).join(' ');
+    return svg('svg', { class: 'mini', viewBox: '0 0 100 28', preserveAspectRatio: 'none', role: 'img', 'aria-label': 'Last 30 sessions' },
+      svg('polyline', { points: pts, fill: 'none', stroke: 'currentColor', 'stroke-width': '1.6', 'vector-effect': 'non-scaling-stroke' }));
+  }
+
+  function conditionsCard(market, c) {
+    const name = (MARKET_NAMES[market] || market).replace(' (NSE)', '');
+    const r = c && c.regime;
+    if (!r) return h('div', { class: 'card' }, h('h3', null, `${name} market conditions`), h('p', { class: 'muted small' }, 'Not available right now: the index history could not be loaded.'));
+    const pos = clamp((r.score + 7) / 14 * 100, 0, 100);
+    const tone = r.score >= 2 ? 'up' : r.score <= -2 ? 'down' : '';
+    return h('div', { class: 'card' },
+      h('div', { class: 'row', style: 'justify-content:space-between;gap:6px' }, h('h3', { style: 'margin:0' }, `${name} market conditions`), src('DERIVED')),
+      h('div', { class: `regime ${tone}` }, r.label),
+      h('div', { class: 'meter', role: 'img', 'aria-label': `Conditions score ${r.score} on a scale from minus 7 to plus 7` }, h('i', { style: `left:${pos}%` })),
+      h('div', { class: 'muted small' }, `Score ${r.score > 0 ? '+' : ''}${r.score} of 7 · ${c.name || 'Index'} as of ${r.as_of}`),
+      h('ul', { class: 'clean checks' }, r.checks.map((k) => h('li', null,
+        h('span', { class: `chk ${k.score > 0 ? 'pos' : k.score < 0 ? 'neg' : ''}` }, k.score > 0 ? '+1' : k.score < 0 ? '−1' : '0'),
+        h('span', null, h('b', null, k.label), h('div', { class: 'muted small' }, k.detail))))));
+  }
+
+  function breadthCard(market, c) {
+    const b = c && c.breadth;
+    const name = (MARKET_NAMES[market] || market).replace(' (NSE)', '');
+    if (!b) return null;
+    return h('div', { class: 'card' },
+      h('div', { class: 'row', style: 'justify-content:space-between;gap:6px' }, h('h3', { style: 'margin:0' }, `${name} breadth`), src('DERIVED')),
+      h('div', { class: 'row', style: 'gap:6px;margin:6px 0' },
+        h('span', { class: 'tag buy' }, `${b.advancing} advancing`), h('span', { class: 'tag sell' }, `${b.declining} declining`), h('span', { class: 'tag' }, `${b.unchanged} unchanged`)),
+      kv([['Above 20-day average', isNum(b.above20_pct) ? `${b.above20_pct.toFixed(0)}%` : '–'],
+        ['Above 50-day average', isNum(b.above50_pct) ? `${b.above50_pct.toFixed(0)}%` : '–'],
+        ['Above 200-day average', isNum(b.above200_pct) ? `${b.above200_pct.toFixed(0)}%` : '–'],
+        ['New 20-day highs / lows', `${b.new_highs} / ${b.new_lows}`]]),
+      h('p', { class: 'muted small', style: 'margin-bottom:0' }, `Counted over the ${b.n} stocks in this app's list that traded on ${b.as_of}. It is not the whole exchange.`));
+  }
+
+  function sectorCard(market, c) {
+    const rows = (c && c.sectors) || [];
+    if (!rows.length) return null;
+    const name = (MARKET_NAMES[market] || market).replace(' (NSE)', '');
+    const cell = (v) => h('td', { class: `num ${moveClass(v)}` }, signed(v, 1));
+    return h('div', { class: 'card', style: 'padding:0;overflow-x:auto' },
+      h('div', { class: 'row', style: 'justify-content:space-between;gap:6px;padding:10px 12px 0' }, h('h3', { style: 'margin:0' }, `${name} sectors`), src('DERIVED')),
+      h('table', null, h('thead', null, h('tr', null, h('th', null, 'Sector'), h('th', { class: 'num' }, '1 day'), h('th', { class: 'num' }, '5 days'), h('th', { class: 'num' }, '20 days'), h('th', { class: 'num' }, 'Stocks'))),
+        h('tbody', null, rows.map((s) => h('tr', null, h('td', null, s.sector), cell(s.d1), cell(s.d5), cell(s.d20), h('td', { class: 'num muted' }, String(s.n)))))),
+      h('p', { class: 'muted small', style: 'padding:0 12px 8px;margin:6px 0 0' }, 'Average move of the stocks in each sector, every stock counted the same.'));
+  }
+
+  function statusCard(status) {
+    if (!status || !status.checks) return null;
+    const word = { ok: 'OK', warn: 'Check', info: 'Info' };
+    const good = status.overall === 'ok';
+    return h('details', { class: 'card status' },
+      h('summary', null, h('b', null, 'Data status: '), good ? 'all checks passed' : 'some checks need attention'),
+      h('ul', { class: 'clean' }, status.checks.map((c) => h('li', null, h('span', { class: `state ${c.state}` }, word[c.state] || c.state), h('b', null, c.name), ' ', h('span', { class: 'muted small' }, c.detail)))),
+      h('p', { class: 'muted small', style: 'margin-bottom:0' }, `Updated ${S.data.generated_at ? new Date(S.data.generated_at).toLocaleString() : ''}. These checks run every time the data is refreshed.`));
+  }
+
   function viewMarket() {
     const m = S.data.market || { watch: [], news: [] };
+    const conditions = S.data.conditions || {};
+    const markets = ['IN', 'US'].filter((k) => conditions[k]);
     const cards = m.watch.map((w) => h('div', { class: 'card' }, h('div', { class: 'muted small' }, w.name),
       h('div', { style: 'font-size:20px;font-weight:700' }, number(w.price, w.price > 1000 ? 0 : 2)),
-      h('div', { class: isNum(w.change_pct) && w.change_pct >= 0 ? 'up' : 'down' }, `${signed(w.change_pct)} today`),
+      h('div', { class: moveClass(w.change_pct) }, `${signed(w.change_pct)} today`),
       h('div', { class: 'muted small' }, `${signed(w.month_pct, 1)} in a month`),
+      miniChart(w.spark),
       w.regime ? h('span', { class: `tag ${w.regime === 'Downtrend' || w.regime === 'Fearful' ? 'warn' : ''}` }, w.regime) : null));
     return h('div', null,
-      h('h2', null, 'Market conditions'), h('div', { class: 'grid' }, cards.length ? cards : h('div', { class: 'empty' }, 'Market data unavailable.')),
+      h('h2', null, 'Market conditions'),
+      markets.length ? h('div', { class: 'grid' }, markets.map((k) => conditionsCard(k, conditions[k]))) : null,
+      markets.length ? h('p', { class: 'muted small' }, 'Seven simple checks on the main index, each worth +1, 0 or −1. They describe how the market is behaving now. They are not a forecast and not a call on any stock.') : null,
+      h('h2', null, 'Indexes and global cues ', src('DELAYED')),
+      h('div', { class: 'grid' }, cards.length ? cards : h('div', { class: 'empty' }, 'Market data unavailable.')),
       h('p', { class: 'muted small' }, 'Uptrend means the index is above its 50 and 200-day averages. A fearful VIX (above 25) means large swings: use smaller positions.'),
+      markets.some((k) => conditions[k].breadth) ? [h('h2', null, 'Breadth and sectors'),
+        h('div', { class: 'grid' }, markets.map((k) => [breadthCard(k, conditions[k]), sectorCard(k, conditions[k])]))] : null,
       (S.data.alerts || []).length ? [h('h2', null, 'Recent alerts'), h('div', { class: 'card' }, h('ul', { class: 'clean' },
         [...S.data.alerts].reverse().map((a) => h('li', null, h('span', { style: 'white-space:pre-line' }, a.text),
           h('div', { class: 'muted small' }, ago(Math.max(0, Math.round((Date.now() / 1000 - a.ts) / 60))), ' ',
             a.symbol && S.data.stocks.some((s) => s.symbol === a.symbol) ? h('button', { type: 'button', class: 'chip', onclick: (e) => openDetail(a.symbol, e.currentTarget) }, 'View analysis') : null)))))] : null,
-      h('h2', null, 'World and market news'), h('div', { class: 'card' }, newsList(m.news, true)),
+      h('h2', null, 'World and market news ', src('EXTERNAL')), h('div', { class: 'card' }, newsList(m.news, true)),
+      statusCard(S.data.status),
       h('p', { class: 'muted small' }, (S.data.exchange_data || {}).note || ''));
   }
 
@@ -1079,6 +1227,7 @@
     if (!S.data) { view.replaceChildren(h('div', { class: 'empty' }, S.error || 'Loading...')); return; }
     const builders = { signals: viewSignals, suggest: viewSuggest, ipo: viewIpo, market: viewMarket, track: viewTrack };
     view.replaceChildren((builders[S.tab] || viewSignals)());
+    decorateHelp(view);
   }
 
   function setupNotifications() {

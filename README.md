@@ -20,6 +20,7 @@ It is not investment advice. Signals come from fixed rules on free, delayed data
 | India IPOs | Investorgain's public IPO table (robots.txt allows it), read at most once an hour | Open, close, allotment and listing dates, price band, lot size, subscription, grey-market premium (GMP), estimated listing price and profit or loss per lot. Past IPOs show the actual listing price and gain |
 | GMP cross-check | Google News headlines that name the IPO and quote a premium | Flags "news agrees" or "news differs". GMP is an unofficial rumour and can be wrong |
 | US IPO calendar | Nasdaq | Date, price range, size |
+| Market conditions, breadth, sectors | Computed from the index (Nifty 50, S&P 500), its volatility index and the stocks in this app's list | Seven simple checks worth +1, 0 or -1 each, advancers and decliners, share of stocks above their 20/50/200-day averages, sector moves over 1, 5 and 20 days. Breadth and sectors cover this app's list, not the whole exchange |
 | Lists | Computed daily | Government-backed, high dividend, low debt, low volatility, momentum, oversold, near 52-week high, delivery buying, sectors |
 
 ## What is not automatic
@@ -136,6 +137,19 @@ signal components were stronger on winners, and suggested improvements.
 * The repository must allow the workflow to write: **Settings > Actions > General > Workflow permissions > Read and write**.
   If the ledger cannot be saved, calls wait in the site's state and are saved on the next run.
 * The data branch is public if the repository is public.
+
+## Market tab and data status
+
+The Market tab shows market conditions for India and the United States (seven plain checks on the main index: price against
+its 20 and 50-day averages, the 50 against the 200-day average, the 20-day move, trend strength (ADX), breadth and the
+volatility index), index cards with a 30-day line, breadth, sector moves, alerts and world headlines. These describe how
+the market is behaving now. They are not forecasts and not calls on any stock. Each block carries a small source tag:
+**DELAYED** (free data, up to about 15 minutes late), **DERIVED** (worked out by this app from its own stock list) or
+**EXTERNAL** (headlines from outside sources, not checked).
+
+At the bottom is a **Data status** panel. Every refresh checks that prices, news, index data, market conditions, NSE
+delivery data, India IPOs and the track record loaded, and says which did not. The index and volatility symbols used for
+market conditions are set under `regime` in `config/universe.json`.
 
 ## Change the stock list
 

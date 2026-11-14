@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from . import market as market_view
 from . import alerts, backtest, discover, dividends, exchange, fetch, fundamentals, ipo, ipo_gmp, ledger, news, patterns, risk, signals, tracking
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -20,6 +21,7 @@ WORKERS = 6
 FUNDAMENTALS_MAX_AGE = 20 * 3600
 STALE_DAYS = 5
 SPARK_DAYS = 90
+SPARK_MARKET = 30
 MAX_FAILURE_SHARE = 0.6
 NEW_MAX_BARS = 250
 CARRY_MAX_AGE_DAYS = 4
@@ -182,18 +184,21 @@ def add_lists(records):
         rec["lists"] = list(dict.fromkeys(lists))
 
 
-def market_overview(config, now):
+def market_overview(config, now, raw=None):
+    """Index, volatility and commodity cards plus world headlines. raw, if given, collects each symbol's bars."""
     def one(item):
         symbol, name, kind = item
         try:
-            chart = fetch.fetch_chart(symbol, "1y", 30)
+            chart = fetch.fetch_chart(symbol, "2y", 30)
         except fetch.FetchError:
             return None
         close = chart["bars"]["c"]
         out = {"symbol": symbol, "name": name, "kind": kind, "price": r(close[-1]),
                "change_pct": r((close[-1] / close[-2] - 1) * 100, 2),
                "month_pct": r((close[-1] / close[-22] - 1) * 100, 2) if len(close) > 22 else None,
-               "as_of": chart["bars"]["d"][-1]}
+               "as_of": chart["bars"]["d"][-1], "spark": [r(v) for v in close[-SPARK_MARKET:]]}
+        if raw is not None:
+            raw[symbol] = chart["bars"]
         if kind == "index" and len(close) >= 200:
             sma50, sma200 = sum(close[-50:]) / 50, sum(close[-200:]) / 200
             out["regime"] = "Uptrend" if close[-1] > sma50 and close[-1] > sma200 else \
@@ -214,6 +219,39 @@ def market_overview(config, now):
             continue
     ordered = sorted(headlines.values(), key=lambda i: (i["age_min"] is None, i["age_min"] or 0))[:20]
     return {"watch": watch, "news": ordered}
+
+
+def status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat):
+    """Plain checks of how healthy this run was, for the status panel: [{"name", "state": ok|warn|info, "detail"}]."""
+    checks = []
+
+    def add(name, state, detail):
+        checks.append({"name": name, "state": state, "detail": detail})
+
+    failed = len(errors)
+    add("Stock prices", "warn" if failed else "ok",
+        f"{len(records)} stocks loaded" + (f", {failed} failed to load" if failed else "") + (f", {len(carried)} kept from the previous run" if carried else ""))
+    news_down = sum(1 for x in records if (x.get("news") or {}).get("error"))
+    add("News", "warn" if records and news_down / len(records) > 0.2 else "ok",
+        "Headlines loaded" if not news_down else f"Headlines missing for {news_down} stocks")
+    wanted, got = len(config.get("market_watch", [])), len((overview or {}).get("watch", []))
+    add("Index and market data", "ok" if got >= wanted else "warn", f"{got} of {wanted} market series loaded")
+    missing = [m for m, c in (conditions or {}).items() if not c.get("regime")]
+    add("Market conditions", "warn" if missing else "ok",
+        "Worked out for " + ", ".join(sorted(conditions or {})) if not missing else "Not available for " + ", ".join(sorted(missing)))
+    latest = max(delivery) if delivery else None
+    add("NSE delivery data", "ok" if latest else "info", f"Latest day {latest}" if latest else "Not loaded")
+    add("India IPOs", "ok" if (ipos or {}).get("india_ok") else "warn",
+        "Fresh from the source" if (ipos or {}).get("india_ok") else "Source unavailable, showing older data")
+    if track_record is None:
+        add("Track record", "info", "Not set up")
+    else:
+        waiting = len(pending)
+        add("Track record", "warn" if waiting else "ok",
+            f"{track_record.get('calls_total', 0)} readings recorded" + (f", {waiting} waiting to be saved" if waiting else ""))
+    add("Telegram alerts", "ok" if token and chat else "info", "Connected" if token and chat else "Not set up")
+    overall = "warn" if any(c["state"] == "warn" for c in checks) else "ok"
+    return {"overall": overall, "checks": checks}
 
 
 def fill_fundamentals(records, state, now_ts, session_factory):
@@ -399,7 +437,10 @@ def run(args):
 
     fund_cache = fill_fundamentals(records, state, ctx["now_ts"], fetch.YahooSession)
     add_lists(records)
-    overview = market_overview(config, now)
+    raw_index = {}
+    overview = market_overview(config, now, raw_index)
+    info = {x["symbol"]: {"market": x["market"], "sector": x["sector"]} for x in records if not x.get("new") and x["sector"] != "Other"}
+    conditions = market_view.analyse(config.get("regime"), raw_index, ctx["bars"], info)
     ipos = carry_us_ipos(ipo.fetch_ipos(now), prev_data.get("ipos"), now)
     india, india_ok, india_at, ipo_cache = ipo_gmp.fetch_india(now, state.get("ipo_gmp"), fetch_news=news.fetch_news)
     ipos.update({"india": india, "india_ok": india_ok,
@@ -436,7 +477,9 @@ def run(args):
     track_record, pending, queue, notified, outcome_lines = track(args, state, prev_data, calls, ctx, now_ts, token, chat, link_for_symbol)
     if outcome_lines:
         alert_log, _ = alerts.update_log(alert_log, [text for _, text in outcome_lines], now_ts, [sym for sym, _ in outcome_lines])
-    data = {"version": 1, "generated_at": now.isoformat(timespec="seconds"), "market": overview, "ipos": ipos,
+    status = status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat)
+    data = {"version": 1, "generated_at": now.isoformat(timespec="seconds"), "market": overview, "conditions": conditions,
+            "status": status, "ipos": ipos,
             "stocks": records, "errors": [{"symbol": e["symbol"], "error": e["error"]} for e in errors],
             "alerts": alert_log, "track_record": track_record,
             "exchange_data": {"delivery_dates": sorted(delivery)[-3:], "note": "NSE delivery data and bulk/block deals. The exchange order book (bid/ask depth) is not published for free."}}
