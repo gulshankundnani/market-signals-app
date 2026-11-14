@@ -126,7 +126,7 @@ svg.chart { width: 100%; height: auto; display: block; }
   .hide-sm { display: none; }
   th, td { padding: 6px 5px; }
   main { padding: 8px; }
-  .top { padding: 4px 8px; }
+  .top { padding: 4px 8px; position: static; }
   .status { width: 100%; justify-content: space-between; }
   /* Bigger touch targets on phones. The compact sizes are for mouse use on larger screens. */
   .chip, .btn { min-height: 38px; display: inline-flex; align-items: center; }
@@ -134,6 +134,14 @@ svg.chart { width: 100%; height: auto; display: block; }
   .tabs button { padding: 12px 12px; }
   .star { min-width: 36px; min-height: 40px; font-size: 18px; padding: 0 2px; }
   .badge small { display: none; }
+  /* Stock page: the header scrolls away, and the section menu is one swipeable row, so it never covers the content. */
+  dialog { width: calc(100vw - 8px); max-height: 96vh; }
+  .dhead { position: static; flex-wrap: wrap; padding: 10px; }
+  .dhead > div:first-child { flex: 1 1 0; min-width: 0; }
+  .jump { order: 3; flex: 1 1 100%; flex-wrap: nowrap; overflow-x: auto; justify-content: flex-start; padding-bottom: 4px; }
+  .jump > * { flex: 0 0 auto; white-space: nowrap; }
+  .dbody { padding: 8px 10px 12px; }
+  .dbody [id^="d-"] { scroll-margin-top: 8px; }
   tbody td.num, thead th.num { padding-left: 3px; padding-right: 3px; }
   input, select { min-height: 38px; }
 }
