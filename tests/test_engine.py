@@ -688,6 +688,33 @@ class NewsTests(unittest.TestCase):
         self.assertTrue(rel("PFC shares rise after Q2 results", "Power Finance Corporation", "PFC"))
         self.assertTrue(rel("TCS wins large deal", "Tata Consultancy Services", "TCS"))
 
+    def test_headlines_about_another_company_do_not_count_for_the_one_they_mention(self):
+        rel = news.is_relevant
+        self.assertFalse(rel("Ecolab (ECL) Shares Rise After Wells Fargo Upgrade Highlighting Strategic Acquisition", "Wells Fargo", "WFC"))
+        self.assertFalse(rel("Reinsurance Group (RGA) Gets a Buy from Wells Fargo", "Wells Fargo", "WFC"))
+        self.assertFalse(rel("Merck KGaA (XTRA:MRK) Stock Looks About Right On FDA Approval News", "Merck", "MRK"))
+        self.assertFalse(rel("Grupo Televisa stock: AT&T Mexico deal awaits 2027 approvals", "AT&T", "T"))
+        self.assertFalse(rel("OpenAI Introduces ChatGPT Wallet With Visa, Mastercard, Amex - Lets AI Agents Make Purchases", "Mastercard", "MA"))
+        self.assertFalse(rel("Rs 231.80 Dividend, 1:10 Stock Split, 1 Buyback: 31 stocks to watch", "Power Finance Corporation", "PFC"))
+
+    def test_headlines_that_are_about_the_company_still_count(self):
+        rel = news.is_relevant
+        self.assertTrue(rel("Wells Fargo Eyes $50B NII in 2026", "Wells Fargo", "WFC"))
+        self.assertTrue(rel("Wells Fargo (WFC) shares rise after earnings beat", "Wells Fargo", "WFC"))
+        self.assertTrue(rel("Merck & Co. (MRK) Stock: Rises as EU Backs Expanded RSV Drug Approval", "Merck", "MRK"))
+        self.assertTrue(rel("AT&T (T) shares rise after earnings", "AT&T", "T"))
+        self.assertTrue(rel("Amazon stock: AWS sets new AgentCore runtime as default", "Amazon", "AMZN"))
+        self.assertTrue(rel("Walmart (NASDAQ:WMT) Shares Up 1.5% on Analyst Upgrade", "Walmart", "WMT"))
+        self.assertTrue(rel("Berkshire's Buyback Spree Masks a Thinner Insurance Haul (BRK.B)", "Berkshire Hathaway", "BRK-B"))
+
+    def test_upgrade_is_good_news_only_when_it_is_a_rating(self):
+        s = news.headline_sentiment
+        self.assertEqual(s("Vedanta Power Ltd Upgraded to Sell on Mixed Quality and Technical Signals"), (0.0, None))
+        self.assertEqual(s("SAIL clears Rs 1,714 crore upgrade for Durgapur alloy steel plant"), (0.0, None))
+        self.assertEqual(s("Vishal Nirmiti sees credit rating upgrade for its bank facilities")[1], "pos")
+        self.assertEqual(s("Walmart Shares Up 1.5% on Analyst Upgrade")[1], "pos")
+        self.assertEqual(s("Eicher Motors Downgraded to Hold Amid Valuation Concerns")[1], "neg")
+
     def test_breaking_alerts_are_only_for_the_last_few_hours(self):
         item = lambda age: {"title": "Acme probe", "strong": "neg", "relevant": True, "age_min": age}
         found = news.strong_alerts([item(30), item(5 * 60), item(7 * 60), item(14 * 60), item(None)])

@@ -325,8 +325,10 @@ class DropIrrelevantTests(unittest.TestCase):
         roundup = self.entry("Positive news, Power Finance Corporation (PFC.NS): Upcoming dividend, buyback record date: MRF, SCI, PFC, PTC (Livemint, 197 min ago)", "PFC.NS")
         right = self.entry("Positive news, Apple (AAPL): Apple (AAPL) shares surge after record profit (Reuters, 12 min ago)", "AAPL")
         signal = self.entry("ALIGNED BULLISH: Apple (AAPL)" + chr(10) + "Weeks view: Mixed -> Aligned bullish. Price 100.00 USD", "AAPL")
+        wrong_tone = self.entry("Positive news, Apple (AAPL): Apple (AAPL) shares upgraded to Sell on weak signals (MarketsMojo, 5 min ago)", "AAPL")
+        broker = self.entry("Positive news, Apple (AAPL): Ecolab (ECL) Shares Rise After Apple Upgrade (Wire, 5 min ago)", "AAPL")
         unknown = self.entry("Negative news, Ghost Corp (GHOST): Ghost fraud probe (Wire, 5 min ago)", "GHOST")
-        kept = alerts.drop_irrelevant([wrong, roundup, right, signal, unknown], self.RECORDS)
+        kept = alerts.drop_irrelevant([wrong, roundup, wrong_tone, broker, right, signal, unknown], self.RECORDS)
         self.assertEqual(kept, [right, signal, unknown])
 
     def test_junk_in_the_log_is_ignored(self):

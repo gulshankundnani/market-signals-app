@@ -279,20 +279,24 @@ def format_outcome(call, outcome, link=None):
     return "\n".join(lines)
 
 
-_NEWS_LINE = re.compile(r"^(?:Positive|Negative) news, .*? \(([^()]+)\): (.*) \((.*), [^,()]*\)$", re.S)
+_NEWS_LINE = re.compile(r"^(Positive|Negative) news, .*? \(([^()]+)\): (.*) \((.*), [^,()]*\)$", re.S)
 
 
 def drop_irrelevant(log, records):
-    """Remove logged news alerts that no longer pass the relevance rules, so a wrong one does not linger on the page.
+    """Remove logged news alerts that no longer pass the relevance and tone rules, so a wrong one does not linger on the page.
 
     records: {symbol: record}. Entries that are not news alerts, or whose stock is unknown, are kept."""
     kept = []
     for entry in log:
         text = entry.get("text") if isinstance(entry, dict) else None
         match = _NEWS_LINE.match(text) if isinstance(text, str) else None
-        record = records.get(match.group(1)) if match else None
-        if record and not news.is_relevant(match.group(2), record["name"], match.group(1).split(".")[0], match.group(3)):
-            continue
+        record = records.get(match.group(2)) if match else None
+        if record:
+            tone, symbol, title, source = match.groups()
+            if not news.is_relevant(title, record["name"], symbol.split(".")[0], source):
+                continue
+            if news.headline_sentiment(title)[1] != ("pos" if tone == "Positive" else "neg"):
+                continue
         kept.append(entry)
     return kept
 

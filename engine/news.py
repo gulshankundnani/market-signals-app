@@ -70,7 +70,14 @@ def _words(text):
 # A broker or bank named as the source of a rating ("Ecolab stock upgraded by Wells Fargo") is not the subject.
 RATING_WORDS = {"upgrade", "upgrades", "upgraded", "downgrade", "downgrades", "downgraded", "rating", "rated", "initiates",
                 "initiated", "coverage", "reiterates", "reiterated", "maintains", "overweight", "underweight", "outperform",
-                "underperform"}
+                "underperform", "buy", "sell", "hold", "neutral", "target"}
+# Banks and brokers that give ratings on other companies. A rating headline naming them is about the rated company.
+BROKER_NAMES = {"wells fargo", "goldman sachs", "jpmorgan", "jp morgan", "morgan stanley", "bank of america", "citigroup",
+                "citi", "jefferies", "stifel", "barclays", "ubs", "hsbc", "nomura", "macquarie", "bernstein", "raymond james",
+                "kotak institutional equities", "motilal oswal", "icici securities", "hdfc securities", "axis securities"}
+# Exchange prefixes that mean the same listing as ours. "(XTRA:MRK)" is a different company's shares.
+SAME_MARKET = {"", "nyse", "nasdaq", "nasdaqgs", "nasdaqgm", "nasdaqcm", "nysearca", "nyseam", "nse", "bse", "bom"}
+_BRACKET_TICKER = re.compile(r"\((?:([A-Za-z]+):)?\s*([A-Z][A-Z0-9.\-]{0,9})\)")
 _ROUNDUP_PHRASES = ("stocks to watch", "stocks to buy", "stocks in focus", "stocks to sell", "top gainers", "top losers",
                     "market wrap", "market live", "stock market today", "buzzing stocks", "record date next week",
                     "stocks that", "shares to buy", "stocks under")
@@ -88,10 +95,45 @@ def _is_broker_mention(text, names):
 def _looks_like_roundup(title):
     """A list of many companies ("... MRF, SCI, PFC, ...") says little about any one of them."""
     lower = title.lower()
-    if any(p in lower for p in _ROUNDUP_PHRASES):
+    if any(p in lower for p in _ROUNDUP_PHRASES) or re.search(r"\b\d+\s+(?:stocks|shares|companies)\b", lower):
         return True
     caps = [w for w in re.findall(r"\b[A-Z][A-Z&]{1,7}\b", title) if w not in _NOT_TICKERS and not re.fullmatch(r"Q[1-4]|FY\d*", w)]
     return len(caps) >= 3
+
+
+def _key(ticker):
+    return re.sub(r"[.\-]", "", ticker or "").upper()
+
+
+def _names_someone_else(title, ticker_base, names):
+    """True when the headline is about another company that merely mentions ours.
+
+    That is the case when it carries another company's ticker in brackets (and not ours), when ours is the ticker of
+    a different exchange's listing, when it starts "<Other> stock: ...", or when ours is one name in a list.
+    """
+    mine = _key(ticker_base)
+    ours_present, others = False, False
+    for exchange, ticker in _BRACKET_TICKER.findall(title):
+        if mine and _key(ticker) == mine:
+            if (exchange or "").lower() not in SAME_MARKET:
+                return True
+            ours_present = True
+        else:
+            others = True
+    if others and not ours_present:
+        return True
+    prefix = re.match(r"^(.{3,60}?)\s+(?:stock|shares)\s*:", title, re.I)
+    if prefix:
+        head = " " + " ".join(_words(prefix.group(1))) + " "
+        if not any(" " + n + " " in head for n in names if n):
+            return True
+    for n in names:
+        if not n:
+            continue
+        shown = re.escape(n)
+        if re.search(r"(?:,|\band\b|&)\s*" + shown + r"\s*(?:,|\band\b|&)", title, re.I) or re.search(r"^\W*(?i:" + shown + r")\s*,\s*[A-Z]", title):
+            return True
+    return False
 
 
 def _about_a_person_or_sport(words, source):
@@ -151,6 +193,11 @@ def is_relevant(title, name, ticker_base=None, source=None):
     short_names = [w for w in name_words if len(w) >= 4 and w not in GENERIC_WORDS]
     if _is_broker_mention(" ".join(words), [phrase] + short_names):
         return False
+    if _names_someone_else(title, ticker_base, [phrase] + short_names):
+        return False
+    if any(re.search(r"\b" + re.escape(b) + r"\b", phrase) for b in BROKER_NAMES) and RATING_WORDS.intersection(words) and not re.search(
+            re.escape(phrase) + r"\s+(?:upgraded|downgraded|rated|gets|receives|stock|shares)", text):
+        return False
     ticker = (ticker_base or "").lower() if ticker_base and len(ticker_base) >= 3 else ""
     if len(name_words) >= 2 and " " + phrase + " " in text:
         return True
@@ -182,11 +229,19 @@ def mark_relevance(items, name, ticker_base=None):
 NEUTRAL_PHRASES = ("open interest", "short interest", "put-call", "put call", "options chain", "implied volatility")
 
 
+# "Upgraded to Sell" is not good news, and "plant upgrade" is not a rating change.
+_UPGRADED_TO_SELL = re.compile(r"\bupgrad\w* to (?:a |an )?(?:strong )?(?:sell|hold|neutral|underperform|underweight)\b")
+_EQUIPMENT_UPGRADE = re.compile(r"\bupgrad\w*\s+(?:for|of|plan|project|programme|program)\b|\b(?:plant|capacity|network|software|system|facility|infrastructure|fleet)\s+upgrad")
+_RATING_CONTEXT = re.compile(r"\b(?:rating|ratings|analyst|analysts|broker|brokerage|target|outperform|overweight|credit|stock|shares)\b")
+
+
 def headline_sentiment(title):
     """Returns (score -1..1, strong) where strong is 'pos', 'neg' or None."""
     text = title.lower()
-    if any(phrase in text for phrase in NEUTRAL_PHRASES):
+    if any(phrase in text for phrase in NEUTRAL_PHRASES) or _UPGRADED_TO_SELL.search(text):
         return 0.0, None
+    if _EQUIPMENT_UPGRADE.search(text) and not _RATING_CONTEXT.search(text):
+        text = re.sub(r"\bupgrad\w*", " ", text)     # "plant upgrade" is not a rating upgrade
     pos = sum(1 for p in _POS if p.search(text))
     neg = sum(1 for p in _NEG if p.search(text))
     score = max(-1.0, min(1.0, (pos - neg) * 0.6))
