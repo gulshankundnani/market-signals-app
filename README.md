@@ -41,7 +41,8 @@ It is not investment advice. Signals come from fixed rules on free, delayed data
 2. Upload everything in this folder to the repository's `main` branch.
 3. In the repository: **Settings > Pages > Build and deployment > Source: GitHub Actions**.
 4. Open the **Actions** tab, choose **Update signals**, and press **Run workflow**. The first run takes a few minutes.
-5. Your site is at `https://<your-username>.github.io/<repository-name>/`.
+5. Your site is at `https://<owner>.github.io/<repository-name>/`. This project's site is
+   `https://marketsignals-app.github.io/market-signals-app/`.
    On your phone open it in Chrome or Safari and choose **Add to Home screen** to install it like an app.
 
 The workflow then runs by itself every 15 minutes on weekdays. If a test fails or too many data
@@ -77,8 +78,11 @@ STRONGLY ALIGNED BULLISH: Apple (AAPL)
 Weeks view: Mixed -> Strongly aligned bullish (indicator alignment +53). Price 356.27 USD
 Resistance reference 389.14 (+9.2%, volatility-based, 2x the risk distance). Volatility risk level 339.83 (-4.6%).
 Why: Trend: price above 20-day average, 20-day above 50-day; Momentum: MACD positive and rising; RSI 61 is in the normal range.
-Full analysis: https://<your-username>.github.io/<repository>/#stock=AAPL&section=signals
+Full analysis: https://marketsignals-app.github.io/market-signals-app/#stock=AAPL&section=signals
 ```
+
+Alert links are built from the repository's owner and name on every run, so they follow the repository if it is
+moved or renamed. Nothing in the code holds the address.
 
 * **Volatility risk level:** 2 x the 14-day average true range from the price (below it for a bullish reading, above
   it for a bearish one). This distance is called R.
