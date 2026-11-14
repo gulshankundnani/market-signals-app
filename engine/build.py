@@ -325,7 +325,8 @@ def carry_forward(errors, previous, today):
         except (KeyError, TypeError, ValueError):
             age = None
         if age is not None and 0 <= age <= CARRY_MAX_AGE_DAYS:
-            carried.append({**old, "carried": True})
+            # Its headlines and their ages are from an earlier run, so they must not look current.
+            carried.append({**old, "carried": True, "news": {"score": None, "items": [], "alerts": [], "error": True}})
         else:
             failed.append(error)
     return carried, failed
@@ -455,7 +456,8 @@ def run(args):
     lines, seen = alerts.build_messages(previous, {x["symbol"]: x for x in records}, watch,
                                         state.get("seen_alerts", []), first_run, tones, sides, items)
     now_ts = int(now.timestamp())
-    alert_log, added = alerts.update_log(state.get("alert_log", []), lines, now_ts, [i["symbol"] for i in items])
+    by_symbol = {x["symbol"]: x for x in records}
+    alert_log, added = alerts.update_log(alerts.drop_irrelevant(state.get("alert_log", []), by_symbol), lines, now_ts, [i["symbol"] for i in items])
     print(f"Alerts: {len(added)} new, {len(watch)} stocks watched")
     token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
     site_url = args.prev if args.prev.startswith("http") else ""

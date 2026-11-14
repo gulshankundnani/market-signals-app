@@ -20,12 +20,14 @@ POSITIVE = [
 ]
 NEGATIVE = [
     "fall", "fell", "drop", "dropped", "plunge", "slump", "slide", "miss", "downgrade", "probe", "fraud",
-    "raid", "default", "bankrupt", "bankruptcy", "lawsuit", "penalty", "fine", "ban", "banned", "resign", "loss",
+    "raid", "loan default", "debt default", "bond default", "payment default", "default risk", "defaulter", "bankrupt",
+    "bankruptcy", "lawsuit", "penalty", "fined", "fines", "ban", "banned", "resign", "loss",
     "warn", "recall", "crash", "selloff", "sell-off", "weak", "decline", "layoff", "investigation", "bearish",
     "scam", "record low",
 ]
 STRONG_NEGATIVE = [
-    "fraud", "raid", "probe", "default", "bankrupt", "bankruptcy", "insolvency", "scam", "investigation",
+    "fraud", "raid", "probe", "loan default", "debt default", "bond default", "payment default", "defaulter", "bankrupt",
+    "bankruptcy", "insolvency", "scam", "investigation",
     "plunge", "crash", "downgrade", "ban", "banned", "resign", "recall", "halt", "show-cause",
 ]
 STRONG_POSITIVE = ["surge", "soar", "upgrade", "buyback", "record profit", "record high", "approval"]
@@ -63,6 +65,33 @@ SPORT_WORDS = {"nba", "nfl", "mlb", "nhl", "wnba", "ncaa", "mls", "fifa", "uefa"
 
 def _words(text):
     return re.findall(r"[a-z0-9&]+", text.lower())
+
+
+# A broker or bank named as the source of a rating ("Ecolab stock upgraded by Wells Fargo") is not the subject.
+RATING_WORDS = {"upgrade", "upgrades", "upgraded", "downgrade", "downgrades", "downgraded", "rating", "rated", "initiates",
+                "initiated", "coverage", "reiterates", "reiterated", "maintains", "overweight", "underweight", "outperform",
+                "underperform"}
+_ROUNDUP_PHRASES = ("stocks to watch", "stocks to buy", "stocks in focus", "stocks to sell", "top gainers", "top losers",
+                    "market wrap", "market live", "stock market today", "buzzing stocks", "record date next week",
+                    "stocks that", "shares to buy", "stocks under")
+_NOT_TICKERS = {"IPO", "GMP", "NSE", "BSE", "USA", "CEO", "CFO", "GDP", "RBI", "SEBI", "ETF", "EPS", "IMF", "OPEC", "FII",
+                "DII", "NSDL", "AGM", "SIP", "FDA", "SEC", "FED", "NYSE", "NASDAQ", "AI", "US", "UK", "EU", "IT", "PE"}
+
+
+def _is_broker_mention(text, names):
+    """True when a rating headline names the company only as the one giving the rating ("upgraded by <name>")."""
+    if not RATING_WORDS.intersection(text.split()):
+        return False
+    return any(re.search(r"\b(?:by|from|per|via)\s+(?:the\s+)?" + re.escape(n) + r"\b", text) for n in names if n)
+
+
+def _looks_like_roundup(title):
+    """A list of many companies ("... MRF, SCI, PFC, ...") says little about any one of them."""
+    lower = title.lower()
+    if any(p in lower for p in _ROUNDUP_PHRASES):
+        return True
+    caps = [w for w in re.findall(r"\b[A-Z][A-Z&]{1,7}\b", title) if w not in _NOT_TICKERS and not re.fullmatch(r"Q[1-4]|FY\d*", w)]
+    return len(caps) >= 3
 
 
 def _about_a_person_or_sport(words, source):
@@ -114,11 +143,14 @@ def is_relevant(title, name, ticker_base=None, source=None):
     also a plain word, like Trent) together with business wording. People and sports stories never count.
     """
     words = _words(title)
-    if _about_a_person_or_sport(words, source):
+    if _about_a_person_or_sport(words, source) or _looks_like_roundup(title):
         return False
     text = " " + " ".join(words) + " "
     name_words = [w for w in _words(name) if w not in NAME_SUFFIXES]
     phrase = " ".join(name_words)
+    short_names = [w for w in name_words if len(w) >= 4 and w not in GENERIC_WORDS]
+    if _is_broker_mention(" ".join(words), [phrase] + short_names):
+        return False
     ticker = (ticker_base or "").lower() if ticker_base and len(ticker_base) >= 3 else ""
     if len(name_words) >= 2 and " " + phrase + " " in text:
         return True
@@ -146,9 +178,15 @@ def mark_relevance(items, name, ticker_base=None):
     return items
 
 
+# Moves in a trading statistic, not news about the business: "open interest surge" is not good news.
+NEUTRAL_PHRASES = ("open interest", "short interest", "put-call", "put call", "options chain", "implied volatility")
+
+
 def headline_sentiment(title):
     """Returns (score -1..1, strong) where strong is 'pos', 'neg' or None."""
     text = title.lower()
+    if any(phrase in text for phrase in NEUTRAL_PHRASES):
+        return 0.0, None
     pos = sum(1 for p in _POS if p.search(text))
     neg = sum(1 for p in _NEG if p.search(text))
     score = max(-1.0, min(1.0, (pos - neg) * 0.6))

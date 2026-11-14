@@ -514,6 +514,18 @@ class CarryForwardTests(unittest.TestCase):
         self.assertTrue(carried[0]["carried"])
         self.assertEqual(carried[0]["short"]["label"], "Buy")
 
+    def test_old_headlines_are_not_carried_as_if_they_were_current(self):
+        from engine import build
+        record = self.old("A", "2026-11-13")
+        record["news"] = {"score": 0.5, "items": [{"title": "x", "age_min": 95}], "alerts": [{"title": "x", "age_min": 95}], "error": False}
+        previous = {"A": record}
+        carried, _ = build.carry_forward([{"symbol": "A", "error": "x"}], previous, self.TODAY)
+        self.assertEqual(carried[0]["news"]["alerts"], [])
+        self.assertEqual(carried[0]["news"]["items"], [])
+        self.assertIsNone(carried[0]["news"]["score"])
+        self.assertTrue(carried[0]["news"]["error"])
+        self.assertEqual(len(previous["A"]["news"]["alerts"]), 1, "the saved record is not changed")
+
     def test_the_saved_record_itself_is_not_changed(self):
         from engine import build
         previous = {"A": self.old("A", "2026-11-13")}
@@ -597,6 +609,16 @@ class NewsTests(unittest.TestCase):
         self.assertEqual(strong, "neg")
         self.assertLess(score, 0)
 
+    def test_ordinary_uses_of_default_and_fine_are_not_bad_news(self):
+        self.assertEqual(news.headline_sentiment("AWS sets new AgentCore runtime as default"), (0.0, None))
+        self.assertEqual(news.headline_sentiment("Fine-tuned model launches on the platform"), (0.0, None))
+        self.assertEqual(news.headline_sentiment("Company faces loan default, lenders worried")[1], "neg")
+        self.assertEqual(news.headline_sentiment("Firm fined over disclosure lapse")[0] < 0, True)
+
+    def test_trading_statistics_are_not_business_news(self):
+        self.assertEqual(news.headline_sentiment("Grasim sees significant open interest surge amid price pressure"), (0.0, None))
+        self.assertEqual(news.headline_sentiment("Grasim shares surge after record profit")[1], "pos")
+
     def test_bank_is_not_ban(self):
         self.assertEqual(news.headline_sentiment("State Bank opens new branch"), (0.0, None))
 
@@ -651,6 +673,19 @@ class NewsTests(unittest.TestCase):
         self.assertTrue(rel("Mastercard (MA) Opens Singapore Innovation Centre", "Mastercard", "MA"))
         self.assertTrue(rel("Microsoft outage eases, but recovery timeline remains unclear", "Microsoft", "MSFT"))
         self.assertTrue(rel("Nvidia exposed to possible lawsuits", "Nvidia", "NVDA"))
+        self.assertTrue(rel("TCS wins large deal", "Tata Consultancy Services", "TCS"))
+
+    def test_the_broker_named_in_a_rating_headline_is_not_the_subject(self):
+        rel = news.is_relevant
+        self.assertFalse(rel("Ecolab stock upgraded by Wells Fargo on 2027 growth case", "Wells Fargo", "WFC"))
+        self.assertFalse(rel("Acme downgraded by Jefferies, shares fall", "Jefferies Financial Group", "JEF"))
+        self.assertTrue(rel("Wells Fargo shares rise after earnings beat", "Wells Fargo", "WFC"))
+
+    def test_roundups_naming_many_companies_do_not_count_for_any_one(self):
+        rel = news.is_relevant
+        self.assertFalse(rel("Upcoming dividend, stock split, buyback record date next week: MRF, SCI, PFC, PTC", "Power Finance Corporation", "PFC"))
+        self.assertFalse(rel("Stocks to watch today: PFC shares, dividend news", "Power Finance Corporation", "PFC"))
+        self.assertTrue(rel("PFC shares rise after Q2 results", "Power Finance Corporation", "PFC"))
         self.assertTrue(rel("TCS wins large deal", "Tata Consultancy Services", "TCS"))
 
     def test_breaking_alerts_are_only_for_the_last_few_hours(self):

@@ -313,5 +313,26 @@ class AdvisoryTests(unittest.TestCase):
         self.assertTrue(reply.endswith(alerts.ADVISORY))
 
 
+class DropIrrelevantTests(unittest.TestCase):
+    RECORDS = {"TRENT.NS": {"name": "Trent"}, "PFC.NS": {"name": "Power Finance Corporation"}, "AAPL": {"name": "Apple"}}
+
+    @staticmethod
+    def entry(text, symbol):
+        return {"id": text[:8], "symbol": symbol, "text": text, "ts": 1}
+
+    def test_wrong_news_alerts_are_removed_and_right_ones_stay(self):
+        wrong = self.entry("Negative news, Trent (TRENT.NS): The Gary Trent Jr. Investigation Could DESTROY the Franchise (Yahoo Sports, 876 min ago)", "TRENT.NS")
+        roundup = self.entry("Positive news, Power Finance Corporation (PFC.NS): Upcoming dividend, buyback record date: MRF, SCI, PFC, PTC (Livemint, 197 min ago)", "PFC.NS")
+        right = self.entry("Positive news, Apple (AAPL): Apple (AAPL) shares surge after record profit (Reuters, 12 min ago)", "AAPL")
+        signal = self.entry("ALIGNED BULLISH: Apple (AAPL)" + chr(10) + "Weeks view: Mixed -> Aligned bullish. Price 100.00 USD", "AAPL")
+        unknown = self.entry("Negative news, Ghost Corp (GHOST): Ghost fraud probe (Wire, 5 min ago)", "GHOST")
+        kept = alerts.drop_irrelevant([wrong, roundup, right, signal, unknown], self.RECORDS)
+        self.assertEqual(kept, [right, signal, unknown])
+
+    def test_junk_in_the_log_is_ignored(self):
+        self.assertEqual(alerts.drop_irrelevant(["x", None, {"text": 5}, {}], self.RECORDS), ["x", None, {"text": 5}, {}])
+        self.assertEqual(alerts.drop_irrelevant([], self.RECORDS), [])
+
+
 if __name__ == "__main__":
     unittest.main()
