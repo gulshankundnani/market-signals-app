@@ -1,0 +1,107 @@
+"""Find newly listed stocks so they join the list automatically.
+
+India: the NSE equity list carries each stock's listing date.
+US: the Nasdaq Trader symbol directory has no dates, so new symbols are found by comparing
+today's list with the previous run's list.
+"""
+import csv
+import io
+import re
+from datetime import datetime, timedelta
+
+from .fetch import FetchError, http_get
+
+NSE_LIST_URL = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
+US_URLS = ("https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt",
+           "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt")
+INDIA_WINDOW_DAYS = 90
+KEEP_DAYS = 180
+MAX_NEW_PER_RUN = {"IN": 40, "US": 20}
+MAX_REGISTRY = 80
+
+_US_SYMBOL = re.compile(r"^[A-Z]{1,5}$")
+_US_SKIP = re.compile(r"\b(warrants?|units?|rights?|acquisition (corp|co)|spac|preferred|notes?|trust|depositary shares)\b", re.I)
+
+
+def india_new_listings(text, today, days=INDIA_WINDOW_DAYS):
+    """Equity-series stocks listed within the last `days` days, newest first."""
+    cutoff = today - timedelta(days=days)
+    found = []
+    for row in csv.DictReader(io.StringIO(text)):
+        row = {(k or "").strip(): (v or "").strip() for k, v in row.items()}
+        if row.get("SERIES") != "EQ" or not re.match(r"^[A-Z0-9&-]{1,20}$", row.get("SYMBOL", "")):
+            continue
+        try:
+            listed = datetime.strptime(row["DATE OF LISTING"], "%d-%b-%Y").date()
+        except (KeyError, ValueError):
+            continue
+        if cutoff <= listed <= today:
+            found.append({"symbol": row["SYMBOL"] + ".NS", "name": row.get("NAME OF COMPANY", row["SYMBOL"]),
+                          "market": "IN", "listed": listed.isoformat()})
+    found.sort(key=lambda s: s["listed"], reverse=True)
+    return found[: MAX_NEW_PER_RUN["IN"]]
+
+
+def parse_us_directory(text, symbol_col, test_col, etf_col):
+    """Common-stock-like symbols from a Nasdaq Trader pipe file. Returns {symbol: name}."""
+    out = {}
+    lines = [line for line in text.splitlines() if line and not line.startswith("File Creation Time")]
+    if not lines:
+        return out
+    header = lines[0].split("|")
+    try:
+        s, t, e = header.index(symbol_col), header.index(test_col), header.index(etf_col)
+    except ValueError:
+        return out
+    for line in lines[1:]:
+        parts = line.split("|")
+        if len(parts) <= max(s, t, e, 1):
+            continue
+        symbol, name = parts[s].strip(), parts[1].strip()
+        if parts[t] != "N" or parts[e] != "N" or not _US_SYMBOL.match(symbol) or _US_SKIP.search(name):
+            continue
+        out[symbol] = name
+    return out
+
+
+def us_symbols(nasdaq_text, other_text):
+    symbols = parse_us_directory(nasdaq_text, "Symbol", "Test Issue", "ETF")
+    symbols.update(parse_us_directory(other_text, "ACT Symbol", "Test Issue", "ETF"))
+    return symbols
+
+
+def us_new_listings(current, previous_symbols, today):
+    """Symbols not seen on the previous run. The first run only records the list."""
+    if not previous_symbols:
+        return []
+    previous = set(previous_symbols)
+    fresh = sorted(s for s in current if s not in previous)[: MAX_NEW_PER_RUN["US"]]
+    return [{"symbol": s, "name": current[s], "market": "US", "listed": today.isoformat()} for s in fresh]
+
+
+def merge_registry(registry, found, today):
+    """Add new finds to the registry, drop entries older than KEEP_DAYS, cap the size."""
+    cutoff = (today - timedelta(days=KEEP_DAYS)).isoformat()
+    merged = {e["symbol"]: e for e in registry if e.get("listed", "") >= cutoff}
+    for entry in found:
+        merged.setdefault(entry["symbol"], entry)
+    return sorted(merged.values(), key=lambda e: e["listed"], reverse=True)[:MAX_REGISTRY]
+
+
+def discover(state, today, fetch=http_get):
+    """Returns (registry, us_symbol_list). Network failures keep the previous values."""
+    registry = state.get("new_listings", [])
+    us_list = state.get("us_symbols", [])
+    found = []
+    try:
+        found += india_new_listings(fetch(NSE_LIST_URL).decode("utf-8", "replace"), today)
+    except FetchError:
+        pass
+    try:
+        current = us_symbols(*(fetch(url).decode("utf-8", "replace") for url in US_URLS))
+        if current:
+            found += us_new_listings(current, us_list, today)
+            us_list = sorted(current)
+    except FetchError:
+        pass
+    return merge_registry(registry, found, today), us_list
