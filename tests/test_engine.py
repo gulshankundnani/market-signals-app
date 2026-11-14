@@ -2,6 +2,7 @@ import json
 import math
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from engine import backtest as bt
 from engine import fetch, fundamentals, indicators as ta, news, patterns, risk, signals
@@ -398,6 +399,152 @@ class FetchTests(unittest.TestCase):
         short["chart"]["result"][0]["timestamp"] = list(range(5))
         with self.assertRaises(fetch.FetchError):
             fetch.clean_chart(short, "T")
+
+    def short_payload(self, bars):
+        p = self.payload()
+        for key in ("open", "high", "low", "close", "volume"):
+            p["chart"]["result"][0]["indicators"]["quote"][0][key] = [10.0] * bars
+        p["chart"]["result"][0]["timestamp"] = list(range(1_700_000_000, 1_700_000_000 + 86400 * bars, 86400))
+        return p
+
+    def test_a_short_series_has_its_own_error_type(self):
+        with self.assertRaises(fetch.ShortSeriesError):
+            fetch.clean_chart(self.short_payload(5), "T")
+        with self.assertRaises(fetch.ShortSeriesError) as caught:
+            fetch.clean_chart(self.short_payload(3), "T", 10)
+        self.assertIsInstance(caught.exception, fetch.FetchError)
+
+    def test_a_too_short_answer_is_retried_once_and_can_recover(self):
+        answers = [json.dumps(self.short_payload(1)).encode(), json.dumps(self.payload()).encode()]
+        calls = []
+
+        def fake_get(url, **kwargs):
+            calls.append(url)
+            return answers[len(calls) - 1]
+
+        with patch("engine.fetch.http_get", side_effect=fake_get), patch("engine.fetch.time.sleep") as pause:
+            chart = fetch.fetch_chart("NEW.NS", "5y", 5)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(chart["bars"]["c"]), 70)
+        pause.assert_called_once()
+
+    def test_still_too_short_after_the_retry_gives_up(self):
+        short = json.dumps(self.short_payload(1)).encode()
+        with patch("engine.fetch.http_get", return_value=short) as get, patch("engine.fetch.time.sleep"):
+            with self.assertRaises(fetch.ShortSeriesError):
+                fetch.fetch_chart("NEW.NS", "5y", 5)
+        self.assertEqual(get.call_count, 2)
+
+    def test_other_failures_are_not_retried(self):
+        with patch("engine.fetch.http_get", return_value=b"not json") as get, patch("engine.fetch.time.sleep") as pause:
+            with self.assertRaises(fetch.FetchError):
+                fetch.fetch_chart("X", "5y", 5)
+        self.assertEqual(get.call_count, 1)
+        pause.assert_not_called()
+        missing = json.dumps({"chart": {"result": None, "error": {"description": "Not Found"}}}).encode()
+        with patch("engine.fetch.http_get", return_value=missing) as get:
+            with self.assertRaises(fetch.FetchError):
+                fetch.fetch_chart("X", "5y", 5)
+        self.assertEqual(get.call_count, 1)
+
+
+class CarryUsIposTests(unittest.TestCase):
+    NOW = datetime(2026, 11, 14, 8, 0, tzinfo=timezone.utc)
+    DEALS = [{"name": "Acme", "symbol": "ACME", "status": "upcoming"}]
+
+    def carry(self, ipos, previous):
+        from engine import build
+        return build.carry_us_ipos(ipos, previous, self.NOW)
+
+    def test_a_fresh_list_is_stamped_and_not_marked_carried(self):
+        out = self.carry({"us": self.DEALS, "us_ok": True}, {"us": [{"name": "Old"}], "us_fetched_at": "2026-11-01T00:00:00+00:00"})
+        self.assertEqual(out["us"], self.DEALS)
+        self.assertEqual(out["us_fetched_at"], "2026-11-14T08:00:00+00:00")
+        self.assertNotIn("us_carried", out)
+
+    def test_a_failed_load_keeps_the_last_good_list_and_says_so(self):
+        previous = {"us": self.DEALS, "us_fetched_at": "2026-11-13T08:00:00+00:00"}
+        out = self.carry({"us": [], "us_ok": False}, previous)
+        self.assertEqual(out["us"], self.DEALS)
+        self.assertTrue(out["us_carried"])
+        self.assertEqual(out["us_fetched_at"], "2026-11-13T08:00:00+00:00", "the original time must be kept, not reset")
+
+    def test_a_list_older_than_a_week_is_dropped(self):
+        previous = {"us": self.DEALS, "us_fetched_at": "2026-11-01T08:00:00+00:00"}
+        out = self.carry({"us": [], "us_ok": False}, previous)
+        self.assertEqual(out["us"], [])
+        self.assertNotIn("us_carried", out)
+
+    def test_the_age_limit_is_inclusive(self):
+        edge = {"us": self.DEALS, "us_fetched_at": "2026-11-07T08:00:00+00:00"}
+        self.assertTrue(self.carry({"us": [], "us_ok": False}, edge).get("us_carried"))
+        beyond = {"us": self.DEALS, "us_fetched_at": "2026-11-06T07:00:00+00:00"}
+        self.assertNotIn("us_carried", self.carry({"us": [], "us_ok": False}, beyond))
+
+    def test_an_empty_but_successful_calendar_is_respected(self):
+        previous = {"us": self.DEALS, "us_fetched_at": "2026-11-13T08:00:00+00:00"}
+        out = self.carry({"us": [], "us_ok": True}, previous)
+        self.assertEqual(out["us"], [])
+        self.assertNotIn("us_carried", out)
+
+    def test_nothing_to_carry_and_broken_previous_data(self):
+        for previous in (None, {}, {"us": self.DEALS}, {"us": self.DEALS, "us_fetched_at": "garbage"}, {"us": [], "us_fetched_at": "2026-11-13T08:00:00+00:00"}):
+            out = self.carry({"us": [], "us_ok": False}, previous)
+            self.assertEqual(out["us"], [], previous)
+            self.assertNotIn("us_carried", out)
+
+    def test_the_result_is_json_safe(self):
+        out = self.carry({"us": [], "us_ok": False}, {"us": self.DEALS, "us_fetched_at": "2026-11-13T08:00:00+00:00"})
+        json.dumps(out, allow_nan=False)
+
+
+class CarryForwardTests(unittest.TestCase):
+    TODAY = datetime(2026, 11, 14).date()
+
+    @staticmethod
+    def old(symbol, as_of):
+        return {"symbol": symbol, "name": symbol, "as_of": as_of, "price": 10.0, "short": {"label": "Buy", "score": 30}}
+
+    def test_a_recent_record_is_kept_and_marked(self):
+        from engine import build
+        previous = {"A": self.old("A", "2026-11-13")}
+        carried, failed = build.carry_forward([{"symbol": "A", "error": "A: only 1 usable bars"}], previous, self.TODAY)
+        self.assertEqual(failed, [])
+        self.assertEqual(carried[0]["symbol"], "A")
+        self.assertTrue(carried[0]["carried"])
+        self.assertEqual(carried[0]["short"]["label"], "Buy")
+
+    def test_the_saved_record_itself_is_not_changed(self):
+        from engine import build
+        previous = {"A": self.old("A", "2026-11-13")}
+        build.carry_forward([{"symbol": "A", "error": "x"}], previous, self.TODAY)
+        self.assertNotIn("carried", previous["A"])
+
+    def test_old_unknown_and_broken_records_stay_failed(self):
+        from engine import build
+        previous = {"OLD": self.old("OLD", "2026-11-05"), "FUTURE": self.old("FUTURE", "2026-11-20"),
+                    "BAD": {"symbol": "BAD", "as_of": "not a date"}, "NODATE": {"symbol": "NODATE"}}
+        errors = [{"symbol": s, "error": "x"} for s in ("OLD", "FUTURE", "BAD", "NODATE", "NEVER")]
+        carried, failed = build.carry_forward(errors, previous, self.TODAY)
+        self.assertEqual(carried, [])
+        self.assertEqual([e["symbol"] for e in failed], ["OLD", "FUTURE", "BAD", "NODATE", "NEVER"])
+
+    def test_the_age_limit_is_inclusive(self):
+        from engine import build
+        edge = f"2026-11-{14 - build.CARRY_MAX_AGE_DAYS:02d}"
+        carried, _ = build.carry_forward([{"symbol": "E", "error": "x"}], {"E": self.old("E", edge)}, self.TODAY)
+        self.assertEqual(len(carried), 1)
+        beyond = f"2026-11-{14 - build.CARRY_MAX_AGE_DAYS - 1:02d}"
+        carried, failed = build.carry_forward([{"symbol": "E", "error": "x"}], {"E": self.old("E", beyond)}, self.TODAY)
+        self.assertEqual((len(carried), len(failed)), (0, 1))
+
+    def test_a_mix_is_split_correctly(self):
+        from engine import build
+        previous = {"A": self.old("A", "2026-11-14"), "C": self.old("C", "2026-11-12")}
+        errors = [{"symbol": s, "error": "x"} for s in ("A", "B", "C")]
+        carried, failed = build.carry_forward(errors, previous, self.TODAY)
+        self.assertEqual([c["symbol"] for c in carried], ["A", "C"])
+        self.assertEqual([e["symbol"] for e in failed], ["B"])
 
 
 class FundamentalsTests(unittest.TestCase):

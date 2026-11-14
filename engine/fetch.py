@@ -16,6 +16,10 @@ class FetchError(Exception):
     pass
 
 
+class ShortSeriesError(FetchError):
+    """Yahoo answered, but with fewer usable price bars than needed. Often a passing glitch for new listings."""
+
+
 def http_get(url, headers=None, timeout=20, retries=3, opener=None):
     """GET with retries on rate limits and server errors. Returns bytes."""
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
@@ -63,7 +67,7 @@ def clean_chart(payload, symbol, min_bars=MIN_BARS):
         bars["c"].append(float(c))
         bars["v"].append(float(v or 0))
     if len(bars["c"]) < min_bars:
-        raise FetchError(f"{symbol}: only {len(bars['c'])} usable bars")
+        raise ShortSeriesError(f"{symbol}: only {len(bars['c'])} usable bars")
 
     dividends = sorted(
         (int(d["date"]), float(d["amount"]))
@@ -82,13 +86,20 @@ def clean_chart(payload, symbol, min_bars=MIN_BARS):
     }
 
 
-def fetch_chart(symbol, range_="5y", min_bars=MIN_BARS):
+def fetch_chart(symbol, range_="5y", min_bars=MIN_BARS, short_retries=1):
+    """Download and clean one stock's history. A too-short answer is retried once after a pause."""
     url = CHART_URL.format(symbol=urllib.parse.quote(symbol), range=range_)
-    try:
-        payload = json.loads(http_get(url))
-    except (ValueError, UnicodeDecodeError) as err:
-        raise FetchError(f"{symbol}: bad JSON ({err})")
-    return clean_chart(payload, symbol, min_bars)
+    for attempt in range(short_retries + 1):
+        try:
+            payload = json.loads(http_get(url))
+        except (ValueError, UnicodeDecodeError) as err:
+            raise FetchError(f"{symbol}: bad JSON ({err})")
+        try:
+            return clean_chart(payload, symbol, min_bars)
+        except ShortSeriesError:
+            if attempt >= short_retries:
+                raise
+            time.sleep(2)
 
 
 class YahooSession:

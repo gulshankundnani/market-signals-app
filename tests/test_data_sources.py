@@ -164,7 +164,7 @@ class AlertTests(unittest.TestCase):
     def test_flip_alert(self):
         lines, _ = alerts.build_messages({"A": record("A Ltd", "Hold", "Hold")}, {"A": record("A Ltd", "Buy", "Hold")}, ["A"], [], False)
         self.assertEqual(len(lines), 1)
-        self.assertIn("Hold -> Buy", lines[0])
+        self.assertIn("Mixed -> Aligned bullish", lines[0])
 
     def test_no_alert_within_same_side(self):
         lines, _ = alerts.build_messages({"A": record("A", "Buy", "Hold")}, {"A": record("A", "Strong Buy", "Hold")}, ["A"], [], False)
@@ -193,11 +193,129 @@ class AlertTests(unittest.TestCase):
         lines, _ = alerts.build_messages({}, {"A": record("A", "Buy", "Buy")}, ["B"], [], False)
         self.assertEqual(lines, [])
 
-    def test_caps_message_count(self):
-        prev = {f"S{i}": record(f"S{i}", "Hold", "Hold") for i in range(30)}
-        cur = {f"S{i}": record(f"S{i}", "Buy", "Hold") for i in range(30)}
+    def test_no_alert_is_dropped_when_many_stocks_move_at_once(self):
+        prev = {f"S{i}": record(f"S{i}", "Hold", "Hold") for i in range(40)}
+        cur = {f"S{i}": record(f"S{i}", "Buy", "Hold") for i in range(40)}
         lines, _ = alerts.build_messages(prev, cur, list(cur), [], False)
-        self.assertEqual(len(lines), alerts.MAX_LINES)
+        self.assertEqual(len(lines), 40)
+
+    def test_digest_shows_a_limited_number_and_counts_the_rest(self):
+        lines = [f"alert {i}" for i in range(40)]
+        text = alerts.digest(lines)
+        self.assertIn("alert 14", text)
+        self.assertNotIn("alert 15", text)
+        self.assertTrue(text.endswith("+25 more alerts. Open the app to see them." + chr(10)*2 + alerts.ADVISORY))
+        self.assertEqual(alerts.digest(["only one"]), "only one" + chr(10)*2 + alerts.ADVISORY)
+        self.assertEqual(alerts.digest([]), "")
+        self.assertLessEqual(len(alerts.digest(["x" * 250] * 15)), alerts.TELEGRAM_MAX_CHARS)
+
+    def test_watching_all_stocks(self):
+        available = {"B.NS", "A", "C"}
+        self.assertEqual(alerts.watched_symbols(["*"], available), ["A", "B.NS", "C"])
+        self.assertEqual(alerts.watched_symbols("all", available), ["A", "B.NS", "C"])
+        self.assertEqual(alerts.watched_symbols(["A", "*"], available), ["A", "B.NS", "C"])
+
+    def test_watching_a_list_ignores_unknown_stocks_and_bad_config(self):
+        available = {"A", "B"}
+        self.assertEqual(alerts.watched_symbols(["B", "ZZZ"], available), ["B"])
+        for bad in (None, [], "", 5, {"A": 1}):
+            self.assertEqual(alerts.watched_symbols(bad, available), [])
+
+    def test_next_side_needs_a_margin_to_move(self):
+        cases = [("hold", 24, "hold"), ("hold", 25, "buy"), ("hold", -24, "hold"), ("hold", -25, "sell"),
+                 ("buy", 11, "buy"), ("buy", 10, "hold"), ("buy", -24, "hold"), ("buy", -25, "sell"),
+                 ("sell", -11, "sell"), ("sell", -10, "hold"), ("sell", 24, "hold"), ("sell", 25, "buy")]
+        for previous, score, expected in cases:
+            self.assertEqual(alerts.next_side(previous, score), expected, (previous, score))
+
+    @staticmethod
+    def scored(score, price=100.0, long_score=0):
+        def label(value):
+            return "Strong Buy" if value >= 50 else "Buy" if value >= 20 else "Strong Sell" if value <= -50 else "Sell" if value <= -20 else "Hold"
+
+        return {"name": "A", "price": price, "currency": "INR", "short": {"label": label(score), "score": score},
+                "long": {"label": label(long_score), "score": long_score}, "news": {"alerts": []}}
+
+    def run_scores(self, scores, start, sides=None):
+        """Feed a series of scores through build_messages the way the hourly job would. Returns all alert lines."""
+        sides = {} if sides is None else sides
+        previous, sent = self.scored(start), []
+        for score in scores:
+            current = self.scored(score)
+            lines, _ = alerts.build_messages({"A": previous}, {"A": current}, ["A"], [], False, sides=sides)
+            sent += lines
+            previous = current
+        return sent, sides
+
+    def test_a_score_hovering_at_the_threshold_sends_nothing(self):
+        sent, sides = self.run_scores((21, 19, 22, 18, 24, 20, 19, 23, 21, 24), start=19)
+        self.assertEqual(sent, [])
+        self.assertEqual(sides["A"]["short"], "hold")
+
+    def test_a_real_move_after_hovering_is_still_announced(self):
+        sent, sides = self.run_scores((21, 19, 22, 24, 27), start=19)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("Mixed -> Aligned bullish", sent[0])
+        self.assertEqual(sides["A"]["short"], "buy")
+
+    def test_a_slow_drift_into_buy_is_not_missed(self):
+        # The label turns to Buy at 20, but the alert waits for 25 and is measured from the side last announced.
+        sent, _ = self.run_scores((22, 24, 24, 55), start=19)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("Mixed -> Strongly aligned bullish", sent[0])
+
+    def test_a_buy_is_only_dropped_once_it_clearly_fades(self):
+        quiet, _ = self.run_scores((30, 22, 15, 12), start=30)
+        self.assertEqual(quiet, [])
+        faded, sides = self.run_scores((30, 22, 15, 8), start=30)
+        self.assertEqual(len(faded), 1)
+        self.assertIn("Bullish -> Mixed", faded[0])
+        self.assertEqual(sides["A"]["short"], "hold")
+
+    def test_a_jump_from_buy_to_sell_is_reported(self):
+        sent, _ = self.run_scores((-30,), start=60)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("Bullish -> Aligned bearish", sent[0])
+
+    def test_announced_sides_carry_over_between_runs(self):
+        sides = {}
+        first, _ = self.run_scores((24,), start=19, sides=sides)
+        self.assertEqual(first, [])
+        self.assertEqual(sides["A"]["short"], "hold")
+        # A later run starts from the saved sides, not from the previous run's label.
+        second, _ = self.run_scores((26,), start=24, sides=sides)
+        self.assertEqual(len(second), 1)
+        self.assertIn("Mixed -> Aligned bullish", second[0])
+
+    def test_sides_are_json_safe_and_cover_both_horizons(self):
+        import json
+        _, sides = self.run_scores((30,), start=30)
+        self.assertEqual(set(sides["A"]), {"short", "long"})
+        json.dumps(sides)
+
+    def test_first_run_sets_sides_without_alerting(self):
+        sides = {}
+        lines, _ = alerts.build_messages({}, {"A": self.scored(40, long_score=-40)}, ["A"], [], True, sides=sides)
+        self.assertEqual(lines, [])
+        self.assertEqual(sides["A"], {"short": "buy", "long": "sell"})
+
+    def test_the_two_horizons_are_tracked_separately(self):
+        previous = self.scored(30, long_score=30)
+        current = self.scored(30, long_score=-30)
+        lines, _ = alerts.build_messages({"A": previous}, {"A": current}, ["A"], [], False)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("Months-to-years view", lines[0])
+        self.assertIn("Bullish -> Aligned bearish", lines[0])
+
+    def test_news_tones_can_be_limited_without_replaying_old_news(self):
+        good = {"title": "Shares surge", "link": "https://x/good", "source": "S", "strong": "pos", "age_min": 5}
+        bad = {"title": "Fraud probe", "link": "https://x/bad", "source": "S", "strong": "neg", "age_min": 5}
+        current = {"A": record("A Ltd", "Buy", "Buy", [good, bad])}
+        lines, seen = alerts.build_messages(current, current, ["A"], [], False, news_tones=("neg",))
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("Negative news"))
+        later, _ = alerts.build_messages(current, current, ["A"], seen, False, news_tones=("neg", "pos"))
+        self.assertEqual(later, [], "headlines already seen must not appear when a tone is switched on")
 
 
 class AlertLogTests(unittest.TestCase):

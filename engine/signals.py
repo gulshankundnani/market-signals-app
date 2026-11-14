@@ -74,7 +74,8 @@ def _combine(components, weights, min_weight_share=0.5):
     reasons = []
     for k, (value, text) in used.items():
         tone = "pos" if value > 0.15 else "neg" if value < -0.15 else "neutral"
-        reasons.append({"text": text, "tone": tone})
+        # key and value let the track record measure which components actually help
+        reasons.append({"text": text, "tone": tone, "key": k, "value": round(value, 2)})
     return round(score), reasons
 
 
@@ -182,3 +183,51 @@ def stop_loss(price, atr_value, multiple=2.0):
     if stop <= 0:
         return None
     return {"price": stop, "pct": (stop / price - 1) * 100, "multiple": multiple}
+
+
+STOP_ATR = 2.0
+SHORT_REACH = (1.0, 4.0)      # a chart level counts as a short-term target if it is 1 to 4 R away
+SHORT_FALLBACK_R = 2.0
+LONG_FALLBACK_R = 3.0
+
+
+def target_levels(price, atr_value, zones, high52, low52, side):
+    """Indicative stop and targets for a buy or sell signal, or None when they cannot be worked out.
+
+    R is the distance to the stop: 2 x the average true range. For a buy the stop is below the price and the
+    targets above it, for a sell the other way round.
+    Short-term target: the nearest resistance (buy) or support (sell) if it is 1 to 4 R away, otherwise 2 R.
+    Long-term target: the 52-week high (buy) or low (sell) if it is at least 1 R away, otherwise 3 R.
+    These are reference levels from fixed rules, not a forecast.
+    """
+    if side not in ("buy", "sell") or not price or price <= 0 or not atr_value or atr_value <= 0:
+        return None
+    sign = 1 if side == "buy" else -1
+    risk = STOP_ATR * atr_value
+    stop = price - sign * risk
+    if stop <= 0:
+        return None
+
+    def reach(level):
+        return sign * (level - price)
+
+    def number(value):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+    def entry(level, basis):
+        return {"price": level, "pct": (level / price - 1) * 100, "basis": basis}
+
+    zone_key = "resistance" if side == "buy" else "support"
+    levels = [z["level"] for z in ((zones or {}).get(zone_key) or []) if isinstance(z, dict) and number(z.get("level")) and reach(z["level"]) > 0]
+    nearest = min(levels, key=reach) if levels else None
+    if nearest is not None and SHORT_REACH[0] * risk <= reach(nearest) <= SHORT_REACH[1] * risk:
+        short = entry(nearest, zone_key)
+    else:
+        short = entry(price + sign * SHORT_FALLBACK_R * risk, "volatility")
+
+    extreme = high52 if side == "buy" else low52
+    if number(extreme) and reach(extreme) >= risk:
+        long = entry(extreme, "52-week high" if side == "buy" else "52-week low")
+    else:
+        long = entry(price + sign * LONG_FALLBACK_R * risk, "volatility")
+    return {"stop": {"price": stop, "pct": (stop / price - 1) * 100}, "short": short, "long": long}

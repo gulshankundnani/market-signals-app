@@ -45,29 +45,93 @@ It is not investment advice. Signals come from fixed rules on free, delayed data
    On your phone open it in Chrome or Safari and choose **Add to Home screen** to install it like an app.
 
 The workflow then runs by itself every 15 minutes on weekdays. If a test fails or too many data
-sources fail, the site is not replaced and the previous version stays online.
+sources fail, the site is not replaced and the previous version stays online. If a single stock fails to load (Yahoo sometimes returns a truncated history for brand-new
+listings), a short retry is made, and if that also fails its previous record is kept for up to 4 days, so it does
+not vanish from the page.
 
 ## Alerts
 
-Edit `config/alerts.json` and list the stocks to watch, for example
-`{"symbols": ["TCS.NS", "SBIN.NS", "AAPL"]}`. An alert is raised when a watched stock's short- or long-term
-signal moves between buy, hold and sell, and when breaking news that names the company appears. The first run
-only records the current state and raises nothing.
+`config/alerts.json` controls what is watched:
+
+```json
+{"symbols": ["*"], "news": ["neg", "pos"]}
+```
+
+* `symbols`: `["*"]` watches every stock. Or list the ones you want, for example `["TCS.NS", "SBIN.NS", "AAPL"]`.
+* `news`: which breaking headlines count. Use `["neg"]` for bad news only, to keep the channel quieter.
+
+An alert is raised when a watched stock's short- or long-term signal moves between buy, hold and sell, and when
+breaking news that names the company appears. To stop a score that hovers at a threshold from sending a message
+every run, a stock only moves into Buy or Sell at a score of +/-25 and only drops back once it falls through
++/-10. The move is measured from the side last announced, so a slow drift is still reported once it is clear.
+The first run only records the current state and raises nothing. If many stocks move in one run, the message
+shows the first 15 and counts the rest, and the Market tab lists all recent alerts.
+
+### What an alert looks like
+
+Each alert says what changed, gives a resistance or support reference and a volatility risk level, lists the
+indicator readings behind it, and links to the full analysis:
+
+```
+STRONGLY ALIGNED BULLISH: Apple (AAPL)
+Weeks view: Mixed -> Strongly aligned bullish (indicator alignment +53). Price 356.27 USD
+Resistance reference 389.14 (+9.2%, volatility-based, 2x the risk distance). Volatility risk level 339.83 (-4.6%).
+Why: Trend: price above 20-day average, 20-day above 50-day; Momentum: MACD positive and rising; RSI 61 is in the normal range.
+Full analysis: https://<your-username>.github.io/<repository>/#stock=AAPL&section=signals
+```
+
+* **Volatility risk level:** 2 x the 14-day average true range from the price (below it for a bullish reading, above
+  it for a bearish one). This distance is called R.
+* **Short-term target:** the nearest resistance (buy) or support (sell) if it is 1 to 4 R away, otherwise 2 R.
+* **Long-term target:** the 52-week high (buy) or low (sell) if it is at least 1 R away, otherwise 3 R.
+* **Why:** the reasons on the stock's page that support the new signal. For a signal that has faded to hold, the
+  reasons that weakened the old one, and no reference level is given.
+* **News alerts** name the headline, its source and age, and link to the stock's news.
+
+The reference levels come from fixed rules, are not forecasts, and prices can gap past the volatility risk level. Tapping the
+link opens that stock's page on the site, with the alert at the top followed by the full analysis (signals,
+chart, levels, risk, fundamentals, dividends, news and backtest). The Market tab lists recent alerts with a
+"View analysis" button for each.
 
 * **In the app:** the Alerts button turns on notifications for the stocks you starred, while the app is open.
-  Recent alerts for the watched list are also kept in the data file the site publishes.
-* **On your phone with the app closed (optional, uses Telegram):**
+  Recent alerts are listed on the Market tab.
+* **Telegram channel (alerts on your phone with the app closed):** the site links to the channel
+  (`https://t.me/marketsignalsapp`) from its header and footer. To make the refresh job post there:
   1. In Telegram, message `@BotFather`, send `/newbot` and follow the steps. Keep the token private.
-  2. Send any message to your new bot, then open `https://api.telegram.org/bot<TOKEN>/getUpdates` in a
-     browser (with your token) and note the number after `"chat":{"id":`. For a group or channel, add the bot
-     first (as an admin for a channel) and use that chat's ID.
-  3. In the repository: **Settings > Secrets and variables > Actions > New repository secret**. Add
+  2. Add the bot to the channel as an **administrator** who can post messages.
+  3. Find the channel's chat ID: post once in the channel, then open
+     `https://api.telegram.org/bot<TOKEN>/getUpdates` in a browser (with your token) and note the number after
+     `"chat":{"id":` (it starts with `-100`). For a public channel you can also use `@marketsignalsapp`.
+  4. In the repository: **Settings > Secrets and variables > Actions > New repository secret**. Add
      `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
-  4. Check it: **Actions > Update signals > Run workflow**, tick **Send a test message to Telegram first**, then run.
+  5. Check it: **Actions > Update signals > Run workflow**, tick **Send a test message to Telegram first**, then run.
 
-Delivery depends on the 15-minute schedule, and GitHub may delay scheduled runs. Without Telegram nothing is
-sent outside the app: a web page cannot push notifications to a closed browser without a push service or a
-server that stores each person's browser address, and this project uses neither.
+Delivery depends on the 15-minute schedule, and GitHub may delay scheduled runs. Anyone can join the public
+channel and get the same alerts. Without Telegram nothing is sent outside the app: a web page cannot push
+notifications to a closed browser without a push service or a server that stores each person's browser
+address, and this project uses neither.
+
+### Target-hit replies
+
+Each bullish or bearish alert is recorded (price, reference level, volatility risk level). When a later price reaches
+either level, the bot replies under the original Telegram message ("REFERENCE LEVEL REACHED" or "VOLATILITY RISK LEVEL REACHED") with a link to
+the analysis. A call that simply runs out of time is recorded but not announced. If the original message was
+deleted, the reply is still sent on its own. Each outcome is announced once.
+
+## Track record
+
+Every call and its outcome is stored in plain files on a separate **`data`** branch of this repository (created on
+the first run; your code on `main` is never touched). `calls-YYYY-MM.jsonl` holds calls and `outcomes-YYYY-MM.jsonl`
+holds how they ended; lines are only ever added, and git history shows when each was written. The **Track record**
+tab shows hit rates with confidence ranges, average return against the market index, results by score band, which
+signal components were stronger on winners, and suggested improvements.
+
+* It only **measures**. Suggestions are for you to read; nothing changes the signal rules automatically.
+* Figures under 30 resolved calls are labelled unreliable. Past results do not predict future ones.
+* Fills are assumed at the next bar's open; a bar that touches both stop and target counts as a stop.
+* The repository must allow the workflow to write: **Settings > Actions > General > Workflow permissions > Read and write**.
+  If the ledger cannot be saved, calls wait in the site's state and are saved on the next run.
+* The data branch is public if the repository is public.
 
 ## Change the stock list
 
@@ -92,6 +156,6 @@ Then open http://127.0.0.1:8765/. Python 3.10+ and Node 18+ are the only require
 * **Long-term (months to years):** price against the 200-day average, golden/death cross, 6-month return, 52-week position and volatility.
 * Each score runs from -100 to +100: +20 or more is Buy, -20 or less is Sell, and +/-50 is Strong.
 * **Backtest:** the same fixed rules are run on up to 5 years of each stock, trading at the next open with a 0.1% cost per trade, and compared with buy-and-hold. The most recent 40% is reported separately. In strong bull markets the rules often lag buy-and-hold, and the app says so.
-* **Stop-loss:** 2 x the 14-day average true range below the price. Prices can gap past it.
+* **Volatility risk level:** 2 x the 14-day average true range below the price. Prices can gap past it.
 
 Never invest money you cannot afford to lose.

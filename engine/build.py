@@ -7,12 +7,13 @@ import json
 import math
 import os
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from . import alerts, backtest, discover, dividends, exchange, fetch, fundamentals, ipo, ipo_gmp, news, patterns, risk, signals
+from . import alerts, backtest, discover, dividends, exchange, fetch, fundamentals, ipo, ipo_gmp, ledger, news, patterns, risk, signals, tracking
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKERS = 6
@@ -21,6 +22,7 @@ STALE_DAYS = 5
 SPARK_DAYS = 90
 MAX_FAILURE_SHARE = 0.6
 NEW_MAX_BARS = 250
+CARRY_MAX_AGE_DAYS = 4
 TOO_NEW = "Too new for signals: about 60 trading days of history are needed"
 
 
@@ -83,6 +85,7 @@ def analyse(entry, ctx):
     min_bars = 5 if entry.get("new") else fetch.MIN_BARS
     chart = fetch.fetch_chart(symbol, "5y", min_bars)
     bars = chart["bars"]
+    ctx.get("bars", {})[symbol] = bars
     close = bars["c"]
     n, i = len(close), len(close) - 1
     price = close[i]
@@ -253,6 +256,98 @@ def build_universe(config, registry, limit):
     return stocks
 
 
+US_IPO_MAX_AGE_DAYS = 7
+
+
+def carry_us_ipos(ipos, previous, now):
+    """Stamp a fresh US IPO list with its time. If the calendar failed to load, keep the last list that did
+    (up to a week old) and mark it, so the page does not lose it because of one refused request."""
+    if ipos.get("us_ok") and ipos.get("us"):
+        ipos["us_fetched_at"] = now.isoformat(timespec="seconds")
+        return ipos
+    previous = previous or {}
+    old, stamp = previous.get("us"), previous.get("us_fetched_at")
+    try:
+        age_days = (now - datetime.fromisoformat(stamp)).days if stamp else None
+    except (TypeError, ValueError):
+        age_days = None
+    if not ipos.get("us_ok") and old and age_days is not None and 0 <= age_days <= US_IPO_MAX_AGE_DAYS:
+        ipos["us"], ipos["us_carried"], ipos["us_fetched_at"] = old, True, stamp
+    return ipos
+
+
+def carry_forward(errors, previous, today):
+    """Keep last run's record for a stock that failed to load this time, so one bad answer from Yahoo does not
+    make it vanish from the page. Only records with a recent price date are kept. Returns (carried, still_failed)."""
+    carried, failed = [], []
+    for error in errors:
+        old = previous.get(error["symbol"])
+        try:
+            age = (today - date.fromisoformat(old["as_of"])).days if old else None
+        except (KeyError, TypeError, ValueError):
+            age = None
+        if age is not None and 0 <= age <= CARRY_MAX_AGE_DAYS:
+            carried.append({**old, "carried": True})
+        else:
+            failed.append(error)
+    return carried, failed
+
+
+def track(args, state, prev_data, calls, ctx, now_ts, token, chat, link_for_symbol):
+    """Record new calls, check open ones against fresh prices and reply to those that hit target or stop.
+
+    Returns (track_record summary, calls still to be saved, reply queue, notified ids, [(symbol, text)] sent).
+    Any failure leaves things to be retried next run; it never stops the site from publishing.
+    """
+    previous_record = prev_data.get("track_record")
+    pending = [c for c in state.get("ledger_pending", []) if isinstance(c, dict) and "id" in c]
+    pending += [c for _, c in calls if c["id"] not in {p["id"] for p in pending}]
+    pending = pending[-tracking.PENDING_LIMIT:]
+    queue = [i for i in state.get("reply_queue", []) if isinstance(i, str)]
+    notified = [i for i in state.get("notified_outcomes", []) if isinstance(i, str)]
+
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    remote = args.ledger_remote or (f"https://github.com/{repo}.git" if repo and not args.ledger_dir else "")
+    if not (args.ledger_dir or remote):
+        return previous_record, pending, queue, notified, []
+    directory = args.ledger_dir or str(Path(tempfile.mkdtemp()) / "ledger")
+    git_token = os.environ.get("GITHUB_TOKEN") or None
+    led = tracking.open_ledger(directory, remote, git_token)
+    if led is None:
+        return previous_record, pending, queue, notified, []
+
+    try:
+        for call in pending:
+            led.add_call(call)
+        resolved = led.resolve_open(ctx.get("bars", {}), ctx["bench"])
+        queue = queue + [o["id"] for _, o in resolved]
+        led.save()
+        stored = tracking.publish_ledger(directory, f"Ledger update {datetime.fromtimestamp(now_ts, timezone.utc):%Y-%m-%d %H:%M}", remote, git_token)
+        print(f"Ledger: {len(calls)} new calls, {len(resolved)} resolved, {len(led.open_calls())} open" + ("" if stored else " (not saved yet)"))
+    except Exception as err:
+        print("Ledger update failed, will retry next run:", err)
+        return previous_record, pending, queue, notified, []
+
+    sent_lines = []
+    if token and chat:
+        def send(text, reply_to):
+            return alerts.post_telegram(token, chat, text, reply_to)[0]
+        sent, queue, texts = tracking.send_replies(
+            queue, led, notified, send, lambda c: link_for_symbol(c["symbol"]))
+        notified = (notified + sent)[-tracking.NOTIFIED_LIMIT:]
+        sent_lines = [(led.calls[i]["symbol"], t) for i, t in zip(sent, texts)]
+        if sent:
+            print(f"Replied to {len(sent)} calls that reached target or stop")
+    else:
+        queue = []
+    if stored:
+        pending = []
+    summary = ledger.summarise(led, now_ts)
+    if repo:
+        summary["data_url"] = f"https://github.com/{repo}/tree/data"
+    return summary, pending, queue, notified, sent_lines
+
+
 def run(args):
     now = datetime.now(timezone.utc)
     today = now.date()
@@ -278,7 +373,8 @@ def run(args):
         except fetch.FetchError as err:
             print("benchmark failed:", err)
 
-    ctx = {"now": now, "today": today, "now_ts": int(now.timestamp()), "delivery": delivery, "deals": deals, "bench": bench}
+    ctx = {"now": now, "today": today, "now_ts": int(now.timestamp()), "delivery": delivery, "deals": deals, "bench": bench,
+           "bars": {}}
 
     def safe(entry):
         try:
@@ -295,33 +391,58 @@ def run(args):
         print("Too many failures, refusing to publish a broken data set", file=sys.stderr)
         return 1
 
+    previous = {s["symbol"]: s for s in prev_data.get("stocks", [])}
+    carried, errors = carry_forward(errors, previous, today)
+    if carried:
+        print(f"{len(carried)} stocks kept from the previous run after a failed load: {', '.join(c['symbol'] for c in carried)}")
+    records = sorted(records + carried, key=lambda x: x["symbol"])
+
     fund_cache = fill_fundamentals(records, state, ctx["now_ts"], fetch.YahooSession)
     add_lists(records)
     overview = market_overview(config, now)
-    ipos = ipo.fetch_ipos(now)
+    ipos = carry_us_ipos(ipo.fetch_ipos(now), prev_data.get("ipos"), now)
     india, india_ok, india_at, ipo_cache = ipo_gmp.fetch_india(now, state.get("ipo_gmp"), fetch_news=news.fetch_news)
     ipos.update({"india": india, "india_ok": india_ok,
                  "india_source": {"name": "Investorgain", "url": ipo_gmp.URL, "fetched_at": india_at}})
     print(f"India IPOs: {len(india)} rows ({'fresh' if india_ok else 'unavailable or old'})")
 
-    previous = {s["symbol"]: s for s in prev_data.get("stocks", [])}
     first_run = not prev_data
-    watch = [s for s in alert_cfg.get("symbols", []) if s in {x["symbol"] for x in records}]
+    watch = alerts.watched_symbols(alert_cfg.get("symbols", []), {x["symbol"] for x in records})
+    tones = tuple(t for t in alert_cfg.get("news", alerts.NEWS_TONES) if t in alerts.NEWS_TONES) if isinstance(alert_cfg.get("news", []), list) else alerts.NEWS_TONES
+    sides = {s: dict(v) for s, v in state.get("alert_sides", {}).items() if isinstance(v, dict)}
+    items = []
     lines, seen = alerts.build_messages(previous, {x["symbol"]: x for x in records}, watch,
-                                        state.get("seen_alerts", []), first_run)
-    alert_log, added = alerts.update_log(state.get("alert_log", []), lines, int(now.timestamp()))
+                                        state.get("seen_alerts", []), first_run, tones, sides, items)
+    now_ts = int(now.timestamp())
+    alert_log, added = alerts.update_log(state.get("alert_log", []), lines, now_ts, [i["symbol"] for i in items])
     print(f"Alerts: {len(added)} new, {len(watch)} stocks watched")
     token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
+    site_url = args.prev if args.prev.startswith("http") else ""
+
+    def link_for_symbol(symbol, section="signals"):
+        return alerts.stock_link(site_url, symbol, section) if site_url else None
+
+    calls = tracking.make_calls(items, {x["symbol"]: x for x in records}, now_ts)
     if lines and token and chat:
-        print("Telegram alert sent" if alerts.send_telegram(token, chat, "\n\n".join(lines)) else "Telegram alert failed")
+        links = [link_for_symbol(i["symbol"], "news" if i["kind"] == "news" else "signals") for i in items]
+        message, shown = alerts.digest_with_count(lines, links, note=alerts.NOTE)
+        ok, message_id = alerts.post_telegram(token, chat, message)
+        print("Telegram alert sent" if ok else "Telegram alert failed")
+        if ok:
+            tracking.attach_message(calls, shown, message_id)
     elif lines:
         print("New alerts are in the app. Telegram is not set up (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID).")
+
+    track_record, pending, queue, notified, outcome_lines = track(args, state, prev_data, calls, ctx, now_ts, token, chat, link_for_symbol)
+    if outcome_lines:
+        alert_log, _ = alerts.update_log(alert_log, [text for _, text in outcome_lines], now_ts, [sym for sym, _ in outcome_lines])
     data = {"version": 1, "generated_at": now.isoformat(timespec="seconds"), "market": overview, "ipos": ipos,
             "stocks": records, "errors": [{"symbol": e["symbol"], "error": e["error"]} for e in errors],
-            "alerts": alert_log,
+            "alerts": alert_log, "track_record": track_record,
             "exchange_data": {"delivery_dates": sorted(delivery)[-3:], "note": "NSE delivery data and bulk/block deals. The exchange order book (bid/ask depth) is not published for free."}}
     new_state = {"seen_alerts": seen, "delivery": delivery, "us_symbols": us_list, "new_listings": registry,
-                 "fundamentals": fund_cache, "ipo_gmp": ipo_cache, "alert_log": alert_log}
+                 "fundamentals": fund_cache, "ipo_gmp": ipo_cache, "alert_log": alert_log,
+                 "alert_sides": sides, "ledger_pending": pending, "reply_queue": queue, "notified_outcomes": notified}
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -347,6 +468,8 @@ def main(argv=None):
     parser.add_argument("--test-alert", action="store_true", help="send a test message to Telegram and exit")
     parser.add_argument("--out", default="site")
     parser.add_argument("--prev", default=os.environ.get("SITE_URL", ""), help="URL or folder holding the previous data.json/state.json")
+    parser.add_argument("--ledger-dir", default="", help="keep the track-record ledger in this folder (no git); for testing")
+    parser.add_argument("--ledger-remote", default="", help="git remote holding the data branch (default: this GitHub repository)")
     parser.add_argument("--limit", type=int, default=0, help="analyse only N stocks (testing)")
     args = parser.parse_args(argv)
     return send_test_alert() if args.test_alert else run(args)

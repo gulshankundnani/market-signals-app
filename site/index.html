@@ -15,24 +15,34 @@
 <header class="top">
   <div class="brand"><img src="icon.svg" alt="" width="24" height="24"><h1>Stock Signals</h1></div>
   <nav class="tabs" aria-label="Sections">
-    <button type="button" data-tab="signals" aria-current="page">Signals</button>
-    <button type="button" data-tab="suggest">Suggestions</button>
+    <button type="button" data-tab="signals" aria-current="page">Readings</button>
+    <button type="button" data-tab="suggest">Screens</button>
     <button type="button" data-tab="ipo">IPOs</button>
     <button type="button" data-tab="market">Market</button>
+    <button type="button" data-tab="track">Track record</button>
   </nav>
   <div class="status">
     <span id="updated" role="status">Loading data...</span>
     <button id="refresh" class="iconbtn" type="button" aria-label="Refresh data" title="Refresh data">&#8635;</button>
+    <a class="chip" href="https://t.me/marketsignalsapp" target="_blank" rel="noopener noreferrer" title="Get alerts in the Telegram channel">Telegram channel</a>
     <button id="notify" class="chip" type="button" aria-pressed="false">Alerts off</button>
   </div>
 </header>
 <div id="banner" class="banner" role="alert" hidden></div>
+<aside class="advisory" aria-label="Advisory">
+  <strong>Advisory:</strong> for information and education only. Not investment advice, research analysis or a recommendation to buy, sell or hold.
+  We are not a SEBI-registered investment adviser or research analyst.
+  <a href="advisory.html">Read the full disclaimer</a>
+</aside>
 <main id="view" tabindex="-1"></main>
 <dialog id="detail" aria-label="Stock details"></dialog>
 <div id="toasts" aria-live="polite"></div>
 <footer>
-  Signals come from fixed technical and news rules on delayed free data. They are not investment advice and can be wrong.
+  <strong>Advisory:</strong> this site is not investment advice, and the publisher is not a SEBI-registered investment adviser or research analyst.
+  Reference levels and volatility risk levels come from fixed rules and are not recommendations or forecasts.
+  Signals come from fixed technical and news rules on delayed free data and can be wrong. <a href="advisory.html">Full advisory and disclaimer</a>.
   Past results do not guarantee future results. Never invest money you cannot afford to lose.
+  Alerts are also posted to the <a href="https://t.me/marketsignalsapp" target="_blank" rel="noopener noreferrer">Telegram channel</a>.
 </footer>
 <script src="ipo.js"></script>
 <script src="app.js"></script>

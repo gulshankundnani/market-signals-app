@@ -34,6 +34,14 @@ button { cursor: pointer; }
 .tabs button[aria-current="page"] { color: var(--accent); border-bottom-color: var(--accent); }
 main { max-width: 1760px; margin: 0 auto; padding: 8px 14px; outline: none; }
 footer { max-width: 1760px; margin: 0 auto; padding: 8px 14px 14px; color: var(--muted); font-size: 11.5px; }
+.advisory { margin: 0; padding: 6px 14px; background: var(--warn-bg); color: var(--warn); font-size: 12px; }
+p.advisory { border-radius: 6px; }
+.advisory a { color: inherit; text-decoration: underline; }
+.disclaimer { max-width: 1760px; margin: 0 auto; padding: 8px 14px 0; color: var(--muted); font-size: 12px; }
+.disclaimer h2 { font-size: 13px; margin: 8px 0 4px; }
+.disclaimer ol { margin: 0 0 6px; padding-left: 20px; }
+.disclaimer.page { font-size: 14px; color: var(--fg, inherit); max-width: 760px; padding: 14px; }
+.disclaimer.page h2 { font-size: 16px; margin: 16px 0 6px; }
 .banner { margin: 0; padding: 8px 14px; background: var(--warn-bg); color: var(--warn); font-size: 13px; }
 
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 10px; }
@@ -44,6 +52,8 @@ label.field { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px
 input, select { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; min-height: 32px; }
 input[type=number] { width: 110px; }
 .chip { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 3px 10px; font-size: 12.5px; white-space: nowrap; }
+a.chip { display: inline-block; text-decoration: none; font-weight: 600; }
+a.chip:hover { border-color: var(--accent); }
 .chip[aria-pressed="true"], .chip.on { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .chips { display: flex; gap: 5px; overflow-x: auto; padding: 2px 0 8px; scrollbar-width: thin; }
 .btn { border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); border-radius: 8px; padding: 5px 12px; font-weight: 600; min-height: 32px; }
@@ -91,7 +101,9 @@ ul.reasons li::before { content: "+ "; color: var(--buy); font-weight: 700; } ul
   .tablewrap { overflow: auto; max-height: calc(100vh - 175px); }
   .tablewrap thead th { position: sticky; top: 0; z-index: 1; background: var(--card); box-shadow: 0 1px 0 var(--line); }
 }
-@media (min-width: 1100px) and (max-width: 1499px) { .cols.two .hide-md { display: none; } }
+@media (min-width: 1100px) and (max-width: 1499px) { .cols.two:not(.wide-view) .hide-md { display: none; } }
+/* The extra-column views need more room than half a screen, so India and the US stack on smaller desktops. */
+@media (min-width: 1100px) and (max-width: 1699px) { .cols.two.wide-view { grid-template-columns: minmax(0, 1fr); } }
 
 /* stock detail */
 dialog { width: min(1180px, 100vw - 16px); max-height: 94vh; padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--text); }
@@ -116,4 +128,18 @@ svg.chart { width: 100%; height: auto; display: block; }
   main { padding: 8px; }
   .top { padding: 4px 8px; }
   .status { width: 100%; justify-content: space-between; }
+  /* Bigger touch targets on phones. The compact sizes are for mouse use on larger screens. */
+  .chip, .btn { min-height: 38px; display: inline-flex; align-items: center; }
+  .iconbtn { width: 38px; height: 38px; }
+  .tabs button { padding: 12px 12px; }
+  .star { min-width: 36px; min-height: 40px; font-size: 18px; padding: 0 2px; }
+  .badge small { display: none; }
+  tbody td.num, thead th.num { padding-left: 3px; padding-right: 3px; }
+  input, select { min-height: 38px; }
 }
+
+/* Track record tab */
+tr.unsure td { color: var(--muted); }
+details.card summary { cursor: pointer; font-weight: 600; }
+details.card dl { margin: 8px 0 0; font-size: 13px; } details.card dt { margin-top: 6px; } details.card dd { margin: 0; color: var(--muted); }
+td > .tag { margin-left: 6px; }

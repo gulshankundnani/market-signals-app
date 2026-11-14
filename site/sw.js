@@ -1,5 +1,5 @@
-const CACHE = 'signals-v2';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ipo.js', 'icon.svg', 'manifest.webmanifest'];
+const CACHE = 'signals-v7';
+const SHELL = ['./', 'index.html', 'advisory.html', 'style.css', 'app.js', 'ipo.js', 'icon.svg', 'manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
