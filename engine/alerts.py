@@ -31,6 +31,7 @@ LEAVE = 10
 NEWS_PER_RUN = 6      # at most this many headlines go into one run's alerts; the rest stay on the site
 
 
+
 # How labels and sides are worded in messages. The stored labels stay Buy/Hold/Sell so records keep working.
 LABEL_TEXT = {"Strong Buy": "Strongly aligned bullish", "Buy": "Aligned bullish", "Hold": "Mixed", "Sell": "Aligned bearish",
               "Strong Sell": "Strongly aligned bearish"}
@@ -182,12 +183,13 @@ def build_messages(previous, current, watch, seen, first_run, news_on=True, side
     News is passed on exactly as published: a headline about the company from the last few hours, with its source
     and link. No good-or-bad tone is worked out from its words, and news never changes a reading.
 
-    On the first run nothing is reported, the current headlines are only recorded as seen. At most one headline per
-    stock and NEWS_PER_RUN per run are reported. The others are recorded as seen and stay on the site.
+    On the first run nothing is reported, the current headlines are only recorded as seen. On every other run the
+    newest headline of each stock is considered and the NEWS_PER_RUN newest overall are reported. The others are
+    recorded as seen and stay on the site.
     """
     sides = {} if sides is None else sides
     seen_set, seen_list = set(seen), list(seen)
-    readings, headlines = [], []
+    readings, candidates = [], []
     for symbol in watch:
         record = current.get(symbol)
         if not record:
@@ -222,12 +224,13 @@ def build_messages(previous, current, watch, seen, first_run, news_on=True, side
                 continue
             seen_set.add(key)
             seen_list.append(key)
-            if first_run or not news_on or reported_for_stock or len(headlines) >= NEWS_PER_RUN:
+            if first_run or not news_on or reported_for_stock:
                 continue
             reported_for_stock = True
-            headlines.append((f"News, {record['name']} ({symbol}): {item['title']} ({item['source']}, {news.age_text(item['age_min'])})", {
+            candidates.append((item["age_min"], (f"News, {record['name']} ({symbol}): {item['title']} ({item['source']}, {news.age_text(item['age_min'])})", {
                 "symbol": symbol, "kind": "news", "name": record["name"], "title": item["title"], "source": item["source"],
-                "link": item.get("link") or "", "age_min": item["age_min"]}))
+                "link": item.get("link") or "", "age_min": item["age_min"]})))
+    headlines = [pair for _, pair in sorted(candidates, key=lambda c: (c[0] is None, c[0] or 0))[:NEWS_PER_RUN]]
     lines = []
     items = [] if items is None else items
     for text, detail in readings + headlines:
@@ -252,7 +255,7 @@ def to_plain(text):
     """A Telegram HTML message as plain text: links become "label: address" and the tags are removed."""
     text = re.sub(r"</?b>", "", text)
     text = _ANCHOR.sub(lambda m: f"{html.unescape(m.group(2))}: {html.unescape(m.group(1))}", text)
-    return html.unescape(text)
+    return html.unescape(text).replace("​", "")
 
 
 def visible_length(text):

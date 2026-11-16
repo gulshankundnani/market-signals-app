@@ -8,6 +8,7 @@ Messages use Telegram's HTML formatting, so a long address shows as a short clic
 the rare case Telegram refuses the formatting.
 """
 import html
+import re
 from datetime import datetime, timedelta, timezone
 
 from . import alerts
@@ -23,6 +24,12 @@ NEWS_TITLE = "━━ NEWS ━━"
 FOOTER = "ℹ️ " + html.escape(alerts.NOTE) + "\n" + html.escape(alerts.ADVISORY)
 MAX_TITLE = 280
 esc = html.escape
+INVISIBLE = "​"            # a zero-width space: invisible, but it stops Telegram turning "Site.com" into a link
+
+
+def quiet(text):
+    """Text from outside with its web-address look removed, so Telegram does not make stray links of it."""
+    return re.sub(r"(?<=[A-Za-z0-9])\.(?=[A-Za-z]{2,})", "." + INVISIBLE, text)
 
 
 def _clip(text, limit):
@@ -58,10 +65,10 @@ def reading_card(item, link):
 
 def news_card(item, link):
     """The card for a headline: as published, with its source and a link to the article."""
-    source = esc(item["source"] or "unknown")
+    source = esc(quiet(item["source"] or "unknown"))
     age = esc(alerts.news.age_text(item.get("age_min")) or "time unknown")
     lines = [f"\U0001F4F0 <b>{esc(item['name'])} ({esc(item['symbol'])})</b>",
-             f"{BULLET} Headline: {esc(_clip(item['title'], MAX_TITLE))}",
+             f"{BULLET} Headline: {esc(quiet(_clip(item['title'], MAX_TITLE)))}",
              f"{BULLET} Source: {source} · {age}"]
     if str(item.get("link") or "").startswith("https://"):
         lines.append(f"{BULLET} {alerts.anchor(item['link'], 'Read article')}")

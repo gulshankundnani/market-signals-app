@@ -501,9 +501,9 @@ def run(args):
     news_on = bool(alert_cfg.get("news", True))     # headlines in the alerts; no tone is ever worked out from them
     sides = {s: dict(v) for s, v in state.get("alert_sides", {}).items() if isinstance(v, dict)}
     items = []
+    now_ts = int(now.timestamp())
     lines, seen = alerts.build_messages(previous, {x["symbol"]: x for x in records}, watch,
                                         state.get("seen_alerts", []), first_run, news_on, sides, items)
-    now_ts = int(now.timestamp())
     by_symbol = {x["symbol"]: x for x in records}
     alert_log, added = alerts.update_log(alerts.drop_irrelevant(state.get("alert_log", []), by_symbol), lines, now_ts, [i["symbol"] for i in items])
     print(f"Alerts: {len(added)} new, {len(watch)} stocks watched")

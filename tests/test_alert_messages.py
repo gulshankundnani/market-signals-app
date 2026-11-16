@@ -1,4 +1,5 @@
 import json
+import re
 import unittest
 from urllib.parse import unquote
 
@@ -257,6 +258,20 @@ class BuildItemsTests(unittest.TestCase):
         _, items, _ = self.run_items(many)
         self.assertEqual(len(items), alerts.NEWS_PER_RUN)
 
+    def test_when_there_are_too_many_the_newest_headlines_are_chosen_not_the_first_alphabetically(self):
+        ages = {"AAA": 300, "BBB": 250, "CCC": 5, "DDD": 10, "EEE": 20, "FFF": 30, "GGG": 40, "HHH": 50}
+        current = {s: record("Hold", 0, news={"fresh": [headline(f"Story {s}", n, age)]}) for n, (s, age) in enumerate(ages.items())}
+        _, items, _ = self.run_items(current)
+        self.assertEqual([i["symbol"] for i in items], ["CCC", "DDD", "EEE", "FFF", "GGG", "HHH"])
+
+    def test_every_run_reports_its_new_headlines_without_waiting(self):
+        current = {"A": record("Hold", 0, news={"fresh": [headline("First", 1)]})}
+        lines, _, seen = self.run_items(current)
+        self.assertEqual(len(lines), 1)
+        current = {"A": record("Hold", 0, news={"fresh": [headline("Second", 2)]})}
+        lines, _, _ = self.run_items(current, seen=seen)
+        self.assertEqual(len(lines), 1, "a new headline in the next run is reported at once")
+
     def test_news_never_changes_a_reading(self):
         base = self.run_items({"A": record("Buy", 30)})[0]
         with_news = self.run_items({"A": record("Buy", 30, news={"fresh": [headline("Fraud probe opened")]})})[0]
@@ -389,6 +404,13 @@ class LinkAndDigestTests(unittest.TestCase):
         self.assertIn("Tom &amp; &lt;Jerry&gt;", card)
         self.assertIn("A&amp;B &lt;News&gt;", card)
         self.assertEqual(card.count("<b>"), 1, "only the stock name is bold")
+
+    def test_source_names_that_look_like_web_addresses_are_not_turned_into_links(self):
+        card = digest.news_card({**self.story(), "source": "Moneycontrol.com", "title": "Results by Investing.com for 9.6 bil, U.S. Inc."}, None)
+        self.assertNotRegex(re.sub(r"<[^>]+>", "", card), r"[A-Za-z]\.[A-Za-z]{2,}")
+        self.assertIn("Moneycontrol.​com", card)
+        self.assertIn("9.6 bil", card, "numbers are left alone")
+        self.assertIn("Moneycontrol.com", alerts.to_plain(card), "the plain-text fallback is clean again")
 
     def test_a_link_with_quotes_or_ampersands_stays_inside_its_attribute(self):
         self.assertEqual(alerts.anchor('https://x/?a=1&b="2"', "Open"), '<a href="https://x/?a=1&amp;b=&quot;2&quot;">Open</a>')
