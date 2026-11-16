@@ -150,12 +150,22 @@
 
   function updateHeader() {
     const banner = $('#banner');
-    banner.hidden = !S.error;
-    banner.textContent = S.error || '';
     const label = $('#updated');
+    const minutes = S.data ? Math.max(0, Math.round((Date.now() - Date.parse(S.data.generated_at)) / 60000)) : null;
+    const late = minutes !== null && minutes > STALE_MINUTES && marketsOpenNow();
+    const message = S.error || (late ? `The latest data is from ${ago(minutes)} and the markets are open. It should refresh about every 15 minutes, but GitHub sometimes delays scheduled runs, so prices and signals may be out of date.` : '');
+    banner.hidden = !message;
+    banner.textContent = message;
     if (!S.data) { label.textContent = 'No data'; return; }
-    const minutes = Math.max(0, Math.round((Date.now() - Date.parse(S.data.generated_at)) / 60000));
-    label.textContent = `Updated ${ago(minutes)}` + (minutes > 180 ? ' (updates pause when markets are closed)' : '');
+    label.textContent = `Updated ${ago(minutes)}` + (minutes > 180 && !late ? ' (updates pause when markets are closed)' : '');
+  }
+
+  /* India opens at 03:45 UTC and the US closes at 21:00 UTC, Monday to Friday. */
+  const STALE_MINUTES = 60;
+  function marketsOpenNow(now = new Date()) {
+    const day = now.getUTCDay();
+    const minute = now.getUTCHours() * 60 + now.getUTCMinutes();
+    return day >= 1 && day <= 5 && minute >= 3 * 60 + 45 && minute < 21 * 60;
   }
 
   /* ---------- shared pieces ---------- */

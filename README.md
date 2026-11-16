@@ -46,7 +46,7 @@ It is not investment advice. Signals come from fixed rules on free, delayed data
    `https://marketsignals-app.github.io/market-signals-app/`.
    On your phone open it in Chrome or Safari and choose **Add to Home screen** to install it like an app.
 
-The workflow then runs by itself every 15 minutes on weekdays. If a test fails or too many data
+The workflow then runs by itself every 15 minutes on weekdays (at 7, 22, 37 and 52 minutes past the hour, which GitHub's scheduler handles more reliably than the round times). GitHub can still delay or skip scheduled runs, especially on a quiet repository. When the data is more than an hour old while the markets are open, the site shows a banner saying so. To refresh at once: **Actions > Update signals > Run workflow**. If a test fails or too many data
 sources fail, the site is not replaced and the previous version stays online. If a single stock fails to load (Yahoo sometimes returns a truncated history for brand-new
 listings), a short retry is made, and if that also fails its previous record is kept for up to 4 days, so it does
 not vanish from the page.
