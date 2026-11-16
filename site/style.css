@@ -240,7 +240,6 @@ details.ev[open] > summary::after { transform: rotate(90deg); }
 .dtab { flex: 1 0 auto; min-height: 44px; padding: 0 14px; border: 0; border-bottom: 3px solid transparent; background: none; color: var(--muted); font: inherit; font-weight: 600; white-space: nowrap; }
 .dtab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
 .tabpanel[hidden] { display: none; }
-@media (min-width: 900px) { .hero { grid-template-columns: 1.1fr 1fr; align-items: start; } .hero > .glance, .hero > .rangebox, .hero > .stats, .hero > .chips-row:last-child { grid-column: auto; } }
 
 /* Readings: one stacked bar says how the list leans */
 .leanbar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--hold-bg); margin: 6px 0; }
@@ -313,10 +312,18 @@ details.ev[open] > summary::after { transform: rotate(90deg); }
 .stats { gap: 6px 8px; }
 .stats b { font-size: 13.5px; }
 .chips-row { gap: 6px; }
-@media (min-width: 900px) { .hero { grid-template-columns: 1fr 1fr; align-items: start; } .hero > .herotags, .hero > .chips-row:last-child { grid-column: 1 / -1; } }
-@media (min-width: 900px) {
+@media (min-width: 700px) {
   .hero { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .hero > * { grid-column: 1; }
   .hero > .herotags { grid-column: 1 / -1; }
   .hero > .pmap { grid-column: 2; grid-row: 2 / span 3; }
+}
+
+/* Touch screens wider than a phone (tablets) get the same finger-sized controls as phones */
+@media (pointer: coarse) {
+  .chip, .btn { min-height: 38px; display: inline-flex; align-items: center; }
+  .helpbtn { width: 36px; height: 36px; }
+  details > summary { min-height: 40px; display: flex; align-items: center; }
+  input, select { min-height: 38px; }
+  .iconbtn { width: 38px; height: 38px; }
 }
