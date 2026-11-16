@@ -1412,8 +1412,8 @@
   /* ---------- track record tab ---------- */
   const SIDE_TEXT = { buy: 'bullish', sell: 'bearish', hold: 'mixed' };
   const TERMS = [
-    ['Reference reached', 'Share of readings whose price reached the reference level before the volatility risk level or the time limit.'],
-    ['Risk level reached', 'Share that reached the volatility risk level first.'],
+    ['Success', 'The price reached the reference level before the volatility risk level or the time limit. Shown as Reference reached in the tables.'],
+    ['Failure', 'The price reached the volatility risk level first. Shown as Risk level reached in the tables.'],
     ['Expired', 'Neither level was reached within 20 trading days (weeks view) or 120 (months-to-years view).'],
     ['Avg move', 'Average price move in the direction of the reading, after a 0.1% cost.'],
     ['vs index', 'Average return minus what the market index did over the same days.'],
@@ -1440,6 +1440,50 @@
       h('tbody', null, entries.map(([label, g]) => statRow(label, g, min)))))];
   }
 
+  /* One stacked bar: success (reference level reached first), failure (risk level reached first), expired. */
+  function outcomeBar(g, tall) {
+    const parts = [['ok', g.target_pct], ['bad', g.stop_pct], ['na', g.expired_pct]];
+    return h('div', { class: `outbar${tall ? ' tall' : ''}`, role: 'img', 'aria-label': `${Math.round(g.target_pct || 0)} percent reached the reference level, ${Math.round(g.stop_pct || 0)} percent reached the risk level, ${Math.round(g.expired_pct || 0)} percent expired` },
+      parts.map(([k, v]) => (isNum(v) && v > 0 ? h('i', { class: k, style: `flex:${v}` }) : null)));
+  }
+
+  const pct0 = (v) => (isNum(v) ? `${v.toFixed(0)}%` : '\u2013');
+
+  function outcomeLegend(g) {
+    return h('div', { class: 'outlegend' },
+      h('span', null, h('i', { class: 'dot ok' }), `Success ${pct0(g.target_pct)}`), h('span', null, h('i', { class: 'dot bad' }), `Failure ${pct0(g.stop_pct)}`),
+      h('span', null, h('i', { class: 'dot na' }), `Expired ${pct0(g.expired_pct)}`));
+  }
+
+  /* The headline: what share of settled readings succeeded, or how far off a trustworthy figure still is. */
+  function scoreboard(t, min) {
+    const o = t.overall || { n: 0 };
+    if (!o.n) {
+      const done = t.resolved || 0;
+      return h('section', { class: 'card score' },
+        h('div', { class: 'scoretitle' }, 'Too early for a success rate'),
+        h('div', { class: 'big' }, String(done), h('span', { class: 'bigof' }, ` of ${min} readings settled`)),
+        h('div', { class: 'outbar tall', role: 'img', 'aria-label': `${done} of ${min} readings settled` }, h('i', { class: 'ok', style: `flex:${Math.max(done, 0.001)}` }), h('i', { class: 'blank', style: `flex:${Math.max(min - done, 0)}` })),
+        h('p', { class: 'small', style: 'margin:8px 0 0' }, `${t.open || 0} readings are open. One settles when its price reaches the reference level (success), reaches the risk level (failure) or runs out of time. The success rate appears once ${min} have settled; before that, any figure would be too unreliable to trust.`));
+    }
+    const move = isNum(o.avg_return) ? h('span', { class: o.avg_return >= 0 ? 'up' : 'down' }, `${signed(o.avg_return)} average move`) : null;
+    const excess = isNum(o.avg_excess) ? h('span', { class: o.avg_excess >= 0 ? 'up' : 'down' }, `${signed(o.avg_excess)} against the index`) : null;
+    return h('section', { class: 'card score' },
+      h('div', { class: 'scoretitle' }, 'Success rate of settled readings', o.reliable ? null : h('span', { class: 'tag warn' }, 'early figure')),
+      h('div', { class: 'big' }, pct0(o.target_pct), h('span', { class: 'bigof' }, ` of ${o.n} reached the reference level first`)),
+      outcomeBar(o, true), outcomeLegend(o),
+      h('div', { class: 'moves small' }, move, excess),
+      o.reliable ? null : h('p', { class: 'muted small', style: 'margin:6px 0 0' }, `Only ${o.n} readings have settled. With fewer than ${min} the rate can swing a lot, so treat it as a first look.`));
+  }
+
+  function groupCards(t) {
+    const entries = Object.entries(t.by_group || {}).filter(([, g]) => g.n > 0);
+    if (!entries.length) return null;
+    return [h('h3', null, 'By reading type'), h('div', { class: 'tgroups' }, entries.map(([label, g]) => h('div', { class: 'card tgroup' },
+      h('div', { class: 'small muted' }, label), h('div', { class: 'gbig' }, pct0(g.target_pct), g.reliable ? null : h('span', { class: 'tag warn' }, 'few')),
+      outcomeBar(g, false), h('div', { class: 'small muted' }, `${g.n} settled`, isNum(g.avg_return) ? ` \u00B7 ${signed(g.avg_return)} average move` : ''))))];
+  }
+
   function viewTrack() {
     const t = S.data.track_record;
     if (!t) {
@@ -1456,29 +1500,29 @@
       h('td', { class: 'num' }, `${c.against.n}`), h('td', { class: 'num' }, signed(c.against.avg_return))));
     const recent = (t.recent || []).map((r) => h('tr', null,
       h('td', { class: 'name' }, h('b', null, r.name || r.symbol), h('span', null, `${r.symbol}, ${r.horizon === 'short' ? 'weeks view' : 'months-to-years view'}, ${SIDE_TEXT[r.side] || r.side}`)),
-      h('td', null, h('span', { class: `tag ${r.outcome === 'target' ? 'buy' : r.outcome === 'stop' ? 'sell' : ''}` }, r.outcome === 'target' ? 'Reference reached' : r.outcome === 'stop' ? 'Risk level reached' : 'Expired')),
+      h('td', null, h('span', { class: `tag ${r.outcome === 'target' ? 'buy' : r.outcome === 'stop' ? 'sell' : ''}` }, r.outcome === 'target' ? 'Success' : r.outcome === 'stop' ? 'Failure' : 'Expired')),
       h('td', { class: `num ${r.return_pct >= 0 ? 'up' : 'down'}` }, signed(r.return_pct)),
-      h('td', { class: 'num' }, `${r.date} to ${r.resolved_date}`)));
+      h('td', { class: 'num' }, `${shortDay(r.date)} to ${shortDay(r.resolved_date)}`)));
     const open = (t.open_calls || []).map((c) => h('tr', null,
       h('td', { class: 'name' }, h('b', null, c.name || c.symbol), h('span', null, `${c.symbol}, ${c.horizon === 'short' ? 'weeks view' : 'months-to-years view'}, ${SIDE_TEXT[c.side] || c.side}`)),
       h('td', { class: 'num' }, money(c.price, c.currency)), h('td', { class: 'num' }, money(c.target, c.currency)),
-      h('td', { class: 'num' }, money(c.stop, c.currency)), h('td', { class: 'num' }, c.date)));
-    return h('div', null,
-      h('h2', null, 'Track record'),
-      h('p', { class: 'muted small' }, `How the app's own bullish and bearish readings played out. ${t.calls_total} recorded, ${t.resolved} resolved, ${t.open} still open. This is a record of past readings, not a forecast, and figures from fewer than ${min} readings are unreliable.`),
-      h('div', { class: 'card' }, h('b', null, 'All resolved readings: '), o.n
-        ? `${o.n} readings. ${isNum(o.target_pct) ? o.target_pct.toFixed(0) : '–'}% reached the reference level, ${isNum(o.stop_pct) ? o.stop_pct.toFixed(0) : '–'}% reached the risk level, average move ${signed(o.avg_return)}${isNum(o.avg_excess) ? `, ${signed(o.avg_excess)} against the index` : ''}.${o.reliable ? '' : ' Too few readings to trust yet.'}`
-        : 'Nothing has resolved yet.'),
-      statTable('By reading type', t.by_group, min), statTable('By indicator alignment', t.by_score_band, min), statTable('By market', t.by_market, min),
+      h('td', { class: 'num' }, money(c.stop, c.currency)), h('td', { class: 'num' }, shortDay(c.date))));
+    const table = (heads, rows) => h('div', { class: 'card', style: 'padding:0;overflow-x:auto' }, h('table', null,
+      h('thead', null, h('tr', null, heads.map((x, i) => h('th', { class: i ? 'num' : null }, x)))), h('tbody', null, rows)));
+    const detail = [statTable('By indicator alignment', t.by_score_band, min), statTable('By market', t.by_market, min),
+      compRows.length ? [h('h3', null, 'Which indicators lined up with the outcome'), table(['Indicator', 'Readings it supported', 'Avg move', 'Readings it opposed', 'Avg move'], compRows)] : null,
       h('h3', null, 'Ideas to review'), h('div', { class: 'card' }, notes.length ? h('ul', { class: 'clean' }, notes) : h('span', { class: 'muted' }, 'Nothing to suggest yet.'),
         h('p', { class: 'muted small' }, 'These are observations for you to judge. The app never changes its own rules.')),
-      compRows.length ? [h('h3', null, 'Which indicators lined up with the outcome'), h('div', { class: 'card', style: 'padding:0;overflow-x:auto' }, h('table', null,
-        h('thead', null, h('tr', null, ['Indicator', 'Readings it supported', 'Avg move', 'Readings it opposed', 'Avg move'].map((x, i) => h('th', { class: i ? 'num' : null }, x)))), h('tbody', null, compRows)))] : null,
-      recent.length ? [h('h3', null, 'Latest results'), h('div', { class: 'card', style: 'padding:0;overflow-x:auto' }, h('table', null,
-        h('thead', null, h('tr', null, ['Reading', 'Result', 'Move', 'Dates'].map((x, i) => h('th', { class: i > 1 ? 'num' : null }, x)))), h('tbody', null, recent)))] : null,
-      open.length ? [h('h3', null, 'Open readings'), h('div', { class: 'card', style: 'padding:0;overflow-x:auto' }, h('table', null,
-        h('thead', null, h('tr', null, ['Reading', 'Price', 'Reference level', 'Risk level', 'Since'].map((x, i) => h('th', { class: i ? 'num' : null }, x)))), h('tbody', null, open)))] : null,
-      h('details', { class: 'card' }, h('summary', null, 'What the columns mean'), h('dl', null, TERMS.map(([k, v]) => [h('dt', null, h('b', null, k)), h('dd', null, v)]))),
+      h('h3', null, 'What the words mean'), h('dl', { class: 'terms' }, TERMS.map(([k, v]) => [h('dt', null, h('b', null, k)), h('dd', null, v)]))];
+    return h('div', null,
+      h('h2', null, 'Track record'),
+      scoreboard(t, min),
+      h('p', { class: 'muted small' }, `${t.calls_total} readings recorded: ${t.resolved} settled, ${t.open} open. A past record, not a forecast.`),
+      groupCards(t),
+      recent.length ? [h('h3', null, 'Latest results'), table(['Reading', 'Result', 'Move', 'Dates'], recent)] : null,
+      open.length ? h('details', { class: 'card opencalls', open: !o.n }, h('summary', null, `Open readings (${t.open}${t.open > open.length ? `, latest ${open.length} listed` : ''})`),
+        h('div', { style: 'overflow-x:auto' }, h('table', null, h('thead', null, h('tr', null, ['Reading', 'Price', 'Reference level', 'Risk level', 'Since'].map((x, i) => h('th', { class: i ? 'num' : null }, x)))), h('tbody', null, open)))) : null,
+      h('details', { class: 'card moredetail' }, h('summary', null, 'More detail'), detail),
       t.data_url ? h('p', { class: 'muted small' }, 'Every reading and outcome is stored as plain files for anyone to check: ', h('a', { href: t.data_url, target: '_blank', rel: 'noopener' }, 'the data branch on GitHub'), '.') : null);
   }
 

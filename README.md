@@ -184,6 +184,10 @@ Modelled on what Groww, Angel One, Upstox and INDmoney do on a phone:
 * **Price map**: resistance, support and the volatility risk level sit in one small table with the price and each level's
   distance from it, and the 52-week range bar is under it. There is no price chart; a static line added nothing the table
   does not say. The whole top of the page (readings, levels, key figures) fits in about one phone screen.
+* **Track record**: one headline first. Until 30 readings have settled it says "Too early for a success rate" with a
+  progress bar (the rate would be unreliable). After that it shows the success rate (the price reached the reference
+  level before the risk level or the time limit), failure and expired shares in one bar, the average move, and a card
+  per reading type. Open readings, alignment and market splits, and the glossary sit below or under "More detail".
 * **Readings**: each market has a stacked bar (bullish, mixed, bearish) and the index's trend and day move.
 * The labels stay neutral ("aligned bullish", "mixed", "aligned bearish") rather than buy, hold or sell, because the
   readings describe conditions and are not advice.
