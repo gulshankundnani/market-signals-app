@@ -226,7 +226,6 @@
     [/^Recent alerts for this stock$/, 'The latest alerts for this stock, with their reference level, volatility risk level and the indicator readings behind them.'],
     [/^Latest headlines$/, 'Headlines from the last few hours that are clearly about this company, shown as published with their source. No judgement of good or bad news is made from the words, and news is never part of a reading. Headlines come from outside sources and are not checked.'],
     [/^(Short-term view|Long-term view)/, 'The label counts how many fixed indicator rules point the same way for this time frame. Weeks view uses trend, momentum, RSI, volume and volume pressure. Months-to-years view uses the 200-day average, golden or death cross, 6-month return, 52-week position and volatility. The bar runs from −100 to +100.'],
-    [/^Price chart$/, 'The last 90 trading days of closing prices. The dashed line is the 50-day average. Dotted lines mark the nearest support and resistance and the volatility risk level.'],
     [/^Buying and selling pressure$/, 'An estimate from trading volume (money flow and the share of volume on up days) of whether buyers or sellers dominated recently. For India it adds the share of shares actually delivered. It is not exchange order-book data.'],
     [/^Position size$/, 'A calculator, not advice. Enter your capital and the share you are willing to lose, and it works out how many shares keep a move to the volatility risk level within that amount. Prices can gap past the level.'],
     [/^Levels and risk$/, 'Support and resistance are price areas from history where the price has turned before. The volatility risk level is 2 times the average daily range from the price. Volatility is the yearly size of swings. The 1-day loss (95%) is a loss a normal day has stayed within on 95% of days. The worst fall is the biggest drop over the last year.'],
@@ -566,75 +565,30 @@
     return rows.filter((r) => isNum(r.v)).sort((a, b) => b.v - a.v);
   }
 
-  function levelsLadder(s) {
+  /* Where the price sits: resistance, support and risk level as one small table, with the 52-week range under it. */
+  const shortDay = (iso) => (typeof iso === 'string' && iso.length === 10 ? new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' }) : 'unknown date');
+  function priceMap(s) {
     const rows = levelRows(s);
-    if (!rows.length || !isNum(s.price)) return null;
-    const now = { kind: 'now', label: 'Price now', v: s.price };
-    const all = [...rows, now].sort((a, b) => b.v - a.v);
-    return h('div', { class: 'ladder' },
-      h('table', { class: 'leveltable' },
-        h('caption', { class: 'sr' }, 'Resistance, support and risk level compared with the price'),
-        h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Level'), h('th', { scope: 'col', class: 'num' }, 'Price'), h('th', { scope: 'col', class: 'num' }, 'From price'))),
-        h('tbody', null, all.map((r) => h('tr', { class: `l-${r.kind}`, title: r.note || '' },
-          h('th', { scope: 'row' }, r.label), h('td', { class: 'num' }, money(r.v, s.currency)),
-          h('td', { class: 'num gap' }, r.kind === 'now' ? '–' : signed((r.v / s.price - 1) * 100, 1)))))),
-      h('p', { class: 'muted small', style: 'margin:4px 0 0' }, 'Resistance: rises have stalled here before. Support: falls have paused here before. Risk level: two average daily ranges below the price.'));
-  }
-
-  /* The price line for the last 90 trading days. Press or drag on it to read the price on any day. */
-  function chart(s) {
-    const closes = s.spark.filter(isNum);
-    if (closes.length < 5) return h('p', { class: 'muted small' }, 'Not enough price history for a chart.');
-    const sma = s.spark_sma50;
-    const rows = levelRows(s);
-    const lo0 = Math.min(...closes), hi0 = Math.max(...closes);
-    const near = (v) => isNum(v) && v > lo0 * 0.88 && v < hi0 * 1.12;
-    const colors = { res: ['var(--muted)', '2 4', 'Resistance'], sup: ['var(--buy)', '2 4', 'Support'], risk: ['var(--sell)', '6 4', 'Risk level'] };
-    const overlays = rows.filter((r) => near(r.v));
-    const all = closes.concat(overlays.map((o) => o.v));
-    const lo = Math.min(...all), hi = Math.max(...all), pad = (hi - lo) * 0.08 || 1;
-    const W = 560, H = 230, L = 8, R = 100, T = 14, B = 22;
-    const x = (i) => L + (i / (closes.length - 1)) * (W - L - R);
-    const y = (v) => T + (1 - (v - (lo - pad)) / (hi - lo + 2 * pad)) * (H - T - B);
-    const line = (values) => values.map((v, i) => (isNum(v) ? `${i && isNum(values[i - 1]) ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}` : '')).join(' ');
-    const last = closes[closes.length - 1];
-    const g = svg('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Price over the last ${closes.length} trading days, from ${closes[0].toFixed(2)} to ${last.toFixed(2)}` });
-    g.append(svg('path', { d: line(sma), fill: 'none', stroke: 'var(--muted)', 'stroke-width': 1.5, 'stroke-dasharray': '5 3' }));
-    g.append(svg('path', { d: line(closes), fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2.2 }));
-    const seen = {};
-    for (const o of overlays) {
-      seen[o.kind] = (seen[o.kind] || 0) + 1;
-      const [color, dash, base] = colors[o.kind];
-      const name = seen[o.kind] > 1 ? `${base} ${seen[o.kind]}` : base;
-      g.append(svg('line', { x1: L, x2: W - R, y1: y(o.v), y2: y(o.v), stroke: color, 'stroke-width': 1.6, 'stroke-dasharray': dash }));
-      g.append(svg('text', { x: W - R + 4, y: y(o.v) + 4, fill: color, 'font-size': 13, 'font-weight': 700 }, name));
+    const i = s.indicators || {};
+    const hasRange = isNum(i.lo252) && isNum(i.hi252) && i.hi252 > i.lo252 && isNum(s.price);
+    if ((!rows.length && !hasRange) || !isNum(s.price)) return null;
+    const all = [...rows, { kind: 'now', label: 'Price now', v: s.price }].sort((a, b) => b.v - a.v);
+    const table = rows.length ? h('table', { class: 'leveltable' },
+      h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Level'), h('th', { scope: 'col', class: 'num' }, 'Price'), h('th', { scope: 'col', class: 'num' }, 'From price'))),
+      h('tbody', null, all.map((r) => h('tr', { class: `l-${r.kind}` },
+        h('th', { scope: 'row' }, r.label), h('td', { class: 'num' }, money(r.v, s.currency)),
+        h('td', { class: 'num gap' }, r.kind === 'now' ? `as of ${shortDay(s.as_of)}` : signed((r.v / s.price - 1) * 100, 1)))))) : null;
+    let range = null;
+    if (hasRange) {
+      const pos = clamp((s.price - i.lo252) / (i.hi252 - i.lo252) * 100, 0, 100);
+      range = h('div', { class: 'rangebox' },
+        h('div', { class: 'rangetop small' }, h('span', { class: 'muted' }, '52-week range'), h('span', null, `${pos.toFixed(0)}% of the way up`)),
+        h('div', { class: 'rangebar', role: 'img', 'aria-label': `Price is at ${pos.toFixed(0)} percent of its 52-week range` }, h('i', { style: `left:${pos}%` })),
+        h('div', { class: 'rangeends small' }, h('span', null, money(i.lo252, s.currency)), h('span', null, money(i.hi252, s.currency))));
     }
-    g.append(svg('circle', { cx: x(closes.length - 1), cy: y(last), r: 4, fill: 'var(--accent)' }));
-    g.append(svg('text', { x: W - R + 4, y: y(last) + 4, fill: 'var(--text)', 'font-size': 13, 'font-weight': 700 }, 'Price'));
-    const cross = svg('line', { y1: T, y2: H - B, stroke: 'var(--text)', 'stroke-width': 1, visibility: 'hidden' });
-    const dot = svg('circle', { r: 5, fill: 'var(--text)', visibility: 'hidden' });
-    g.append(cross, dot);
-
-    const readout = h('div', { class: 'chartread small', 'aria-live': 'off' }, `Latest ${money(last, s.currency)}. Press or drag on the chart to read a day.`);
-    const show = (ev) => {
-      const box = g.getBoundingClientRect();
-      const i = clamp(Math.round(((ev.clientX - box.left) / box.width * W - L) / (W - L - R) * (closes.length - 1)), 0, closes.length - 1);
-      const daysAgo = closes.length - 1 - i;
-      cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.setAttribute('visibility', 'visible');
-      dot.setAttribute('cx', x(i)); dot.setAttribute('cy', y(closes[i])); dot.setAttribute('visibility', 'visible');
-      readout.textContent = `${daysAgo ? daysAgo + ' trading days ago' : 'Latest'}: ${money(closes[i], s.currency)}${daysAgo ? ` (${signed((last / closes[i] - 1) * 100, 1)} since then)` : ''}`;
-    };
-    const hide = () => { cross.setAttribute('visibility', 'hidden'); dot.setAttribute('visibility', 'hidden'); readout.textContent = `Latest ${money(last, s.currency)}. Press or drag on the chart to read a day.`; };
-    g.style.touchAction = 'pan-y';
-    g.addEventListener('pointerdown', show);
-    g.addEventListener('pointermove', (ev) => { if (ev.pointerType === 'mouse' || ev.buttons) show(ev); });
-    g.addEventListener('pointerleave', hide);
-    g.addEventListener('pointerup', (ev) => { if (ev.pointerType !== 'mouse') hide(); });
-
-    const legend = h('div', { class: 'chartkey small' },
-      h('span', null, h('i', { class: 'sw line' }), 'Price'), h('span', null, h('i', { class: 'sw avg' }), '50-day average'),
-      rows.length ? h('span', { class: 'muted' }, 'Levels and their values are listed at the top of the page.') : null);
-    return h('div', null, readout, g, legend);
+    const help = rows.length ? h('details', { class: 'mapnote small' }, h('summary', null, 'What do these levels mean?'),
+      h('p', { class: 'muted', style: 'margin:4px 0 0' }, 'Resistance: rises have stalled here before. Support: falls have paused here before. Risk level: two average daily ranges below the price. They come from fixed rules on past prices and are references, not advice.')) : null;
+    return h('div', { class: 'pmap' }, table, range, help);
   }
 
   function positionCalculator(s) {
@@ -768,29 +722,25 @@
   }
 
   /* One line that answers "which way do the checks lean?": both views, and how many of the fixed checks point up, down or neither. */
-  function glanceSummary(s) {
+  function verdictBlock(s) {
     const checks = [...(s.short.reasons || []), ...(s.long.reasons || [])];
-    if (!checks.length) return null;
     const up = checks.filter((c) => c.tone === 'pos').length, down = checks.filter((c) => c.tone === 'neg').length, flat = checks.length - up - down;
     const sides = [side(s.short.label), side(s.long.label)];
     const lean = sides[0] === sides[1] ? { buy: 'Both views aligned bullish', sell: 'Both views aligned bearish', hold: 'Both views mixed' }[sides[0]] : 'The two views differ';
-    const cls = sides[0] === sides[1] ? sides[0] : 'hold';
     const part = (n, k) => (n ? h('i', { class: k, style: `flex:${n}` }) : null);
-    return h('div', { class: 'glance' },
-      h('div', { class: 'glancetop' }, h('span', { class: `badge ${cls}` }, lean), h('span', { class: 'small muted' }, `${up} of ${checks.length} checks point up · ${down} down · ${flat} neutral`)),
-      h('div', { class: 'stackbar', role: 'img', 'aria-label': `${up} checks point up, ${down} point down, ${flat} neutral` }, part(up, 'u'), part(flat, 'n'), part(down, 'd')),
-      h('p', { class: 'muted small', style: 'margin:4px 0 0' }, 'From fixed technical rules (trend, momentum, RSI, volume, averages, 52-week position, volatility). Not advice.'));
+    return h('div', { class: 'vblock' },
+      h('div', { class: 'verdicts' }, verdictCard('Weeks view', s.short), verdictCard('Months-to-years view', s.long)),
+      checks.length ? h('div', { class: 'vsum' },
+        h('div', { class: 'small' }, h('b', null, lean), h('span', { class: 'muted' }, ` \u00B7 ${up} of ${checks.length} checks point up, ${down} down, ${flat} neutral`)),
+        h('div', { class: 'stackbar', role: 'img', 'aria-label': `${up} checks point up, ${down} point down, ${flat} neutral` }, part(up, 'u'), part(flat, 'n'), part(down, 'd'))) : null);
   }
 
-  function rangeBar(s) {
-    const i = s.indicators || {};
-    if (!isNum(i.lo252) || !isNum(i.hi252) || i.hi252 <= i.lo252 || !isNum(s.price)) return null;
-    const pos = clamp((s.price - i.lo252) / (i.hi252 - i.lo252) * 100, 0, 100);
-    const below = (1 - s.price / i.hi252) * 100;
-    return h('div', { class: 'rangebox' },
-      h('div', { class: 'rangetop' }, h('span', { class: 'muted small' }, '52-week range'), h('span', { class: 'small' }, `${pos.toFixed(0)}% of the range${below > 0.05 ? ` · ${below.toFixed(1)}% below the high` : ' · at the high'}`)),
-      h('div', { class: 'rangebar', role: 'img', 'aria-label': `Price is at ${pos.toFixed(0)} percent of its 52-week range` }, h('i', { style: `left:${pos}%` })),
-      h('div', { class: 'rangeends small' }, h('span', null, money(i.lo252, s.currency)), h('span', null, money(i.hi252, s.currency))));
+  /* Small data-check tag for the top of the page; the full sentence is at the bottom of the Overview tab. */
+  function qualityTag(s) {
+    const q = s.quality;
+    if (!q) return h('span', { class: 'tag', title: 'No second price source covers this stock' }, 'Price not cross-checked');
+    const [cls, text] = q.status === 'match' ? ['buy', 'Price cross-checked'] : q.status === 'minor' ? ['', 'Small price difference'] : ['warn', 'Prices disagree'];
+    return h('span', { class: `tag ${cls}`, title: `${q.max_diff_pct}% largest difference against ${q.source}` }, text);
   }
 
   function statsGrid(s) {
@@ -815,19 +765,17 @@
     const bt = s.backtest || {};
     const r = s.risk;
     const hero = h('div', { class: 'hero' },
-      h('div', { class: 'chips-row' }, h('span', { class: 'tag' }, s.market === 'IN' ? 'India' : 'US'), s.exchange ? h('span', { class: 'tag' }, s.exchange) : null, s.sector ? h('span', { class: 'tag' }, s.sector) : null),
-      h('h2', { class: 'heroname' }, s.name, ' ', h('span', { class: 'muted small' }, s.symbol)),
-      h('div', { class: 'heroprice' }, h('span', { class: 'px' }, money(s.price, s.currency)), changeChip(s.change_pct), h('span', { class: 'muted small' }, `as of ${s.as_of}`)),
-      qualityLine(s),
-      h('div', { class: 'verdicts' }, verdictCard('Weeks view', s.short), verdictCard('Months-to-years view', s.long)),
-      glanceSummary(s), levelsLadder(s), rangeBar(s), statsGrid(s), glanceChips(s));
+      h('div', { class: 'herotags chips-row' }, h('span', { class: 'tag' }, s.market === 'IN' ? 'India' : 'US'), s.exchange ? h('span', { class: 'tag' }, s.exchange) : null, s.sector ? h('span', { class: 'tag' }, s.sector) : null,
+        qualityTag(s)),
+      verdictBlock(s),
+      priceMap(s), statsGrid(s), glanceChips(s));
 
     const panels = {
       overview: [
-        h('p', { class: 'advisory wide' }, h('strong', null, 'Advisory: '), 'Not investment advice or a recommendation. The publisher is not a SEBI-registered investment adviser. Resistance and support references and volatility risk levels come from fixed rules. Do your own research. ', h('a', { href: 'advisory.html', target: '_blank', rel: 'noopener' }, 'Full disclaimer')),
+        h('p', { class: 'advisory wide' }, h('strong', null, 'Advisory: '), 'Not investment advice. Readings and levels come from fixed rules on past prices; the publisher is not a SEBI-registered adviser. ', h('a', { href: 'advisory.html', target: '_blank', rel: 'noopener' }, 'Full disclaimer')),
         alertsForStock(s),
         h('div', { class: 'grid wide', id: 'd-signals' }, h('section', { class: 'card' }, signalCard('Short-term view (weeks)', s.short)), h('section', { class: 'card' }, signalCard('Long-term view (months to years)', s.long))),
-        wide(section('Price chart', chart(s)))],
+        h('div', { class: 'wide' }, qualityLine(s))],
       technicals: [
         section('Buying and selling pressure', ...pressureBlock(s)),
         positionCalculator(s),
