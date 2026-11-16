@@ -186,11 +186,22 @@ class StatusTests(unittest.TestCase):
         new_only = self.status(carried=[{"new": True}, {"new": True}])
         prices = next(c for c in new_only["checks"] if c["name"] == "Stock prices")
         self.assertEqual(prices["state"], "ok")
-        self.assertIn("2 recent listings kept", prices["detail"])
+        self.assertIn("2 recent listings without enough history", prices["detail"])
         mixed = self.status(carried=[{"new": True}, {"new": False}])
         prices = next(c for c in mixed["checks"] if c["name"] == "Stock prices")
         self.assertEqual(prices["state"], "warn")
         self.assertIn("1 kept from the previous run", prices["detail"])
+
+    def test_a_new_listing_that_fails_to_load_is_information_but_a_real_failure_is_a_warning(self):
+        new_only = self.status(errors=[{"symbol": "NEW", "new": True}])
+        prices = next(c for c in new_only["checks"] if c["name"] == "Stock prices")
+        self.assertEqual(prices["state"], "ok")
+        self.assertIn("1 recent listing without enough history", prices["detail"])
+        self.assertNotIn("failed to load", prices["detail"])
+        real = self.status(errors=[{"symbol": "NEW", "new": True}, {"symbol": "OLD", "error": "404"}])
+        prices = next(c for c in real["checks"] if c["name"] == "Stock prices")
+        self.assertEqual(prices["state"], "warn")
+        self.assertIn("1 failed to load", prices["detail"])
 
     def test_optional_pieces_are_info_not_warnings(self):
         out = self.status(track_record=None, token=None, chat=None, delivery={})

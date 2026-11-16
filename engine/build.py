@@ -267,14 +267,16 @@ def status_block(config, records, errors, carried, overview, conditions, ipos, d
     def add(name, state, detail):
         checks.append({"name": name, "state": state, "detail": detail})
 
-    failed = len(errors)
+    failed_new = sum(1 for e in errors if e.get("new"))
+    failed = len(errors) - failed_new
     carried_new = sum(1 for c in carried if c.get("new"))
     carried_old = len(carried) - carried_new
     detail = f"{len(records)} stocks loaded" + (f", {failed} failed to load" if failed else "")
     if carried_old:
         detail += f", {carried_old} kept from the previous run"
-    if carried_new:
-        detail += f", {carried_new} recent listing{'s' if carried_new != 1 else ''} kept from the previous run (Yahoo often returns too little history for them)"
+    recent = carried_new + failed_new
+    if recent:
+        detail += f", {recent} recent listing{'s' if recent != 1 else ''} without enough history yet (Yahoo often returns too little for them)"
     add("Stock prices", "warn" if failed or carried_old else "ok", detail)
     news_down = sum(1 for x in records if (x.get("news") or {}).get("error"))
     add("News", "warn" if records and news_down / len(records) > 0.2 else "ok",
@@ -464,7 +466,7 @@ def run(args):
         try:
             return analyse(entry, ctx)
         except fetch.FetchError as err:
-            return {"symbol": entry["symbol"], "error": str(err)}
+            return {"symbol": entry["symbol"], "error": str(err), "new": bool(entry.get("new"))}
 
     with ThreadPoolExecutor(WORKERS) as pool:
         results = list(pool.map(safe, universe))
