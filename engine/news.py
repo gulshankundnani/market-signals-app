@@ -53,7 +53,7 @@ SAME_MARKET = {"", "nyse", "nasdaq", "nasdaqgs", "nasdaqgm", "nasdaqcm", "nysear
 _BRACKET_TICKER = re.compile(r"\((?:([A-Za-z]+):)?\s*([A-Z][A-Z0-9.\-]{0,9})\)")
 _ROUNDUP_PHRASES = ("stocks to watch", "stocks to buy", "stocks in focus", "stocks to sell", "top gainers", "top losers",
                     "market wrap", "market live", "stock market today", "buzzing stocks", "record date next week",
-                    "stocks that", "shares to buy", "stocks under", " vs ", " vs. ", " versus ", "stock picks", "stock price, news", "form 4 ", "form 144 ", "sec filing",
+                    "stocks that", "shares to buy", "stocks under", " vs ", " vs. ", " versus ", "stock picks", "stock price, news", "form 4 ", "form 144 ", "sec filing", "roundup", "round-up", "round up:",
                     "share price today", "stock price live", "quote and history", "options flow", "dark pools")
 _NOT_TICKERS = {"IPO", "GMP", "NSE", "BSE", "USA", "CEO", "CFO", "GDP", "RBI", "SEBI", "ETF", "EPS", "IMF", "OPEC", "FII",
                 "DII", "NSDL", "AGM", "SIP", "FDA", "SEC", "FED", "NYSE", "NASDAQ", "AI", "US", "UK", "EU", "IT", "PE"}
@@ -215,6 +215,21 @@ def is_relevant(title, name, ticker_base=None, source=None, mention_only=False):
         weak += [words.index(w) for w in name_words if len(w) >= DISTINCTIVE_MIN_LEN and w not in GENERIC_WORDS and w in words]
     return (bool(weak) and min(weak) < MAX_POSITION and _has_context(words)
             and not SUBJECT_VERBS.intersection(words[:min(weak)]))
+
+
+def names_company(title, name, ticker_base=None):
+    """True when a headline, even a list of many companies, names this company: by its full name (or its first words),
+    by a ticker that is an abbreviation, or by a long distinctive name word. For roundups, where the company need not be
+    the subject. A short or common name word is not enough on its own, because a list gives no context to tell."""
+    words = _words(title)
+    name_words = [w for w in _words(name) if w not in NAME_SUFFIXES]
+    ticker = (ticker_base or "").lower() if ticker_base and len(ticker_base) >= 3 else ""
+    for size in range(len(name_words), 1, -1):
+        if _find(words, name_words[:size]) is not None:
+            return True
+    if ticker and ticker not in name_words and ticker in words:
+        return True
+    return any(len(w) >= DISTINCTIVE_MIN_LEN and w not in GENERIC_WORDS and w not in COMMON_WORDS and w in words for w in name_words)
 
 
 def mark_relevance(items, name, ticker_base=None):

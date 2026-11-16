@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from . import digest, market as market_view, verify
+from . import digest, event_news, events, market as market_view, verify
 from . import alerts, backtest, discover, dividends, exchange, fetch, fundamentals, ipo, ipo_gmp, ledger, news, patterns, risk, signals, tracking
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +22,7 @@ WORKERS = 6
 FUNDAMENTALS_MAX_AGE = 20 * 3600
 STALE_DAYS = 5
 SPARK_DAYS = 90
+SPLIT_MEMORY_DAYS = 1095    # splits from the last three years are kept on a stock's page
 SPARK_MARKET = 30
 MAX_FAILURE_SHARE = 0.6
 NEW_MAX_BARS = 250
@@ -138,6 +139,8 @@ def analyse(entry, ctx):
     long_score, long_reasons = signals.long_score(ind, i)
     pressure = signals.buy_sell_pressure(ind, i)
     dividend = dividends.dividend_profile(chart["dividends"], price, ctx["now_ts"])
+    recent_splits = [{"date": datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d"), "ratio": f"{num:g}:{den:g}"}
+                     for ts, num, den in chart.get("splits", []) if ctx["now_ts"] - ts <= SPLIT_MEMORY_DAYS * 86400][-3:]
 
     base = symbol[:-3] if symbol.endswith(".NS") else None
     delivery = exchange_view = None
@@ -165,6 +168,7 @@ def analyse(entry, ctx):
         "news": {"items": items[:6], "fresh": news.fresh_headlines(items), "error": news_error},
         "dividend_yield": r(dividend["ttm_yield"], 5) if dividend else 0.0,
         "dividend": scrub(dividend),
+        "splits": recent_splits,
         "spark": [r(v) for v in close[-SPARK_DAYS:]],
         "spark_sma50": [r(v) for v in ind["sma50"][-SPARK_DAYS:]],
     }
@@ -320,7 +324,7 @@ def fill_fundamentals(records, state, now_ts, session_factory):
     missing = []
     for rec in records:
         cached = cache.get(rec["symbol"])
-        if cached and now_ts - cached.get("ts", 0) < FUNDAMENTALS_MAX_AGE:
+        if cached and now_ts - cached.get("ts", 0) < FUNDAMENTALS_MAX_AGE and "events" in cached.get("data", {}):
             rec["fundamentals"] = cached["data"]
         else:
             missing.append(rec)
@@ -504,6 +508,8 @@ def run(args):
     quality, accuracy = verify.cross_check(records, ctx["bars"], closes, (us_cache or {}).get("closes", {}))
     for rec in records:
         rec["quality"] = quality.get(rec["symbol"])
+    event_cache = event_news.sync(records, state.get("event_news"), now, breaker=Breaker(NEWS_FAILURE_LIMIT))
+    news_events = {s: v.get("events", []) for s, v in event_cache["stocks"].items()}
     add_lists(records)
     raw_index = {}
     overview = market_overview(config, now, raw_index)
@@ -549,13 +555,13 @@ def run(args):
         alert_log, _ = alerts.update_log(alert_log, [text for _, text in outcome_lines], now_ts, [sym for sym, _ in outcome_lines])
     status = status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy)
     data = {"version": 1, "generated_at": now.isoformat(timespec="seconds"), "market": overview, "conditions": conditions,
-            "status": status, "accuracy": accuracy, "ipos": ipos,
+            "status": status, "accuracy": accuracy, "events": events.build(records, today.isoformat(), news_events), "ipos": ipos,
             "stocks": records, "errors": [{"symbol": e["symbol"], "error": e["error"]} for e in errors],
             "alerts": alert_log, "track_record": track_record,
             "exchange_data": {"delivery_dates": sorted(delivery)[-3:], "note": "NSE delivery data and bulk/block deals. The exchange order book (bid/ask depth) is not published for free."}}
     new_state = {"seen_alerts": seen, "delivery": delivery, "us_symbols": us_list, "new_listings": registry,
                  "fundamentals": fund_cache, "ipo_gmp": ipo_cache, "alert_log": alert_log,
-                 "alert_sides": sides, "eod_close": closes, "us_close": us_cache, "ledger_pending": pending, "reply_queue": queue, "notified_outcomes": notified}
+                 "alert_sides": sides, "eod_close": closes, "us_close": us_cache, "event_news": event_cache, "ledger_pending": pending, "reply_queue": queue, "notified_outcomes": notified}
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

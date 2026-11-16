@@ -14,6 +14,7 @@ It is not investment advice. Signals come from fixed rules on free, delayed data
 | News | Google News | Shown as published, with source and age. No good-or-bad tone is worked out from the words. The stock comes first: a headline is attached to a stock only if it is clearly about the company: the full name, a ticker that is not an ordinary word, or a single name word together with business wording (shares, results, Q2, dividend). Stories about people or sports that share a name, rating headlines that name a bank only as the one giving the rating, lists and roundups, and headlines about more than one listed company are ignored. A headline is "fresh", and can be sent as an alert, for 6 hours |
 | Buying / selling pressure | Volume (Chaikin Money Flow, up-volume share) | A proxy. The exchange order book is not published for free |
 | NSE delivery % and bulk/block deals | NSE end-of-day files | India only, updated after each trading day |
+| Upcoming events | Yahoo Finance calendar, plus estimates from each stock's own dividend history | Results dates, ex-dividend dates and dividend payment dates. Each is labelled "unconfirmed" (Yahoo's figure) or "estimated". Recent splits come from price history |
 | Dividends | Actual payments from Yahoo | Frequency, amount, 12-month and recurring yield, specials, overdue payments |
 | Fundamentals and peers | Yahoo quoteSummary | Refreshed once a day. Shows "unavailable" when missing |
 | New listings | NSE equity list and Nasdaq/NYSE symbol list | Added to the "New listings" list on their own. Signals start after about 60 trading days |
@@ -169,6 +170,44 @@ signal components were stronger on winners, and suggested improvements.
 * The repository must allow the workflow to write: **Settings > Actions > General > Workflow permissions > Read and write**.
   If the ledger cannot be saved, calls wait in the site's state and are saved on the next run.
 * The data branch is public if the repository is public.
+
+## Events tab
+
+The **Events** tab lists what is coming up for the stocks in this app: when results are expected, the ex-dividend date (buy
+before it to receive the dividend) and the dividend payment date, grouped as this week, the next 30 days and later. It can
+be filtered by market, by type and to your watchlist. Each stock's page has an "Upcoming events" section and lists any
+splits of the last three years.
+
+* **Where the dates come from.** Results, ex-dividend and payment dates come from Yahoo Finance (taken from the same request
+  that fetches fundamentals, so no extra calls). They can be estimates, mostly for Indian companies, so they are labelled
+  **unconfirmed**: the company confirms its dates by notice to the exchange. When Yahoo has no future ex-dividend date, one
+  is **estimated**: the same week a year after an earlier payment, or the usual gap between payments for a newer payer.
+* **How good the estimates are.** Wherever Yahoo does give a real date, the estimate is worked out as if it were unknown and
+  compared with it. The tab shows the result (at the first live run: median error 1 day, 70% within a week, on 10 stocks).
+  Some estimates are weeks off, so they are a rough guide.
+* **When no official source can be read: the company's announcements as reported by prominent outlets.** The NSE and
+  BSE do not allow free scripted access to their corporate-action lists, and this project does not try to get around
+  that. Instead, news headlines about each stock are searched once a day (a batch per run, gently) for the company's own
+  announcements: an ex-dividend or record date, a payment date, a results or board-meeting date, a stock split or bonus
+  issue with its ratio, or an announced dividend amount. This is deliberately strict and shows its evidence:
+  * only headlines from a list of prominent outlets are used (CNBC TV18, The Economic Times, Business Standard, Mint,
+    Moneycontrol, Financial Express, NDTV Profit, Reuters, Bloomberg, Yahoo Finance and similar);
+  * the headline must be clearly about that one company, must use a precise phrase ("stock split", "ex-dividend",
+    "record date", "bonus issue", "results on"; the words "split" and "bonus" alone are not enough), and must state a
+    date, ratio or amount itself. Nothing is guessed from tone;
+  * a "this week" range from a roundup of record dates ("Nov 16-20: Cochin Shipyard, PFC...") counts too, when the
+    outlet names the company;
+  * each event shows its headline, source and link. Where Yahoo and a headline give the same date (or Yahoo's date falls
+    inside a roundup's range) the event is marked **agreed**. A headline with no date is listed separately as
+    "announced, date not stated".
+* **Checked against CNBC TV18.** On 16 Nov 2026 the app's dates were compared with CNBC TV18's "Record Dates This Week"
+  article. Of its 10 named stocks only 2 are in this app's stock list (EAAA Alternatives and PFC), and both dates matched.
+  The article also showed that Yahoo's dividend amount is not the announced one (PFC: Rs 4.10 announced), so the app says
+  "latest regular payment" and shows the announced amount only when a headline states it. The app lists only the stocks
+  in `config/universe.json`.
+* **Limits.** Headlines state few dates, so most stocks have no news-based event, and the page says how often news and
+  Yahoo agree. Past splits come from price history.
+* Only dates from today onwards are shown, within 120 days (estimates within 75).
 
 ## Price accuracy
 

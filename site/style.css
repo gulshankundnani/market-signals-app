@@ -169,3 +169,12 @@ details.status summary { cursor: pointer; display: block; margin-bottom: 6px; }
 .helpbtn:hover, .helpbtn[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
 .helptext { margin: 4px 0 8px; padding: 8px 10px; border-left: 3px solid var(--accent); border-radius: 4px; background: var(--hold-bg); color: var(--text); font-size: 13px; line-height: 1.45; }
 @media (max-width: 720px) { .helpbtn { width: 28px; height: 28px; } }
+
+/* Events */
+ul.events.card { padding: 0; }
+.eventrow { display: flex; gap: 12px; align-items: start; padding: 8px 12px; }
+.edate { flex: 0 0 92px; display: flex; flex-direction: column; }
+.ebody { flex: 1 1 auto; min-width: 0; }
+.linklike { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; text-align: left; }
+.linklike:hover { text-decoration: underline; }
+@media (max-width: 720px) { .eventrow { padding: 8px; gap: 8px; } .edate { flex-basis: 76px; } }

@@ -1,9 +1,10 @@
 """Company fundamentals from Yahoo quoteSummary. Missing values stay None."""
 import urllib.parse
+from datetime import datetime, timezone
 
 from .fetch import FetchError
 
-MODULES = "summaryDetail,defaultKeyStatistics,financialData,assetProfile,price"
+MODULES = "summaryDetail,defaultKeyStatistics,financialData,assetProfile,price,calendarEvents"
 URL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules=" + MODULES
 
 
@@ -16,6 +17,23 @@ def _raw(node, *path):
     if isinstance(node, dict):
         node = node.get("raw")
     return node if isinstance(node, (int, float, str)) and not isinstance(node, bool) else None
+
+
+def _day(node):
+    """A Yahoo {"raw": unix_time} value as an ISO date, or None."""
+    raw = node.get("raw") if isinstance(node, dict) else None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0:
+        return None
+    return datetime.fromtimestamp(raw, timezone.utc).strftime("%Y-%m-%d")
+
+
+def parse_events(result):
+    """The company's dates from Yahoo's calendarEvents: results dates (one, or the start and end of a window), the
+    ex-dividend date and the dividend payment date. These are Yahoo's figures and may be estimates."""
+    calendar = (result or {}).get("calendarEvents") or {}
+    earnings = [d for d in (_day(x) for x in ((calendar.get("earnings") or {}).get("earningsDate") or [])) if d]
+    return {"earnings": sorted(set(earnings)), "ex_dividend": _day(calendar.get("exDividendDate")),
+            "dividend_pay": _day(calendar.get("dividendDate"))}
 
 
 def parse_summary(payload):
@@ -36,6 +54,7 @@ def parse_summary(payload):
         "revenue_growth": _raw(result, "financialData", "revenueGrowth"),
         "earnings_growth": _raw(result, "financialData", "earningsGrowth"),
         "payout_ratio": _raw(result, "summaryDetail", "payoutRatio"),
+        "events": parse_events(result),
     }
 
 

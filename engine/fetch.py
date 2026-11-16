@@ -74,9 +74,18 @@ def clean_chart(payload, symbol, min_bars=MIN_BARS):
         for d in ((result.get("events") or {}).get("dividends") or {}).values()
         if d.get("amount")
     )
+    splits = []
+    for s in ((result.get("events") or {}).get("splits") or {}).values():
+        try:
+            num, den, ts = float(s["numerator"]), float(s["denominator"]), int(s["date"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if num > 0 and den > 0:
+            splits.append((ts, num, den))
     return {
         "bars": bars,
         "dividends": dividends,
+        "splits": sorted(splits),
         "meta": {
             "currency": meta.get("currency"),
             "exchange": meta.get("fullExchangeName"),

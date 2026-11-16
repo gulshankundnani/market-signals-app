@@ -201,6 +201,7 @@
     [/^Breadth and sectors$/, 'Breadth shows how many stocks are taking part in a move, not just the index. Sectors show which industries are leading or lagging. Both are counted over the stocks in this app\'s list, not the whole exchange.'],
     [/ breadth$/, 'Advancers rose today and decliners fell. The percentages show how many stocks are above their 20, 50 and 200-day averages. When most stocks are above their averages the move is broad. New 20-day highs and lows count stocks closing above or below the last 20 days\' range.'],
     [/ sectors$/, 'The average move of the stocks in each sector over 1, 5 and 20 trading days, every stock counted the same. The last column is how many stocks are in the sector in this app\'s list.'],
+    [/^Upcoming events$/, 'Dates that matter to holders: when results are expected, the ex-dividend date (buy before it to receive the dividend), the dividend payment date, and splits or bonus issues when a prominent news outlet has reported them. Each date shows its sources: YAHOO (a date from Yahoo Finance), NEWS (a headline from a prominent outlet, shown below it) or ESTIMATED (worked out from past payments), and AGREED when two sources give the same date. Companies confirm their dates by notice to the exchange, so check it before acting.'],
     [/^Price accuracy$/, 'Yahoo is the main price source, so its closing prices on the last few completed sessions are compared with an independent source: the official NSE end-of-day file for India, and the Cboe delayed-quote history for the US. "Match" means within 0.5%. A stock that differs by more than 2% is flagged and gets no new alerts until the sources agree. This checks completed sessions only. The live price during the session has no free independent source.'],
     [/^Recent alerts$/, 'The latest alerts the app has raised: a change in a stock\'s reading, a fresh headline about the stock, or a price reaching its reference or risk level. Use "View analysis" to open the stock.'],
     [/^World and market news/, 'Headlines about markets, interest rates, oil, geopolitics and the economy, from outside news sources. They are not checked by this app.'],
@@ -257,7 +258,7 @@
   }
 
   const JUMPS = [['Readings', 'signals'], ['Chart', 'price-chart'], ['Pressure', 'buying-and-selling-pressure'], ['Risk', 'levels-and-risk'],
-    ['Fundamentals', 'fundamentals'], ['Dividends', 'dividends'], ['Peers', 'peers-in-the-same-sector'], ['News', 'news'],
+    ['Fundamentals', 'fundamentals'], ['Dividends', 'dividends'], ['Events', 'upcoming-events'], ['Peers', 'peers-in-the-same-sector'], ['News', 'news'],
     ['Backtest', 'how-have-these-rules-worked-on-this-stock']];
 
   function jumpBar() {
@@ -730,6 +731,7 @@
         section('Patterns', (s.patterns || []).length ? (s.patterns).map((p) => h('div', { title: p.note, style: 'margin-bottom:6px' }, h('span', { class: `tag ${p.bias === 'bearish' ? 'warn' : ''}` }, `${p.name} (${p.bias})`), h('span', { class: 'muted small' }, p.note))) : h('p', { class: 'muted small' }, 'No notable pattern on the latest candles.')),
         wide(section('Fundamentals', fundamentalsBlock(s))),
         wide(section('Dividends', dividendBlock(s))),
+        wide(section('Upcoming events', stockEvents(s))),
         wide(section('Peers in the same sector', peersBlock(s))),
         section('News', newsList(s.news.items)),
         wide(section('How have these rules worked on this stock?', h('div', { class: 'grid' }, backtestBlock(bt.short, 'Short-term rule'), backtestBlock(bt.long, 'Long-term rule')),
@@ -1052,12 +1054,119 @@
       ipoChecker(), h('h3', null, 'My IPO tracker'), h('div', { id: 'ipoTracker' }));
   }
 
-  /* ---------- market tab ---------- */
+  /* ---------- events ---------- */
+  const EVENT_LABELS = { earnings: 'Results', ex_dividend: 'Ex-dividend', dividend_payment: 'Dividend paid', split: 'Split', bonus: 'Bonus', corporate_action: 'Corporate action' };
+  const BASIS_TAGS = { yahoo: 'YAHOO', estimate: 'ESTIMATED', news: 'NEWS' };
+  const EVENT_GROUPS = [['This week', 0, 7], ['Next 30 days', 8, 30], ['Later', 31, 9999]];
+  S.ev = { market: 'ALL', type: 'ALL', mine: false };
+
+  const todayUtc = () => new Date().toISOString().slice(0, 10);
+  const daysUntil = (iso) => Math.round((Date.parse(iso + 'T00:00:00Z') - Date.parse(todayUtc() + 'T00:00:00Z')) / 86400000);
+  const prettyDate = (iso) => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+  const inDays = (n) => (n <= 0 ? 'today' : n === 1 ? 'tomorrow' : `in ${n} days`);
+
+  function eventDetail(e) {
+    const bits = [];
+    if (e.type === 'ex_dividend' && isNum(e.announced_amount)) bits.push(`Announced ${money(e.announced_amount, e.currency)} per share (reported in the news)`);
+    else if (e.type === 'ex_dividend' && isNum(e.amount)) bits.push(`Latest regular payment ${money(e.amount, e.currency)} per share; the announced amount may differ`);
+    if (e.ratio) bits.push(`ratio ${e.ratio}`);
+    return [e.detail, ...bits].filter(Boolean).join('. ');
+  }
+
+  function evidenceLine(e) {
+    const ev = e.evidence;
+    if (!ev || !ev.headline) return null;
+    const link = safeUrl(ev.link);
+    return h('div', { class: 'muted small' }, 'News: ', link ? h('a', { href: link, target: '_blank', rel: 'noopener noreferrer' }, ev.headline) : ev.headline,
+      ` (${[ev.source, isNum(ev.age_min) ? ago(ev.age_min) : null].filter(Boolean).join(', ')})`);
+  }
+
+  function eventRow(e, withStock) {
+    const n = daysUntil(e.date);
+    const open = withStock && S.data.stocks.some((s) => s.symbol === e.symbol);
+    const when = e.until ? `${prettyDate(e.date)} – ${prettyDate(e.until)}` : prettyDate(e.date);
+    return h('li', { class: 'eventrow' },
+      h('div', { class: 'edate' }, h('b', null, when), h('span', { class: 'muted small' }, e.until && n < 0 ? 'this week' : inDays(n))),
+      h('div', { class: 'ebody' },
+        h('div', null, withStock ? [open ? h('button', { type: 'button', class: 'linklike', onclick: (ev) => openDetail(e.symbol, ev.currentTarget) }, e.name) : e.name, ' ', h('span', { class: 'muted small' }, e.symbol), ' '] : null,
+          h('span', { class: 'tag' }, EVENT_LABELS[e.type] || e.type), ' ', (e.bases || []).map((b) => [src(BASIS_TAGS[b] || 'YAHOO'), ' ']), e.agree ? src('AGREED') : null,
+          e.conflict ? h('span', { class: 'tag warn' }, 'differs from another source') : null),
+        h('div', { class: 'muted small' }, eventDetail(e), ' ', h('span', null, `Source: ${e.source}.`)),
+        evidenceLine(e)));
+  }
+
+  function announcementRow(a, withStock) {
+    const bits = [a.title];
+    if (isNum(a.amount)) bits.push(`${money(a.amount, a.currency)} per share`);
+    if (a.ratio) bits.push(`ratio ${a.ratio}`);
+    const open = withStock && S.data.stocks.some((s) => s.symbol === a.symbol);
+    return h('li', { class: 'eventrow' },
+      h('div', { class: 'edate' }, h('b', null, 'Date not stated')),
+      h('div', { class: 'ebody' },
+        h('div', null, withStock ? [open ? h('button', { type: 'button', class: 'linklike', onclick: (ev) => openDetail(a.symbol, ev.currentTarget) }, a.name) : a.name, ' ', h('span', { class: 'muted small' }, a.symbol), ' '] : null,
+          h('span', { class: 'tag' }, EVENT_LABELS[a.type] || a.type), ' ', src('NEWS')),
+        h('div', { class: 'muted small' }, bits.join(' · ')),
+        evidenceLine(a)));
+  }
+
+  function stockEvents(s) {
+    const mine = ((S.data.events || {}).items || []).filter((e) => e.symbol === s.symbol && daysUntil(e.until || e.date) >= 0);
+    const notes = ((S.data.events || {}).announcements || []).filter((a) => a.symbol === s.symbol);
+    const splits = s.splits || [];
+    return [
+      mine.length ? h('ul', { class: 'clean events' }, mine.map((e) => eventRow(e, false))) : h('p', { class: 'muted small' }, 'No upcoming results, dividend or corporate-action dates were found for this stock.'),
+      notes.length ? [h('p', { class: 'small', style: 'margin-bottom:2px' }, h('b', null, 'Announced in the news, date not stated:')), h('ul', { class: 'clean events' }, notes.map((a) => announcementRow(a, false)))] : null,
+      splits.length ? h('p', { class: 'small' }, h('b', null, 'Recent splits: '), splits.map((x) => `${x.ratio} on ${x.date}`).join(', ')) : null,
+      h('p', { class: 'muted small', style: 'margin-bottom:0' }, 'Dates come from Yahoo Finance, from headlines of prominent news outlets, or are estimated from past payments, and can change. The exchanges\' own corporate-action lists cannot be read for free, so check the exchange notice before acting on any date.')];
+  }
+
+  function estimateNote() {
+    const c = (S.data.events || {}).estimate_check;
+    const n = (S.data.events || {}).news_check;
+    if (!c && !n) return null;
+    return h('p', { class: 'muted small' },
+      c ? `How good are the estimates? Where Yahoo has a real ex-dividend date (${c.n} stocks), the same method gave a date within ${c.median_abs_days} day${c.median_abs_days === 1 ? '' : 's'} at the median, and ${c.within_7_days_pct}% were within a week. Some were weeks off, so treat "estimated" as a rough guide. ` : null,
+      n ? `Do Yahoo and the news agree? For ${n.n} stock${n.n === 1 ? '' : 's'} with both, ${n.agree_pct}% gave the same ex-dividend date (or a date range that contains it).` : null);
+  }
+
+  function viewEvents() {
+    const all = ((S.data.events || {}).items || []).filter((e) => daysUntil(e.until || e.date) >= 0);
+    const announcements = (S.data.events || {}).announcements || [];
+    const f = S.ev;
+    const select = (label, value, options, onChange) => h('label', { class: 'field' }, h('span', null, label),
+      h('select', { onchange: (ev) => { onChange(ev.target.value); draw(); } }, options.map(([v, text]) => h('option', { value: v, selected: v === value }, text))));
+    const results = h('div');
+    function draw() {
+      const rows = all.filter((e) => (f.market === 'ALL' || e.market === f.market) && (f.type === 'ALL' || e.type === f.type || (f.type === 'actions' && ['split', 'bonus', 'corporate_action'].includes(e.type))) && (!f.mine || S.watch.has(e.symbol)));
+      const nodes = rows.length ? EVENT_GROUPS.map(([title, from, to]) => {
+        const group = rows.filter((e) => { const n = Math.max(0, daysUntil(e.date)); return n >= from && n <= to; });
+        return group.length ? [h('h3', null, `${title} (${group.length})`), h('ul', { class: 'clean events card' }, group.map((e) => eventRow(e, true)))] : null;
+      }) : [h('div', { class: 'empty' }, f.mine ? 'None of the stocks on your watchlist has an upcoming event in the data. Turn off "My watchlist only" to see all.' : 'No upcoming events match these filters.')];
+      const notes = announcements.filter((a) => (f.market === 'ALL' || a.market === f.market) && (f.type === 'ALL' || a.type === f.type || (f.type === 'actions' && ['split', 'bonus', 'corporate_action'].includes(a.type))) && (!f.mine || S.watch.has(a.symbol)));
+      if (notes.length) nodes.push([h('h3', null, `Announced in the news, date not stated (${notes.length})`), h('ul', { class: 'clean events card' }, notes.map((a) => announcementRow(a, true)))]);
+      results.replaceChildren(...nodes.flat(Infinity).filter(Boolean));
+      decorateHelp(results);
+    }
+    draw();
+    return h('div', null, h('h2', null, 'Upcoming events'),
+      h('div', { class: 'filterbar' }, h('div', { class: 'row' },
+        select('Market', f.market, [['ALL', 'All markets'], ['IN', 'India'], ['US', 'United States']], (v) => { f.market = v; }),
+        select('Type', f.type, [['ALL', 'All events'], ['earnings', 'Results'], ['ex_dividend', 'Ex-dividend'], ['dividend_payment', 'Dividend payment'], ['actions', 'Splits, bonus and other actions']], (v) => { f.type = v; }),
+        h('label', { class: 'field' }, h('span', null, 'My watchlist only'), h('input', { type: 'checkbox', checked: f.mine, onchange: (ev) => { f.mine = ev.target.checked; draw(); } })))),
+      results,
+      estimateNote(),
+      h('p', { class: 'muted small' }, 'Results, ex-dividend and payment dates for the stocks in this app, from Yahoo Finance and from headlines of prominent news outlets (CNBC TV18, Economic Times, Mint and similar), plus dividend dates estimated from each company\'s own payment pattern. Every date shows its sources and whether two agree, and news items show their headline. Dates can change, so check the exchange notice before acting. The NSE and BSE do not allow free scripted access to their own corporate-action lists, so splits and bonus issues appear only when a prominent outlet has reported them.'));
+  }
+
   /* ---------- market tab ---------- */
   const SRC_TEXT = {
     DELAYED: 'Free market data, up to about 15 minutes late.',
     DERIVED: 'Worked out by this app from the stocks in its own list, not from the whole exchange.',
     EXTERNAL: 'Headlines from outside sources. They are not checked or endorsed by this app.',
+    YAHOO: 'A date taken from Yahoo Finance. The company confirms its dates by notice to the exchange, so check the official notice before relying on it.',
+    NEWS: 'Reported in a headline from a prominent news outlet (shown below). Official sources could not be read, so check the exchange notice before relying on it.',
+    AGREED: 'Two independent sources give this date: for example Yahoo and a news headline, or an estimate and a news headline.',
+    ESTIMATED: 'Worked out by this app from how often the company has paid in the past. The company may announce a different date.',
   };
   const src = (kind) => h('span', { class: 'src', title: SRC_TEXT[kind] }, kind);
   const moveClass = (v) => (isNum(v) ? (v >= 0 ? 'up' : 'down') : '');
@@ -1257,7 +1366,7 @@
     }
     const view = $('#view');
     if (!S.data) { view.replaceChildren(h('div', { class: 'empty' }, S.error || 'Loading...')); return; }
-    const builders = { signals: viewSignals, suggest: viewSuggest, ipo: viewIpo, market: viewMarket, track: viewTrack };
+    const builders = { signals: viewSignals, suggest: viewSuggest, ipo: viewIpo, market: viewMarket, events: viewEvents, track: viewTrack };
     view.replaceChildren((builders[S.tab] || viewSignals)());
     decorateHelp(view);
   }
