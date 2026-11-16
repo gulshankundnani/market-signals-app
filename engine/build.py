@@ -268,8 +268,14 @@ def status_block(config, records, errors, carried, overview, conditions, ipos, d
         checks.append({"name": name, "state": state, "detail": detail})
 
     failed = len(errors)
-    add("Stock prices", "warn" if failed else "ok",
-        f"{len(records)} stocks loaded" + (f", {failed} failed to load" if failed else "") + (f", {len(carried)} kept from the previous run" if carried else ""))
+    carried_new = sum(1 for c in carried if c.get("new"))
+    carried_old = len(carried) - carried_new
+    detail = f"{len(records)} stocks loaded" + (f", {failed} failed to load" if failed else "")
+    if carried_old:
+        detail += f", {carried_old} kept from the previous run"
+    if carried_new:
+        detail += f", {carried_new} recent listing{'s' if carried_new != 1 else ''} kept from the previous run (Yahoo often returns too little history for them)"
+    add("Stock prices", "warn" if failed or carried_old else "ok", detail)
     news_down = sum(1 for x in records if (x.get("news") or {}).get("error"))
     add("News", "warn" if records and news_down / len(records) > 0.2 else "ok",
         "Headlines loaded" if not news_down else f"Headlines missing for {news_down} stocks" + (" (the news source is not answering)" if news_down == len(records) else ""))

@@ -29,7 +29,7 @@
     ["IRFC.NS", "Indian Railway Finance Corporation", "IN", "Financials", ["psu"]],
     ["TCS.NS", "Tata Consultancy Services", "IN", "IT", []], ["INFY.NS", "Infosys", "IN", "IT", []],
     ["HCLTECH.NS", "HCL Technologies", "IN", "IT", []], ["WIPRO.NS", "Wipro", "IN", "IT", []],
-    ["TECHM.NS", "Tech Mahindra", "IN", "IT", []], ["LTIM.NS", "LTIMindtree", "IN", "IT", []],
+    ["TECHM.NS", "Tech Mahindra", "IN", "IT", []], ["LTM.NS", "LTM Limited", "IN", "IT", []],
     ["RELIANCE.NS", "Reliance Industries", "IN", "Energy", []], ["ONGC.NS", "Oil and Natural Gas Corporation", "IN", "Energy", ["psu"]],
     ["BPCL.NS", "Bharat Petroleum", "IN", "Energy", ["psu"]], ["IOC.NS", "Indian Oil Corporation", "IN", "Energy", ["psu"]],
     ["GAIL.NS", "GAIL India", "IN", "Energy", ["psu"]], ["HINDPETRO.NS", "Hindustan Petroleum", "IN", "Energy", ["psu"]],

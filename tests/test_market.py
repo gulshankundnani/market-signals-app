@@ -182,6 +182,16 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(out["overall"], "warn")
         self.assertIn("2 waiting", next(c["detail"] for c in out["checks"] if c["name"] == "Track record"))
 
+    def test_recent_listings_kept_from_the_last_run_do_not_raise_a_warning_but_other_stocks_do(self):
+        new_only = self.status(carried=[{"new": True}, {"new": True}])
+        prices = next(c for c in new_only["checks"] if c["name"] == "Stock prices")
+        self.assertEqual(prices["state"], "ok")
+        self.assertIn("2 recent listings kept", prices["detail"])
+        mixed = self.status(carried=[{"new": True}, {"new": False}])
+        prices = next(c for c in mixed["checks"] if c["name"] == "Stock prices")
+        self.assertEqual(prices["state"], "warn")
+        self.assertIn("1 kept from the previous run", prices["detail"])
+
     def test_optional_pieces_are_info_not_warnings(self):
         out = self.status(track_record=None, token=None, chat=None, delivery={})
         states = self.states(out)
