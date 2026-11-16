@@ -1504,9 +1504,9 @@
       h('td', { class: `num ${r.return_pct >= 0 ? 'up' : 'down'}` }, signed(r.return_pct)),
       h('td', { class: 'num' }, `${shortDay(r.date)} to ${shortDay(r.resolved_date)}`)));
     const open = (t.open_calls || []).map((c) => h('tr', null,
-      h('td', { class: 'name' }, h('b', null, c.name || c.symbol), h('span', null, `${c.symbol}, ${c.horizon === 'short' ? 'weeks view' : 'months-to-years view'}, ${SIDE_TEXT[c.side] || c.side}`)),
+      h('td', { class: 'name' }, h('b', null, c.name || c.symbol), h('span', null, `${c.symbol}, ${c.horizon === 'short' ? 'weeks view' : 'months-to-years view'}, ${SIDE_TEXT[c.side] || c.side}, since ${shortDay(c.date)}`)),
       h('td', { class: 'num' }, money(c.price, c.currency)), h('td', { class: 'num' }, money(c.target, c.currency)),
-      h('td', { class: 'num' }, money(c.stop, c.currency)), h('td', { class: 'num' }, shortDay(c.date))));
+      h('td', { class: 'num' }, money(c.stop, c.currency))));
     const table = (heads, rows) => h('div', { class: 'card', style: 'padding:0;overflow-x:auto' }, h('table', null,
       h('thead', null, h('tr', null, heads.map((x, i) => h('th', { class: i ? 'num' : null }, x)))), h('tbody', null, rows)));
     const detail = [statTable('By indicator alignment', t.by_score_band, min), statTable('By market', t.by_market, min),
@@ -1521,7 +1521,7 @@
       groupCards(t),
       recent.length ? [h('h3', null, 'Latest results'), table(['Reading', 'Result', 'Move', 'Dates'], recent)] : null,
       open.length ? h('details', { class: 'card opencalls', open: !o.n }, h('summary', null, `Open readings (${t.open}${t.open > open.length ? `, latest ${open.length} listed` : ''})`),
-        h('div', { style: 'overflow-x:auto' }, h('table', null, h('thead', null, h('tr', null, ['Reading', 'Price', 'Reference level', 'Risk level', 'Since'].map((x, i) => h('th', { class: i ? 'num' : null }, x)))), h('tbody', null, open)))) : null,
+        h('div', { style: 'overflow-x:auto' }, h('table', null, h('thead', null, h('tr', null, ['Reading', 'Price', 'Reference level', 'Risk level'].map((x, i) => h('th', { class: i ? 'num' : null }, x)))), h('tbody', null, open)))) : null,
       h('details', { class: 'card moredetail' }, h('summary', null, 'More detail'), detail),
       t.data_url ? h('p', { class: 'muted small' }, 'Every reading and outcome is stored as plain files for anyone to check: ', h('a', { href: t.data_url, target: '_blank', rel: 'noopener' }, 'the data branch on GitHub'), '.') : null);
   }
