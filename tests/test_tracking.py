@@ -58,8 +58,8 @@ class ReplyTests(unittest.TestCase):
         self.assertEqual(ids, [self.hit["id"]])
         self.assertEqual(left, [])
         self.assertEqual(sent[0][1], 11)
-        self.assertTrue(sent[0][0].startswith("✅ Reference level reached: Aaa Ltd (AAA)"))
-        self.assertIn("• Open analysis: https://x/#stock=AAA", sent[0][0])
+        self.assertTrue(sent[0][0].startswith("<b>✅ Reference level reached: Aaa Ltd (AAA)</b>"))
+        self.assertIn(alerts.anchor("https://x/#stock=AAA", "Open analysis"), sent[0][0])
         self.assertNotIn("https", texts[0])
 
     def test_a_failed_send_is_retried_and_a_sent_one_is_not_repeated(self):
@@ -85,7 +85,7 @@ class ReplyTests(unittest.TestCase):
                               "exit_price": 104.0, "return_pct": -4.0, "days_held": 2})
         sent = []
         tracking.send_replies([plain["id"]], self.led, [], lambda t, r: sent.append((t, r)) or True)
-        self.assertTrue(sent[0][0].startswith("⚠️ Volatility risk level reached"))
+        self.assertTrue(sent[0][0].startswith("<b>⚠️ Volatility risk level reached"))
         self.assertIsNone(sent[0][1])
 
     def test_a_burst_is_capped_and_the_rest_waits(self):
@@ -129,6 +129,41 @@ class PostTelegramTests(unittest.TestCase):
             self.assertEqual(alerts.post_telegram("T", "C", "hi"), (True, None))
 
 
+class SendFormattedTests(unittest.TestCase):
+    def test_html_is_tried_first_and_plain_text_is_the_fallback(self):
+        calls = []
+
+        def post(token, chat, text, reply_to=None, markup=False):
+            calls.append((text, markup))
+            return (False, None) if markup else (True, 7)
+
+        with mock.patch.object(alerts, "post_telegram", post):
+            ok, message_id = build.send_formatted("T", "C", 'hi <a href="https://x/?a=1&amp;b=2">Open</a>', 5)
+        self.assertEqual((ok, message_id), (True, 7))
+        self.assertEqual([m for _, m in calls], [True, False])
+        self.assertEqual(calls[1][0], "hi Open: https://x/?a=1&b=2")
+
+    def test_a_working_html_send_is_not_repeated(self):
+        with mock.patch.object(alerts, "post_telegram", return_value=(True, 3)) as sent:
+            self.assertEqual(build.send_formatted("T", "C", "<b>x</b>"), (True, 3))
+        self.assertEqual(sent.call_count, 1)
+
+    def test_the_payload_asks_for_html_only_when_told_and_never_cuts_a_tag_in_half(self):
+        response = mock.MagicMock()
+        response.status = 200
+        response.read.return_value = b'{"result":{"message_id":1}}'
+        response.__enter__.return_value = response
+        with mock.patch("urllib.request.urlopen", return_value=response) as opened:
+            alerts.post_telegram("T", "C", "<b>" + "x" * 5000 + "</b>", markup=True)
+            alerts.post_telegram("T", "C", "y" * 5000)
+        html_payload = json.loads(opened.call_args_list[0][0][0].data)
+        plain_payload = json.loads(opened.call_args_list[1][0][0].data)
+        self.assertEqual(html_payload["parse_mode"], "HTML")
+        self.assertTrue(html_payload["text"].endswith("</b>"))
+        self.assertNotIn("parse_mode", plain_payload)
+        self.assertEqual(len(plain_payload["text"]), alerts.TELEGRAM_MAX_CHARS)
+
+
 class TrackStepTests(unittest.TestCase):
     """build.track with a local ledger folder: the whole cycle, apart from Telegram's network."""
 
@@ -156,7 +191,7 @@ class TrackStepTests(unittest.TestCase):
         replies = []
         summary, pending, queue, notified, lines = self.run_track(
             {"notified_outcomes": notified}, [], {"AAA": make_bars([(100, 109, 99, 108)])},
-            post=lambda t, c_, text, reply_to=None: (replies.append((text, reply_to)), (True, 1))[1])
+            post=lambda t, c_, text, reply_to=None, **kw: (replies.append((text, reply_to)), (True, 1))[1])
         self.assertEqual(len(replies), 1)
         self.assertEqual(replies[0][1], 11)
         self.assertEqual(lines[0][0], "AAA")
@@ -165,7 +200,7 @@ class TrackStepTests(unittest.TestCase):
 
         again = []
         self.run_track({"notified_outcomes": notified}, [], {"AAA": make_bars([(100, 109, 99, 108)])},
-                       post=lambda t, c_, text, reply_to=None: again.append(1) or (True, 1))
+                       post=lambda t, c_, text, reply_to=None, **kw: again.append(1) or (True, 1))
         self.assertEqual(again, [], "an outcome already announced is never announced twice")
 
     def test_without_telegram_the_ledger_still_works_and_no_replies_are_queued(self):

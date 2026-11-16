@@ -51,7 +51,7 @@ def send_replies(queue, led, notified, send, link_for=None, limit=REPLY_LIMIT):
         if len(sent) >= limit:
             remaining.append(oid)
             continue
-        text = alerts.format_outcome(call, outcome, link_for(call) if link_for else None)
+        text = alerts.format_outcome(call, outcome, link_for(call) if link_for else None, markup=True)
         if send(text, call.get("telegram_message_id")):
             sent.append(oid)
             texts.append(alerts.format_outcome(call, outcome))

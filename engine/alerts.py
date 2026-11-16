@@ -5,6 +5,7 @@ indicator readings behind it, and links to the stock's full analysis on the site
 and, if Telegram is set up, sent there too.
 """
 import hashlib
+import html
 import json
 import re
 import urllib.error
@@ -238,13 +239,39 @@ def build_messages(previous, current, watch, seen, first_run, news_on=True, side
 ADVISORY = "Educational information only, not investment advice. We are not a SEBI-registered adviser or research analyst."
 
 
-def post_telegram(token, chat_id, text, reply_to=None):
+def anchor(url, label):
+    """A Telegram HTML link: a short clickable label instead of a long address."""
+    return f'<a href="{html.escape(url, quote=True)}">{html.escape(label)}</a>'
+
+
+_ANCHOR = re.compile(r'<a href="([^"]*)">(.*?)</a>', re.S)
+_TAG = re.compile(r"<[^>]+>")
+
+
+def to_plain(text):
+    """A Telegram HTML message as plain text: links become "label: address" and the tags are removed."""
+    text = re.sub(r"</?b>", "", text)
+    text = _ANCHOR.sub(lambda m: f"{html.unescape(m.group(2))}: {html.unescape(m.group(1))}", text)
+    return html.unescape(text)
+
+
+def visible_length(text):
+    """How long a Telegram HTML message looks once the tags and hidden addresses are gone. Telegram's limit counts this."""
+    return len(html.unescape(_TAG.sub("", text)))
+
+
+def post_telegram(token, chat_id, text, reply_to=None, markup=False):
     """Send a message. Returns (ok, message_id). message_id is None if Telegram did not report one.
+
+    markup=True sends it as Telegram HTML (the caller has escaped everything). reply_to threads the message under an
+    earlier one.
 
     reply_to threads the message under an earlier one. If that message no longer exists the new one is still sent.
     Never prints the token or the request URL.
     """
-    payload = {"chat_id": chat_id, "text": text[:TELEGRAM_MAX_CHARS], "disable_web_page_preview": True}
+    payload = {"chat_id": chat_id, "text": text if markup else text[:TELEGRAM_MAX_CHARS], "disable_web_page_preview": True}
+    if markup:
+        payload["parse_mode"] = "HTML"
     if reply_to:
         payload.update({"reply_to_message_id": reply_to, "allow_sending_without_reply": True})
     request = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=json.dumps(payload).encode(),
@@ -267,8 +294,10 @@ def send_telegram(token, chat_id, text):
     return post_telegram(token, chat_id, text)[0]
 
 
-def format_outcome(call, outcome, link=None):
-    """The reply sent when a reading's price reaches its reference level or its volatility risk level."""
+def format_outcome(call, outcome, link=None, markup=False):
+    """The reply sent when a reading's price reaches its reference level or its volatility risk level.
+
+    markup=True gives Telegram HTML with the link as a short label. The default is plain text."""
     name = call.get("name") or call["symbol"]
     hit_target = outcome["outcome"] == "target"
     currency = call.get("currency") or ""
@@ -277,15 +306,16 @@ def format_outcome(call, outcome, link=None):
     verb = "rose" if exit_price >= price else "fell"
     side_word = SIDE_TEXT.get(call["side"], call["side"])
     days = outcome["days_held"]
-    head = "\u2705 Reference level reached" if hit_target else "\u26a0\ufe0f Volatility risk level reached"
-    lines = [f"{head}: {name} ({call['symbol']})",
-             f"\u2022 {HORIZON_TEXT[call['horizon']]} \u00b7 {side_word.capitalize()} reading \u00b7 alerted at {money_text(price, currency)}",
-             f"\u2022 Price {verb} to {money_text(exit_price, currency)} ({move:+.1f}%) on {outcome['resolved_date']}, "
+    esc = html.escape if markup else str
+    head = f"{'✅ Reference level reached' if hit_target else '⚠️ Volatility risk level reached'}: {esc(name)} ({esc(call['symbol'])})"
+    lines = [f"<b>{head}</b>" if markup else head,
+             f"• {HORIZON_TEXT[call['horizon']]} · {side_word.capitalize()} reading · alerted at {esc(money_text(price, currency))}",
+             f"• Price {verb} to {esc(money_text(exit_price, currency))} ({move:+.1f}%) on {esc(outcome['resolved_date'])}, "
              f"{days} trading day{'s' if days != 1 else ''} after the alert"]
     if link:
-        lines.append(f"\u2022 Open analysis: {link}")
-    lines.append("\u2139\ufe0f " + ADVISORY)
-    return "\n".join(lines)
+        lines.append("• " + (anchor(link, "Open analysis") if markup else f"Open analysis: {link}"))
+    lines.append("ℹ️ " + esc(ADVISORY))
+    return chr(10).join(lines)
 
 
 _NEWS_LINE = re.compile(r"^((?:Positive |Negative )?)[Nn]ews, .*? \(([^()]+)\): (.*) \((.*), [^,()]*\)$", re.S)

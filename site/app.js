@@ -152,7 +152,7 @@
     const label = $('#updated');
     const minutes = S.data ? Math.max(0, Math.round((Date.now() - Date.parse(S.data.generated_at)) / 60000)) : null;
     const late = minutes !== null && minutes > STALE_MINUTES && marketsOpenNow();
-    const message = S.error || (late ? `The latest data is from ${ago(minutes)} and the markets are open. It should refresh about every 15 minutes, but GitHub sometimes delays scheduled runs, so prices and signals may be out of date.` : '');
+    const message = S.error || (late ? `The latest data is from ${ago(minutes)} and the markets are open. It should refresh about every 10 minutes, but GitHub sometimes delays runs, so prices and signals may be out of date.` : '');
     banner.hidden = !message;
     banner.textContent = message;
     if (!S.data) { label.textContent = 'No data'; return; }
@@ -160,7 +160,7 @@
   }
 
   /* India opens at 03:45 UTC and the US closes at 21:00 UTC, Monday to Friday. */
-  const STALE_MINUTES = 60;
+  const STALE_MINUTES = 45;
   function marketsOpenNow(now = new Date()) {
     const day = now.getUTCDay();
     const minute = now.getUTCHours() * 60 + now.getUTCMinutes();

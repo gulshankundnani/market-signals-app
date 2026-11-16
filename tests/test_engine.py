@@ -697,6 +697,18 @@ class NewsTests(unittest.TestCase):
         self.assertFalse(rel("Amazon vs. Target: Which Stock Is the Better Portfolio Addition?", "Amazon", "AMZN"))
         self.assertFalse(rel("IBM Nov 2026 207.500 put (IBM261120P00207500) stock price, news, quote and history", "IBM", "IBM"))
 
+    def test_a_company_that_is_only_the_customer_is_not_the_subject(self):
+        rel = news.is_relevant
+        self.assertFalse(rel("Eco Wave Power Gets BPCL Order for Mumbai Study", "Bharat Petroleum", "BPCL"))
+        self.assertFalse(rel("Tata Steel wins order from Coal India for rakes", "Coal India", "COALINDIA"))
+        self.assertTrue(rel("BPCL wins order for new terminal", "Bharat Petroleum", "BPCL"))
+        self.assertTrue(rel("Bharat Electronics bags new defence orders worth Rs 619 crore", "Bharat Electronics", "BEL"))
+
+    def test_filing_listings_are_not_news(self):
+        rel = news.is_relevant
+        self.assertFalse(rel("Form 4 Apple Inc For: 15 November By Investing.com", "Apple", "AAPL"))
+        self.assertFalse(rel("Form 144 Meta Platforms For: 15 November By Investing.com", "Meta Platforms", "META"))
+
     def test_clear_company_headlines_still_count_under_the_subject_rule(self):
         rel = news.is_relevant
         self.assertTrue(rel("Citi maintains Buy rating on Eicher Motors with Rs 9,500 target price", "Eicher Motors", "EICHERMOT"))

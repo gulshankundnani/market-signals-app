@@ -53,7 +53,7 @@ SAME_MARKET = {"", "nyse", "nasdaq", "nasdaqgs", "nasdaqgm", "nasdaqcm", "nysear
 _BRACKET_TICKER = re.compile(r"\((?:([A-Za-z]+):)?\s*([A-Z][A-Z0-9.\-]{0,9})\)")
 _ROUNDUP_PHRASES = ("stocks to watch", "stocks to buy", "stocks in focus", "stocks to sell", "top gainers", "top losers",
                     "market wrap", "market live", "stock market today", "buzzing stocks", "record date next week",
-                    "stocks that", "shares to buy", "stocks under", " vs ", " vs. ", " versus ", "stock picks", "stock price, news",
+                    "stocks that", "shares to buy", "stocks under", " vs ", " vs. ", " versus ", "stock picks", "stock price, news", "form 4 ", "form 144 ", "sec filing",
                     "share price today", "stock price live", "quote and history", "options flow", "dark pools")
 _NOT_TICKERS = {"IPO", "GMP", "NSE", "BSE", "USA", "CEO", "CFO", "GDP", "RBI", "SEBI", "ETF", "EPS", "IMF", "OPEC", "FII",
                 "DII", "NSDL", "AGM", "SIP", "FDA", "SEC", "FED", "NYSE", "NASDAQ", "AI", "US", "UK", "EU", "IT", "PE"}
@@ -153,6 +153,8 @@ def _has_context(words):
 
 
 MAX_POSITION = 8     # the company must be named within the first few words of a headline
+# "<Other> gets <Company> order": a company named after one of these verbs is the customer or counterparty, not the subject.
+SUBJECT_VERBS = {"gets", "wins", "secures", "receives", "bags", "lands", "awards", "awarded", "picks", "selects", "hires"}
 
 
 def _find(words, target):
@@ -203,7 +205,7 @@ def is_relevant(title, name, ticker_base=None, source=None, mention_only=False):
     strong += [words.index(w) for w in name_words
                if len(w) >= DISTINCTIVE_MIN_LEN and w not in GENERIC_WORDS and w not in COMMON_WORDS and w in words]
     if strong:
-        return min(strong) < MAX_POSITION
+        return min(strong) < MAX_POSITION and not SUBJECT_VERBS.intersection(words[:min(strong)])
     weak = []
     if len(name_words) == 1 and full is not None:
         weak.append(full)
@@ -211,7 +213,8 @@ def is_relevant(title, name, ticker_base=None, source=None, mention_only=False):
         weak.append(words.index(ticker))
     if len(name_words) >= 2:
         weak += [words.index(w) for w in name_words if len(w) >= DISTINCTIVE_MIN_LEN and w not in GENERIC_WORDS and w in words]
-    return bool(weak) and min(weak) < MAX_POSITION and _has_context(words)
+    return (bool(weak) and min(weak) < MAX_POSITION and _has_context(words)
+            and not SUBJECT_VERBS.intersection(words[:min(weak)]))
 
 
 def mark_relevance(items, name, ticker_base=None):

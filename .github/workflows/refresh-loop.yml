@@ -1,0 +1,49 @@
+name: Refresh loop
+
+# GitHub's own cron is best-effort and has not started any run for this repository. This workflow keeps a fixed beat
+# instead: it starts "Update signals" every 10 minutes while the markets are open (weekdays 03:00-20:59 UTC) and every
+# hour otherwise, and starts a fresh copy of itself shortly before GitHub's 6-hour job limit, so the beat carries on.
+#
+# Start it once with Actions > Refresh loop > Run workflow (pushing this file also starts it). To stop it, set the
+# repository variable REFRESH_LOOP to "off" (Settings > Secrets and variables > Actions > Variables) and cancel the
+# running loop. The cron line below only restarts the loop if it has stopped; extra copies wait their turn.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/refresh-loop.yml"
+  schedule:
+    - cron: "41 */5 * * *"
+
+permissions:
+  actions: write     # lets the loop start "Update signals" and its own next copy
+  contents: read
+
+concurrency:
+  group: refresh-loop
+  cancel-in-progress: false
+
+jobs:
+  loop:
+    if: ${{ vars.REFRESH_LOOP != 'off' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - name: Start a refresh on a fixed beat, then renew
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          started=$(date +%s)
+          while true; do
+            hour=$((10#$(date -u +%H)))
+            weekday=$(date -u +%u)
+            if [ "$weekday" -le 5 ] && [ "$hour" -ge 3 ] && [ "$hour" -lt 21 ]; then every=600; else every=3600; fi
+            gh workflow run update.yml --repo "$GITHUB_REPOSITORY" --ref main || echo "Could not start a refresh this time"
+            elapsed=$(( $(date +%s) - started ))
+            if [ $(( elapsed + every )) -ge 20400 ]; then
+              gh workflow run refresh-loop.yml --repo "$GITHUB_REPOSITORY" --ref main || echo "Could not start the next loop"
+              exit 0
+            fi
+            sleep "$every"
+          done

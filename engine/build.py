@@ -252,6 +252,14 @@ def market_overview(config, now, raw=None):
     return {"watch": watch, "news": ordered}
 
 
+def send_formatted(token, chat, text, reply_to=None):
+    """Send a Telegram HTML message. If Telegram refuses the formatting, send the same message as plain text."""
+    ok, message_id = alerts.post_telegram(token, chat, text, reply_to, markup=True)
+    if not ok:
+        ok, message_id = alerts.post_telegram(token, chat, alerts.to_plain(text)[: alerts.TELEGRAM_MAX_CHARS], reply_to)
+    return ok, message_id
+
+
 def status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat):
     """Plain checks of how healthy this run was, for the status panel: [{"name", "state": ok|warn|info, "detail"}]."""
     checks = []
@@ -401,7 +409,7 @@ def track(args, state, prev_data, calls, ctx, now_ts, token, chat, link_for_symb
     sent_lines = []
     if token and chat:
         def send(text, reply_to):
-            return alerts.post_telegram(token, chat, text, reply_to)[0]
+            return send_formatted(token, chat, text, reply_to)[0]
         sent, queue, texts = tracking.send_replies(
             queue, led, notified, send, lambda c: link_for_symbol(c["symbol"]))
         notified = (notified + sent)[-tracking.NOTIFIED_LIMIT:]
@@ -501,7 +509,7 @@ def run(args):
     if lines and token and chat:
         links = [link_for_symbol(i["symbol"], "news" if i["kind"] == "news" else "signals") for i in items]
         for message, start, end in digest.render(items, links, now_ts):
-            ok, message_id = alerts.post_telegram(token, chat, message)
+            ok, message_id = send_formatted(token, chat, message)
             print(f"Telegram alert {'sent' if ok else 'failed'} ({end - start} alerts)")
             if ok:
                 tracking.attach_message(calls, end, message_id, start)

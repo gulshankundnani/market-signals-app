@@ -46,10 +46,15 @@ It is not investment advice. Signals come from fixed rules on free, delayed data
    `https://marketsignals-app.github.io/market-signals-app/`.
    On your phone open it in Chrome or Safari and choose **Add to Home screen** to install it like an app.
 
-The workflow then runs by itself every 15 minutes on weekdays (at 7, 22, 37 and 52 minutes past the hour, which GitHub's scheduler handles more reliably than the round times). GitHub can still delay or skip scheduled runs, especially on a quiet repository. When the data is more than an hour old while the markets are open, the site shows a banner saying so. To refresh at once: **Actions > Update signals > Run workflow**. If a test fails or too many data
-sources fail, the site is not replaced and the previous version stays online. If a single stock fails to load (Yahoo sometimes returns a truncated history for brand-new
-listings), a short retry is made, and if that also fails its previous record is kept for up to 4 days, so it does
-not vanish from the page.
+The data is refreshed on a fixed beat by the **Refresh loop** workflow: every 10 minutes while the markets are open
+(weekdays 03:00-20:59 UTC) and every hour otherwise. GitHub's own cron is best-effort and may never start a run, so the
+loop starts "Update signals" itself and starts a fresh copy of itself before GitHub's 6-hour job limit. Start it once
+with **Actions > Refresh loop > Run workflow** (pushing the file also starts it). To stop it, set the repository variable
+`REFRESH_LOOP` to `off` (Settings > Secrets and variables > Actions > Variables) and cancel the running loop. A cron
+line in each workflow is a backup that restarts the loop or asks for a refresh once an hour. The loop keeps one runner busy
+most of the time, which public repositories get free; if you would rather not use it, set `REFRESH_LOOP` to `off` and
+refresh by hand with **Actions > Update signals > Run workflow**. When the data is more than 45 minutes old on a market
+day, the site shows a banner saying so.
 
 ## Alerts
 

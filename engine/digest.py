@@ -2,7 +2,12 @@
 
 Readings come first, news second. A card says what happened and gives the figures and the links. News cards carry the
 headline, its source and a link to the article exactly as published: nothing is judged from the words.
+
+Messages use Telegram's HTML formatting, so a long address shows as a short clickable label ("Read article",
+"Open analysis"). Everything that comes from outside is escaped. to_plain() turns a message back into plain text for
+the rare case Telegram refuses the formatting.
 """
+import html
 from datetime import datetime, timedelta, timezone
 
 from . import alerts
@@ -15,8 +20,9 @@ BULLET = "•"
 DASH = "–"
 READINGS_TITLE = "━━ READINGS ━━"
 NEWS_TITLE = "━━ NEWS ━━"
-FOOTER = "ℹ️ " + alerts.NOTE + "\n" + alerts.ADVISORY
+FOOTER = "ℹ️ " + html.escape(alerts.NOTE) + "\n" + html.escape(alerts.ADVISORY)
 MAX_TITLE = 280
+esc = html.escape
 
 
 def _clip(text, limit):
@@ -30,35 +36,37 @@ def reading_card(item, link):
     horizon = alerts.HORIZON_TEXT[item["horizon"]]
     score = item.get("score")
     shown = f" (alignment {score:+d})" if isinstance(score, int) else ""
-    lines = [f"{DOT[item['side']]} {item['name']} ({item['symbol']})",
-             f"{alerts.label_text(item['label'])} · {horizon}",
-             f"{BULLET} Change: {alerts.SIDE_TEXT[item['announced']].capitalize()} → {alerts.label_text(item['label'])}{shown}"]
+    lines = [f"{DOT[item['side']]} <b>{esc(item['name'])} ({esc(item['symbol'])})</b>",
+             f"{esc(alerts.label_text(item['label']))} · {horizon}",
+             f"{BULLET} Change: {alerts.SIDE_TEXT[item['announced']].capitalize()} → {esc(alerts.label_text(item['label']))}{shown}"]
     if isinstance(item.get("price"), (int, float)):
-        lines.append(f"{BULLET} Price: {alerts.money_text(item['price'], currency)}")
+        lines.append(f"{BULLET} Price: {esc(alerts.money_text(item['price'], currency))}")
     levels = item.get("levels")
     if levels:
-        lines.append(f"{BULLET} {levels['kind']}: {alerts.money_text(levels['price'], currency)} ({levels['pct']:+.1f}%, {levels['basis']})")
-        lines.append(f"{BULLET} Volatility risk level: {alerts.money_text(levels['risk_price'], currency)} ({levels['risk_pct']:+.1f}%)")
+        lines.append(f"{BULLET} {levels['kind']}: {esc(alerts.money_text(levels['price'], currency))} ({levels['pct']:+.1f}%, {esc(levels['basis'])})")
+        lines.append(f"{BULLET} Volatility risk level: {esc(alerts.money_text(levels['risk_price'], currency))} ({levels['risk_pct']:+.1f}%)")
     elif item["side"] == "hold":
         lines.append(f"{BULLET} No reference level: the reading has faded to mixed")
     reasons = item.get("reasons") or []
     if reasons:
         lines.append(f"{BULLET} Indicator readings:")
-        lines.extend(f"   {DASH} {_clip(r, 140)}" for r in reasons)
+        lines.extend(f"   {DASH} {esc(_clip(r, 140))}" for r in reasons)
     if link:
-        lines.append(f"{BULLET} Open analysis: {link}")
+        lines.append(f"{BULLET} {alerts.anchor(link, 'Open analysis')}")
     return "\n".join(lines)
 
 
 def news_card(item, link):
     """The card for a headline: as published, with its source and a link to the article."""
-    lines = [f"\U0001F4F0 {item['name']} ({item['symbol']})",
-             f"{BULLET} Headline: {_clip(item['title'], MAX_TITLE)}",
-             f"{BULLET} Source: {item['source'] or 'unknown'} · {alerts.news.age_text(item.get('age_min')) or 'time unknown'}"]
-    if item.get("link"):
-        lines.append(f"{BULLET} Read article: {item['link']}")
+    source = esc(item["source"] or "unknown")
+    age = esc(alerts.news.age_text(item.get("age_min")) or "time unknown")
+    lines = [f"\U0001F4F0 <b>{esc(item['name'])} ({esc(item['symbol'])})</b>",
+             f"{BULLET} Headline: {esc(_clip(item['title'], MAX_TITLE))}",
+             f"{BULLET} Source: {source} · {age}"]
+    if str(item.get("link") or "").startswith("https://"):
+        lines.append(f"{BULLET} {alerts.anchor(item['link'], 'Read article')}")
     if link:
-        lines.append(f"{BULLET} Open analysis: {link}")
+        lines.append(f"{BULLET} {alerts.anchor(link, 'Open analysis')}")
     return "\n".join(lines)
 
 
@@ -70,13 +78,13 @@ def _header(now_ts, readings, headlines, part, parts):
     if headlines:
         counts.append(f"{headlines} headline{'s' if headlines != 1 else ''}")
     suffix = f" ({part}/{parts})" if parts > 1 else ""
-    return f"\U0001F4CA Market Signals · {when}{suffix}\n" + " · ".join(counts)
+    return f"\U0001F4CA <b>Market Signals</b> · {when}{suffix}\n" + " · ".join(counts)
 
 
 def render(items, links, now_ts, max_chars=None, max_messages=MAX_MESSAGES):
-    """[(text, start, end)]: the messages to send. start and end are positions in items (end exclusive), so each
-    alert can be matched to the message that carried it. Alerts beyond the last message are counted, not dropped:
-    all of them stay on the site."""
+    """[(text, start, end)]: the messages to send, in Telegram HTML. start and end are positions in items (end
+    exclusive), so each alert can be matched to the message that carried it. Alerts beyond the last message are
+    counted, not dropped: all of them stay on the site. Sizes count the text people see, not the hidden addresses."""
     max_chars = max_chars or alerts.TELEGRAM_MAX_CHARS
     if not items:
         return []
@@ -84,10 +92,10 @@ def render(items, links, now_ts, max_chars=None, max_messages=MAX_MESSAGES):
     for index, item in enumerate(items):
         link = links[index] if links and index < len(links) else None
         cards.append((item["kind"], reading_card(item, link) if item["kind"] == "signal" else news_card(item, link)))
-    room = max_chars - len(FOOTER) - RESERVE - 60
+    room = max_chars - alerts.visible_length(FOOTER) - RESERVE - 60
     chunks, current, used = [], [], 0
     for index, (kind, card) in enumerate(cards):
-        cost = len(card) + 2
+        cost = alerts.visible_length(card) + 2
         if current and used + cost > room:
             chunks.append(current)
             current, used = [], 0

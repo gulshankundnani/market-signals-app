@@ -298,10 +298,10 @@ class LinkAndDigestTests(unittest.TestCase):
 
     def test_a_reading_card_is_a_bulleted_list_with_its_figures_and_link(self):
         card = digest.reading_card(self.reading(), self.SITE + "#stock=S1.NS")
-        for expected in ("Stock 1 (S1.NS)", "Aligned bearish \u00b7 Weeks view", "\u2022 Change: Mixed \u2192 Aligned bearish (alignment -27)",
+        for expected in ("<b>Stock 1 (S1.NS)</b>", "Aligned bearish \u00b7 Weeks view", "\u2022 Change: Mixed \u2192 Aligned bearish (alignment -27)",
                          "\u2022 Price: \u20b9398.80", "\u2022 Support reference: \u20b9364.95 (-8.5%, nearest support)",
                          "\u2022 Volatility risk level: \u20b9415.73 (+4.2%)", "\u2022 Indicator readings:",
-                         "   \u2013 Trend: price below 20-day average", "\u2022 Open analysis: " + self.SITE + "#stock=S1.NS"):
+                         "   \u2013 Trend: price below 20-day average", "\u2022 " + alerts.anchor(self.SITE + "#stock=S1.NS", "Open analysis")):
             self.assertIn(expected, card)
 
     def test_a_reading_that_faded_says_there_is_no_reference_level(self):
@@ -312,8 +312,9 @@ class LinkAndDigestTests(unittest.TestCase):
 
     def test_a_news_card_has_the_headline_source_age_and_both_links_and_no_tone(self):
         card = digest.news_card(self.story(), self.SITE + "#stock=N1&section=news")
-        for expected in ("Name 1 (N1)", "\u2022 Headline: Headline number 1", "\u2022 Source: Livemint \u00b7 75 min ago",
-                         "\u2022 Read article: https://news.google.com/a", "\u2022 Open analysis: " + self.SITE):
+        for expected in ("<b>Name 1 (N1)</b>", "\u2022 Headline: Headline number 1", "\u2022 Source: Livemint \u00b7 75 min ago",
+                         "\u2022 " + alerts.anchor("https://news.google.com/a", "Read article"),
+                         "\u2022 " + alerts.anchor(self.SITE + "#stock=N1&section=news", "Open analysis")):
             self.assertIn(expected, card)
         self.assertNotRegex(card, "(?i)positive|negative|bullish|bearish")
 
@@ -327,7 +328,7 @@ class LinkAndDigestTests(unittest.TestCase):
         links = [self.SITE + f"#{n}" for n in range(3)]
         [(text, start, end)] = digest.render(items, links, 1_794_700_000)
         self.assertEqual((start, end), (0, 3))
-        self.assertTrue(text.startswith("\U0001F4CA Market Signals \u00b7 Sun 15 Nov, 05:16 IST\n2 reading changes \u00b7 1 headline"))
+        self.assertTrue(text.startswith("\U0001F4CA <b>Market Signals</b> \u00b7 Sun 15 Nov, 05:16 IST\n2 reading changes \u00b7 1 headline"))
         self.assertLess(text.index("READINGS"), text.index("NEWS"))
         self.assertEqual(text.count("READINGS"), 1)
         self.assertEqual(text.count("\U0001F534"), 1)
@@ -345,7 +346,7 @@ class LinkAndDigestTests(unittest.TestCase):
         self.assertGreater(len(messages), 1)
         self.assertLessEqual(len(messages), digest.MAX_MESSAGES)
         for text, start, end in messages:
-            self.assertLessEqual(len(text), alerts.TELEGRAM_MAX_CHARS)
+            self.assertLessEqual(alerts.visible_length(text), alerts.TELEGRAM_MAX_CHARS)
             self.assertTrue(text.endswith(alerts.ADVISORY))
         self.assertEqual(messages[0][1], 0)
         for (_, _, end), (_, start, _) in zip(messages, messages[1:]):
@@ -369,6 +370,37 @@ class LinkAndDigestTests(unittest.TestCase):
         card = digest.news_card({**self.story(), "title": "word " * 200}, None)
         self.assertLessEqual(len(card.split("\n")[1]), digest.MAX_TITLE + 30)
         self.assertIn("\u2026", card)
+
+
+    def test_a_long_article_address_is_hidden_behind_a_short_label(self):
+        long_link = "https://news.google.com/rss/articles/" + "A" * 220 + "?oc=5"
+        card = digest.news_card({**self.story(), "link": long_link}, None)
+        self.assertIn(">Read article</a>", card)
+        self.assertLess(alerts.visible_length(card), 140)
+        self.assertGreater(len(card), 260)
+        [(text, _, _)] = digest.render([{**self.story(), "link": long_link}], [None], 1_794_700_000)
+        self.assertLess(alerts.visible_length(text), len(text) - 200)
+
+    def test_text_from_outside_is_escaped_so_it_cannot_break_or_inject_formatting(self):
+        item = {**self.story(), "title": "<b>Profit</b> up & <script>x</script>", "source": "A&B <News>", "name": "Tom & <Jerry>"}
+        card = digest.news_card(item, None)
+        self.assertNotIn("<script>", card)
+        self.assertIn("&lt;script&gt;", card)
+        self.assertIn("Tom &amp; &lt;Jerry&gt;", card)
+        self.assertIn("A&amp;B &lt;News&gt;", card)
+        self.assertEqual(card.count("<b>"), 1, "only the stock name is bold")
+
+    def test_a_link_with_quotes_or_ampersands_stays_inside_its_attribute(self):
+        self.assertEqual(alerts.anchor('https://x/?a=1&b="2"', "Open"), '<a href="https://x/?a=1&amp;b=&quot;2&quot;">Open</a>')
+
+    def test_plain_text_keeps_the_addresses_for_the_fallback(self):
+        [(text, _, _)] = digest.render([self.reading(), self.story()], [self.SITE + "#a", self.SITE + "#b&c=1"], 1_794_700_000)
+        plain = alerts.to_plain(text)
+        self.assertNotRegex(plain, "<[a-z/]")
+        self.assertIn("Open analysis: " + self.SITE + "#a", plain)
+        self.assertIn("Read article: https://news.google.com/a", plain)
+        self.assertIn("Open analysis: " + self.SITE + "#b&c=1", plain)
+        self.assertIn("Stock 1 (S1.NS)", plain)
 
 
 class LogSymbolTests(unittest.TestCase):
@@ -395,7 +427,7 @@ class AdvisoryTests(unittest.TestCase):
         items = [LinkAndDigestTests.reading(n) for n in range(40)]
         for text, _, _ in digest.render(items, [f"https://s/#stock={n}" for n in range(40)], 1_794_700_000):
             self.assertTrue(text.endswith(alerts.ADVISORY))
-            self.assertLessEqual(len(text), alerts.TELEGRAM_MAX_CHARS)
+            self.assertLessEqual(alerts.visible_length(text), alerts.TELEGRAM_MAX_CHARS)
         reply = alerts.format_outcome({"symbol": "A", "name": "A", "horizon": "short", "side": "buy", "price": 100.0, "currency": "USD"},
                                       {"outcome": "target", "exit_price": 108.0, "resolved_date": "2026-01-01", "days_held": 3})
         self.assertTrue(reply.endswith(alerts.ADVISORY))

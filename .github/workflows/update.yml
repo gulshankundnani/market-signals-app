@@ -2,9 +2,9 @@ name: Update signals
 
 on:
   schedule:
-    # Every 15 minutes on weekdays, 03:00-20:59 UTC (covers Indian and US market hours). The minutes avoid :00, :15,
-    # :30 and :45, when GitHub's scheduler is busiest and often delays or skips runs.
-    - cron: "7,22,37,52 3-20 * * 1-5"
+    # A backup. The regular beat (every 10 minutes while markets are open) comes from the "Refresh loop" workflow,
+    # because GitHub's cron is best-effort. This line asks once an hour on weekdays, away from the busy :00 minute.
+    - cron: "7 3-20 * * 1-5"
   workflow_dispatch:
     inputs:
       test_alert:
