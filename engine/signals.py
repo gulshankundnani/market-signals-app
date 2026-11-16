@@ -6,7 +6,7 @@ The rules are fixed. Nothing is fitted to the history, so the backtest is honest
 """
 from . import indicators as ta
 
-SHORT_WEIGHTS = {"trend": 30, "macd": 25, "rsi": 20, "volume": 5, "pressure": 15, "news": 15}
+SHORT_WEIGHTS = {"trend": 30, "macd": 25, "rsi": 20, "volume": 5, "pressure": 15}
 LONG_WEIGHTS = {"trend200": 35, "cross": 25, "momentum": 20, "position": 10, "volatility": 10}
 
 BUY, SELL = 20, -20
@@ -89,8 +89,8 @@ def buy_sell_pressure(ind, i):
     return {"value": value, "label": name, "money_flow": cmf, "up_volume_share": share}
 
 
-def short_score(ind, i, news=None):
-    """Swing view (days to weeks). news is a -1..1 sentiment score or None."""
+def short_score(ind, i):
+    """Swing view (days to weeks). Price, volume and indicators only: news is never part of a reading."""
     bars = ind["bars"]
     close, volume = bars["c"], bars["v"]
     c = {}
@@ -138,11 +138,7 @@ def short_score(ind, i, news=None):
     if pressure is not None:
         c["pressure"] = (pressure["value"], f"Volume pressure: {pressure['label'].lower()} over 20 days")
 
-    if news is not None:
-        text = "News tone is positive" if news > 0.15 else "News tone is negative" if news < -0.15 else "News tone is neutral"
-        c["news"] = (clamp(news), text)
-
-    return _combine(c, SHORT_WEIGHTS, min_weight_share=0.65)
+    return _combine(c, SHORT_WEIGHTS, min_weight_share=0.75)
 
 
 def long_score(ind, i):

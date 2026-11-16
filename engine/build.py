@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from . import market as market_view
+from . import digest, market as market_view
 from . import alerts, backtest, discover, dividends, exchange, fetch, fundamentals, ipo, ipo_gmp, ledger, news, patterns, risk, signals, tracking
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -100,10 +100,9 @@ def analyse(entry, ctx):
     except fetch.FetchError:
         items, news_error = [], True
     news.mark_relevance(items, entry["name"], ticker_base)
-    news_tone = news.news_score(items)
 
     ind = signals.build_indicators(bars)
-    short_score, short_reasons = signals.short_score(ind, i, news=news_tone)
+    short_score, short_reasons = signals.short_score(ind, i)
     long_score, long_reasons = signals.long_score(ind, i)
     pressure = signals.buy_sell_pressure(ind, i)
     dividend = dividends.dividend_profile(chart["dividends"], price, ctx["now_ts"])
@@ -131,7 +130,7 @@ def analyse(entry, ctx):
                      "up_volume_share": r(pressure["up_volume_share"])} if pressure else None,
         "delivery": scrub(delivery),
         "deals": scrub(exchange_view),
-        "news": {"score": r(news_tone), "items": items[:6], "alerts": news.strong_alerts(items), "error": news_error},
+        "news": {"items": items[:6], "fresh": news.fresh_headlines(items), "error": news_error},
         "dividend_yield": r(dividend["ttm_yield"], 5) if dividend else 0.0,
         "dividend": scrub(dividend),
         "spark": [r(v) for v in close[-SPARK_DAYS:]],
@@ -326,7 +325,7 @@ def carry_forward(errors, previous, today):
             age = None
         if age is not None and 0 <= age <= CARRY_MAX_AGE_DAYS:
             # Its headlines and their ages are from an earlier run, so they must not look current.
-            carried.append({**old, "carried": True, "news": {"score": None, "items": [], "alerts": [], "error": True}})
+            carried.append({**old, "carried": True, "news": {"items": [], "fresh": [], "error": True}})
         else:
             failed.append(error)
     return carried, failed
@@ -437,6 +436,7 @@ def run(args):
     records = sorted(records + carried, key=lambda x: x["symbol"])
 
     fund_cache = fill_fundamentals(records, state, ctx["now_ts"], fetch.YahooSession)
+    news.keep_stock_specific(records)
     add_lists(records)
     raw_index = {}
     overview = market_overview(config, now, raw_index)
@@ -450,11 +450,11 @@ def run(args):
 
     first_run = not prev_data
     watch = alerts.watched_symbols(alert_cfg.get("symbols", []), {x["symbol"] for x in records})
-    tones = tuple(t for t in alert_cfg.get("news", alerts.NEWS_TONES) if t in alerts.NEWS_TONES) if isinstance(alert_cfg.get("news", []), list) else alerts.NEWS_TONES
+    news_on = bool(alert_cfg.get("news", True))     # headlines in the alerts; no tone is ever worked out from them
     sides = {s: dict(v) for s, v in state.get("alert_sides", {}).items() if isinstance(v, dict)}
     items = []
     lines, seen = alerts.build_messages(previous, {x["symbol"]: x for x in records}, watch,
-                                        state.get("seen_alerts", []), first_run, tones, sides, items)
+                                        state.get("seen_alerts", []), first_run, news_on, sides, items)
     now_ts = int(now.timestamp())
     by_symbol = {x["symbol"]: x for x in records}
     alert_log, added = alerts.update_log(alerts.drop_irrelevant(state.get("alert_log", []), by_symbol), lines, now_ts, [i["symbol"] for i in items])
@@ -468,11 +468,11 @@ def run(args):
     calls = tracking.make_calls(items, {x["symbol"]: x for x in records}, now_ts)
     if lines and token and chat:
         links = [link_for_symbol(i["symbol"], "news" if i["kind"] == "news" else "signals") for i in items]
-        message, shown = alerts.digest_with_count(lines, links, note=alerts.NOTE)
-        ok, message_id = alerts.post_telegram(token, chat, message)
-        print("Telegram alert sent" if ok else "Telegram alert failed")
-        if ok:
-            tracking.attach_message(calls, shown, message_id)
+        for message, start, end in digest.render(items, links, now_ts):
+            ok, message_id = alerts.post_telegram(token, chat, message)
+            print(f"Telegram alert {'sent' if ok else 'failed'} ({end - start} alerts)")
+            if ok:
+                tracking.attach_message(calls, end, message_id, start)
     elif lines:
         print("New alerts are in the app. Telegram is not set up (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID).")
 

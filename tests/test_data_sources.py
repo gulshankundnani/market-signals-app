@@ -153,7 +153,7 @@ class DiscoverTests(unittest.TestCase):
 
 def record(name, short, long_, alert_items=()):
     return {"name": name, "price": 100.0, "currency": "INR", "short": {"label": short}, "long": {"label": long_},
-            "news": {"alerts": list(alert_items)}}
+            "news": {"fresh": list(alert_items)}}
 
 
 class AlertTests(unittest.TestCase):
@@ -175,17 +175,17 @@ class AlertTests(unittest.TestCase):
         self.assertEqual(lines, [])
 
     def test_first_run_is_silent_but_records_news(self):
-        item = {"title": "Fraud probe", "link": "https://x/1", "source": "S", "strong": "neg", "age_min": 5}
+        item = {"title": "Quarterly results", "link": "https://x/1", "source": "S", "age_min": 5}
         lines, seen = alerts.build_messages({}, {"A": record("A", "Buy", "Buy", [item])}, ["A"], [], True)
         self.assertEqual(lines, [])
         self.assertEqual(len(seen), 1)
 
-    def test_news_alert_once(self):
-        item = {"title": "Fraud probe", "link": "https://x/1", "source": "S", "strong": "neg", "age_min": 5}
+    def test_news_alert_once_with_no_tone(self):
+        item = {"title": "Quarterly results", "link": "https://x/1", "source": "S", "age_min": 5}
         current = {"A": record("A Ltd", "Buy", "Buy", [item])}
         lines, seen = alerts.build_messages(current, current, ["A"], [], False)
-        self.assertEqual(len(lines), 1)
-        self.assertTrue(lines[0].startswith("Negative news"))
+        self.assertEqual(lines, ["News, A Ltd (A): Quarterly results (S, 5 min ago)"])
+        self.assertNotRegex(lines[0], "Positive|Negative")
         again, _ = alerts.build_messages(current, current, ["A"], seen, False)
         self.assertEqual(again, [])
 
@@ -198,16 +198,6 @@ class AlertTests(unittest.TestCase):
         cur = {f"S{i}": record(f"S{i}", "Buy", "Hold") for i in range(40)}
         lines, _ = alerts.build_messages(prev, cur, list(cur), [], False)
         self.assertEqual(len(lines), 40)
-
-    def test_digest_shows_a_limited_number_and_counts_the_rest(self):
-        lines = [f"alert {i}" for i in range(40)]
-        text = alerts.digest(lines)
-        self.assertIn("alert 14", text)
-        self.assertNotIn("alert 15", text)
-        self.assertTrue(text.endswith("+25 more alerts. Open the app to see them." + chr(10)*2 + alerts.ADVISORY))
-        self.assertEqual(alerts.digest(["only one"]), "only one" + chr(10)*2 + alerts.ADVISORY)
-        self.assertEqual(alerts.digest([]), "")
-        self.assertLessEqual(len(alerts.digest(["x" * 250] * 15)), alerts.TELEGRAM_MAX_CHARS)
 
     def test_watching_all_stocks(self):
         available = {"B.NS", "A", "C"}
@@ -234,7 +224,7 @@ class AlertTests(unittest.TestCase):
             return "Strong Buy" if value >= 50 else "Buy" if value >= 20 else "Strong Sell" if value <= -50 else "Sell" if value <= -20 else "Hold"
 
         return {"name": "A", "price": price, "currency": "INR", "short": {"label": label(score), "score": score},
-                "long": {"label": label(long_score), "score": long_score}, "news": {"alerts": []}}
+                "long": {"label": label(long_score), "score": long_score}, "news": {"fresh": []}}
 
     def run_scores(self, scores, start, sides=None):
         """Feed a series of scores through build_messages the way the hourly job would. Returns all alert lines."""
@@ -307,15 +297,14 @@ class AlertTests(unittest.TestCase):
         self.assertIn("Months-to-years view", lines[0])
         self.assertIn("Bullish -> Aligned bearish", lines[0])
 
-    def test_news_tones_can_be_limited_without_replaying_old_news(self):
-        good = {"title": "Shares surge", "link": "https://x/good", "source": "S", "strong": "pos", "age_min": 5}
-        bad = {"title": "Fraud probe", "link": "https://x/bad", "source": "S", "strong": "neg", "age_min": 5}
-        current = {"A": record("A Ltd", "Buy", "Buy", [good, bad])}
-        lines, seen = alerts.build_messages(current, current, ["A"], [], False, news_tones=("neg",))
-        self.assertEqual(len(lines), 1)
-        self.assertTrue(lines[0].startswith("Negative news"))
-        later, _ = alerts.build_messages(current, current, ["A"], seen, False, news_tones=("neg", "pos"))
-        self.assertEqual(later, [], "headlines already seen must not appear when a tone is switched on")
+    def test_news_can_be_switched_off_without_replaying_old_news(self):
+        first = {"title": "Order received", "link": "https://x/a", "source": "S", "age_min": 5}
+        second = {"title": "Plant opened", "link": "https://x/b", "source": "S", "age_min": 6}
+        current = {"A": record("A Ltd", "Buy", "Buy", [first, second])}
+        lines, seen = alerts.build_messages(current, current, ["A"], [], False, news_on=False)
+        self.assertEqual(lines, [])
+        later, _ = alerts.build_messages(current, current, ["A"], seen, False, news_on=True)
+        self.assertEqual(later, [], "headlines already seen must not appear when news is switched on")
 
 
 class AlertLogTests(unittest.TestCase):

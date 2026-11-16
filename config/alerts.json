@@ -1,4 +1,4 @@
 {
   "symbols": ["*"],
-  "news": ["neg", "pos"]
+  "news": true
 }

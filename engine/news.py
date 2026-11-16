@@ -1,5 +1,8 @@
-"""Google News headlines with a simple keyword sentiment. Headlines only, so it is a rough guide."""
-import math
+"""Google News headlines for each stock, shown as they are.
+
+No good-or-bad tone is worked out from the words of a headline: word matching gets meanings wrong (a price "band" is not
+a "ban"). What is checked is only who a headline is about (is_relevant) and how recent it is.
+"""
 import re
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -12,37 +15,7 @@ FEEDS = {
     "US": "hl=en-US&gl=US&ceid=US:en",
 }
 
-# Matched as whole words, with an optional s/es/ed/d/ing ending (so "bank" never matches "ban").
-POSITIVE = [
-    "surge", "soar", "jump", "rally", "rallie", "gain", "beat", "upgrade", "profit rise", "profit jump", "win",
-    "order win", "approval", "approve", "buyback", "dividend", "growth", "strong", "outperform", "bullish",
-    "expand", "raise guidance", "rebound", "recover", "record profit", "record high",
-]
-NEGATIVE = [
-    "fall", "fell", "drop", "dropped", "plunge", "slump", "slide", "miss", "downgrade", "probe", "fraud",
-    "raid", "loan default", "debt default", "bond default", "payment default", "default risk", "defaulter", "bankrupt",
-    "bankruptcy", "lawsuit", "penalty", "fined", "fines", "ban", "banned", "resign", "loss",
-    "warn", "recall", "crash", "selloff", "sell-off", "weak", "decline", "layoff", "investigation", "bearish",
-    "scam", "record low",
-]
-STRONG_NEGATIVE = [
-    "fraud", "raid", "probe", "loan default", "debt default", "bond default", "payment default", "defaulter", "bankrupt",
-    "bankruptcy", "insolvency", "scam", "investigation",
-    "plunge", "crash", "downgrade", "ban", "banned", "resign", "recall", "halt", "show-cause",
-]
-STRONG_POSITIVE = ["surge", "soar", "upgrade", "buyback", "record profit", "record high", "approval"]
-
-HALF_LIFE_HOURS = 12
-MAX_AGE_HOURS = 48
-ALERT_MAX_AGE_HOURS = 6    # older than this is not "breaking"; it still counts toward the stock's news tone
-
-
-def _compile(words):
-    return [re.compile(r"\b" + re.escape(w) + r"(?:s|es|ed|d|ing)?\b") for w in words]
-
-
-_POS, _NEG = _compile(POSITIVE), _compile(NEGATIVE)
-_STRONG_NEG, _STRONG_POS = _compile(STRONG_NEGATIVE), _compile(STRONG_POSITIVE)
+FRESH_HOURS = 6    # a headline newer than this counts as new on the stock page and can be sent as an alert
 
 
 NAME_SUFFIXES = {"limited", "ltd", "inc", "corp", "corporation", "co", "company", "plc"}
@@ -80,7 +53,8 @@ SAME_MARKET = {"", "nyse", "nasdaq", "nasdaqgs", "nasdaqgm", "nasdaqcm", "nysear
 _BRACKET_TICKER = re.compile(r"\((?:([A-Za-z]+):)?\s*([A-Z][A-Z0-9.\-]{0,9})\)")
 _ROUNDUP_PHRASES = ("stocks to watch", "stocks to buy", "stocks in focus", "stocks to sell", "top gainers", "top losers",
                     "market wrap", "market live", "stock market today", "buzzing stocks", "record date next week",
-                    "stocks that", "shares to buy", "stocks under")
+                    "stocks that", "shares to buy", "stocks under", " vs ", " vs. ", " versus ", "stock picks", "stock price, news",
+                    "share price today", "stock price live", "quote and history", "options flow", "dark pools")
 _NOT_TICKERS = {"IPO", "GMP", "NSE", "BSE", "USA", "CEO", "CFO", "GDP", "RBI", "SEBI", "ETF", "EPS", "IMF", "OPEC", "FII",
                 "DII", "NSDL", "AGM", "SIP", "FDA", "SEC", "FED", "NYSE", "NASDAQ", "AI", "US", "UK", "EU", "IT", "PE"}
 
@@ -95,7 +69,7 @@ def _is_broker_mention(text, names):
 def _looks_like_roundup(title):
     """A list of many companies ("... MRF, SCI, PFC, ...") says little about any one of them."""
     lower = title.lower()
-    if any(p in lower for p in _ROUNDUP_PHRASES) or re.search(r"\b\d+\s+(?:stocks|shares|companies)\b", lower):
+    if any(p in lower for p in _ROUNDUP_PHRASES) or re.search(r"\b(?:\d+|two|three|four|five|six|seven|eight|nine|ten)\s+(?:stocks|shares|companies)\b", lower):
         return True
     caps = [w for w in re.findall(r"\b[A-Z][A-Z&]{1,7}\b", title) if w not in _NOT_TICKERS and not re.fullmatch(r"Q[1-4]|FY\d*", w)]
     return len(caps) >= 3
@@ -105,7 +79,7 @@ def _key(ticker):
     return re.sub(r"[.\-]", "", ticker or "").upper()
 
 
-def _names_someone_else(title, ticker_base, names):
+def _names_someone_else(title, ticker_base, names, lists=True):
     """True when the headline is about another company that merely mentions ours.
 
     That is the case when it carries another company's ticker in brackets (and not ours), when ours is the ticker of
@@ -122,6 +96,8 @@ def _names_someone_else(title, ticker_base, names):
             others = True
     if others and not ours_present:
         return True
+    if not lists:
+        return False
     prefix = re.match(r"^(.{3,60}?)\s+(?:stock|shares)\s*:", title, re.I)
     if prefix:
         head = " " + " ".join(_words(prefix.group(1))) + " "
@@ -176,13 +152,27 @@ def _has_context(words):
     return any(w in CONTEXT_WORDS or _CONTEXT_PATTERN.match(w) for w in words)
 
 
-def is_relevant(title, name, ticker_base=None, source=None):
-    """True when the headline is about the company, so its tone can fairly be credited to the stock.
+MAX_POSITION = 8     # the company must be named within the first few words of a headline
 
-    Search results often match a company only in the article body, or only share a word with its name. Those
-    headlines must not trigger alerts or move the sentiment score, so the match has to be confident:
-    the full multi-word name, a ticker that is an abbreviation (TCS), or a single name word (or a ticker that is
-    also a plain word, like Trent) together with business wording. People and sports stories never count.
+
+def _find(words, target):
+    """Index where the word sequence `target` first appears in `words`, or None."""
+    n = len(target)
+    for i in range(len(words) - n + 1):
+        if words[i:i + n] == target:
+            return i
+    return None
+
+
+def is_relevant(title, name, ticker_base=None, source=None, mention_only=False):
+    """True when the headline is about this company, so it can be shown as news for the stock.
+
+    The stock comes first and its news follows, so the match has to be confident and the company has to be the
+    subject: named within the first few words, by its full name when the name has several words (ICICI Lombard is
+    not ICICI Bank), or by a ticker that is an abbreviation (TCS), or by its ticker in brackets, or by a long
+    distinctive name word (Microsoft). A short or common name word (Trent, Titan) also needs business wording.
+    People and sports stories, lists, comparisons, price pages, ratings given by the company, and headlines about
+    another company never count. mention_only skips the list rules: it asks only whether the company is named.
     """
     words = _words(title)
     if _about_a_person_or_sport(words, source) or _looks_like_roundup(title):
@@ -193,66 +183,42 @@ def is_relevant(title, name, ticker_base=None, source=None):
     short_names = [w for w in name_words if len(w) >= 4 and w not in GENERIC_WORDS]
     if _is_broker_mention(" ".join(words), [phrase] + short_names):
         return False
-    if _names_someone_else(title, ticker_base, [phrase] + short_names):
+    if _names_someone_else(title, ticker_base, [phrase] + short_names, lists=not mention_only):
         return False
     if any(re.search(r"\b" + re.escape(b) + r"\b", phrase) for b in BROKER_NAMES) and RATING_WORDS.intersection(words) and not re.search(
             re.escape(phrase) + r"\s+(?:upgraded|downgraded|rated|gets|receives|stock|shares)", text):
         return False
     ticker = (ticker_base or "").lower() if ticker_base and len(ticker_base) >= 3 else ""
-    if len(name_words) >= 2 and " " + phrase + " " in text:
+    if ticker_base and re.search(r"\((?:[A-Za-z]+:)?\s*" + re.escape(ticker_base) + r"\)", title):
         return True
+    full = _find(words, name_words) if name_words else None
+    strong = []
+    for size in range(len(name_words), 1, -1):          # the full name, or its first words ("Adani Ports")
+        spot = _find(words, name_words[:size])
+        if spot is not None:
+            strong.append(spot)
+            break
     if ticker and ticker not in name_words and ticker in words:
-        return True
-    if ticker_base and re.search(r"\((?:[A-Za-z]+:)?" + re.escape(ticker_base) + r"\)", title):
-        return True
-    distinctive = [w for w in name_words if len(w) >= DISTINCTIVE_MIN_LEN and w not in GENERIC_WORDS and w not in COMMON_WORDS]
-    if any(w in words for w in distinctive):
-        return True
-    shares_a_word = (
-        bool(name_words) and " " + phrase + " " in text
-        or any(w in words for w in name_words if len(w) >= 4 and w not in GENERIC_WORDS)
-        or bool(ticker) and ticker in words
-    )
-    return shares_a_word and _has_context(words)
+        strong.append(words.index(ticker))
+    strong += [words.index(w) for w in name_words
+               if len(w) >= DISTINCTIVE_MIN_LEN and w not in GENERIC_WORDS and w not in COMMON_WORDS and w in words]
+    if strong:
+        return min(strong) < MAX_POSITION
+    weak = []
+    if len(name_words) == 1 and full is not None:
+        weak.append(full)
+    if ticker and ticker in words:
+        weak.append(words.index(ticker))
+    if len(name_words) >= 2:
+        weak += [words.index(w) for w in name_words if len(w) >= DISTINCTIVE_MIN_LEN and w not in GENERIC_WORDS and w in words]
+    return bool(weak) and min(weak) < MAX_POSITION and _has_context(words)
 
 
 def mark_relevance(items, name, ticker_base=None):
-    """Tag each headline with `relevant`. Unrelated ones lose their breaking-news flag."""
+    """Tag each headline with `relevant`: True only when it is clearly about this company."""
     for item in items:
         item["relevant"] = is_relevant(item["title"], name, ticker_base, item.get("source"))
-        if not item["relevant"]:
-            item["strong"] = None
     return items
-
-
-# Moves in a trading statistic, not news about the business: "open interest surge" is not good news.
-NEUTRAL_PHRASES = ("open interest", "short interest", "put-call", "put call", "options chain", "implied volatility")
-
-
-# "Upgraded to Sell" is not good news, and "plant upgrade" is not a rating change.
-_UPGRADED_TO_SELL = re.compile(r"\bupgrad\w* to (?:a |an )?(?:strong )?(?:sell|hold|neutral|underperform|underweight)\b")
-_EQUIPMENT_UPGRADE = re.compile(r"\bupgrad\w*\s+(?:for|of|plan|project|programme|program)\b|\b(?:plant|capacity|network|software|system|facility|infrastructure|fleet)\s+upgrad")
-_RATING_CONTEXT = re.compile(r"\b(?:rating|ratings|analyst|analysts|broker|brokerage|target|outperform|overweight|credit|stock|shares)\b")
-
-
-def headline_sentiment(title):
-    """Returns (score -1..1, strong) where strong is 'pos', 'neg' or None."""
-    text = title.lower()
-    if any(phrase in text for phrase in NEUTRAL_PHRASES) or _UPGRADED_TO_SELL.search(text):
-        return 0.0, None
-    if _EQUIPMENT_UPGRADE.search(text) and not _RATING_CONTEXT.search(text):
-        text = re.sub(r"\bupgrad\w*", " ", text)     # "plant upgrade" is not a rating upgrade
-    pos = sum(1 for p in _POS if p.search(text))
-    neg = sum(1 for p in _NEG if p.search(text))
-    score = max(-1.0, min(1.0, (pos - neg) * 0.6))
-    strong = None
-    if any(p.search(text) for p in _STRONG_NEG):
-        strong = "neg"
-    elif any(p.search(text) for p in _STRONG_POS):
-        strong = "pos"
-    if strong == "neg" and score > -0.6:
-        score = -0.6
-    return score, strong
 
 
 def parse_rss(xml_text, now):
@@ -278,7 +244,6 @@ def parse_rss(xml_text, now):
             ts = int(published.timestamp())
         except (TypeError, ValueError):
             age_min, ts = None, None
-        score, strong = headline_sentiment(title)
         link = (node.findtext("link") or "").strip()
         items.append({
             "title": title,
@@ -286,8 +251,6 @@ def parse_rss(xml_text, now):
             "source": source,
             "ts": ts,
             "age_min": age_min,
-            "sentiment": score,
-            "strong": strong,
         })
     items.sort(key=lambda i: (i["age_min"] is None, i["age_min"] or 0))
     return items
@@ -299,19 +262,40 @@ def fetch_news(query, market, now, limit=8):
     return parse_rss(http_get(url).decode("utf-8", "replace"), now)[:limit]
 
 
-def news_score(items):
-    """Recency-weighted average sentiment of the last 48 hours, in -1..1. None if no recent news."""
-    total = weight_sum = 0.0
-    for item in items:
-        age = item["age_min"]
-        if age is None or age > MAX_AGE_HOURS * 60 or not item.get("relevant", True):
-            continue
-        weight = math.exp(-math.log(2) * (age / 60) / HALF_LIFE_HOURS)
-        total += weight * item["sentiment"]
-        weight_sum += weight
-    return total / weight_sum if weight_sum else None
+def _story_key(item):
+    return (item.get("link") or item["title"]).strip().lower()
 
 
-def strong_alerts(items, max_age_hours=ALERT_MAX_AGE_HOURS):
-    return [i for i in items if i["strong"] and i.get("relevant", True) and i["age_min"] is not None
-            and i["age_min"] <= max_age_hours * 60][:3]
+def keep_stock_specific(records):
+    """News follows the stock, never the other way round: a headline that is about more than one company in the list
+    (a deal, a roundup, a comparison) is not credited to any of them. Shares of one company count as one company.
+
+    Every headline is checked against every company, not only the stock it was found for.
+    records: stock records with record["news"]["items"]. Their "fresh" lists are rebuilt."""
+    companies = {}
+    for rec in records:
+        companies.setdefault(rec["name"], rec["symbol"].split(".")[0])
+    tokens = {name: {w for w in _words(name) if len(w) >= 3 and w not in NAME_SUFFIXES} | {base.lower()} for name, base in companies.items()}
+    stories = {}
+    for rec in records:
+        for item in (rec.get("news") or {}).get("items", []):
+            stories.setdefault(_story_key(item), item)
+    shared = set()
+    for key, item in stories.items():
+        words = set(_words(item["title"]))
+        named = [n for n, base in companies.items() if tokens[n] & words and is_relevant(item["title"], n, base, item.get("source"), mention_only=True)]
+        if len(named) > 1:
+            shared.add(key)
+    for rec in records:
+        block = rec.get("news") or {}
+        for item in block.get("items", []):
+            if _story_key(item) in shared:
+                item["relevant"] = False
+        if "items" in block:
+            block["fresh"] = fresh_headlines(block["items"])
+    return records
+
+
+def fresh_headlines(items, max_age_hours=FRESH_HOURS):
+    """Headlines about the company from the last few hours, newest first. Nothing is judged from the words."""
+    return [i for i in items if i.get("relevant", True) and i["age_min"] is not None and i["age_min"] <= max_age_hours * 60][:3]

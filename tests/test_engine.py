@@ -212,13 +212,14 @@ class SignalTests(unittest.TestCase):
         self.assertIsNone(signals.long_score(ind, 39)[0])
         self.assertIsNone(signals.short_score(ind, 39)[0])
 
-    def test_news_changes_short_score_in_the_right_direction(self):
+    def test_news_is_not_part_of_a_reading(self):
         closes = [100 + math.sin(i / 5) * 3 for i in range(120)]
         ind = signals.build_indicators(make_bars(closes))
-        i = len(closes) - 1
-        good = signals.short_score(ind, i, news=1.0)[0]
-        bad = signals.short_score(ind, i, news=-1.0)[0]
-        self.assertGreater(good, bad)
+        score, reasons = signals.short_score(ind, len(closes) - 1)
+        self.assertNotIn("news", signals.SHORT_WEIGHTS)
+        self.assertNotIn("news", [r["key"] for r in reasons])
+        with self.assertRaises(TypeError):
+            signals.short_score(ind, len(closes) - 1, news=1.0)
 
     def test_reasons_have_tone(self):
         ind = signals.build_indicators(make_bars([100 * 1.004 ** i for i in range(300)]))
@@ -517,14 +518,13 @@ class CarryForwardTests(unittest.TestCase):
     def test_old_headlines_are_not_carried_as_if_they_were_current(self):
         from engine import build
         record = self.old("A", "2026-11-13")
-        record["news"] = {"score": 0.5, "items": [{"title": "x", "age_min": 95}], "alerts": [{"title": "x", "age_min": 95}], "error": False}
+        record["news"] = {"items": [{"title": "x", "age_min": 95}], "fresh": [{"title": "x", "age_min": 95}], "error": False}
         previous = {"A": record}
         carried, _ = build.carry_forward([{"symbol": "A", "error": "x"}], previous, self.TODAY)
-        self.assertEqual(carried[0]["news"]["alerts"], [])
+        self.assertEqual(carried[0]["news"]["fresh"], [])
         self.assertEqual(carried[0]["news"]["items"], [])
-        self.assertIsNone(carried[0]["news"]["score"])
         self.assertTrue(carried[0]["news"]["error"])
-        self.assertEqual(len(previous["A"]["news"]["alerts"]), 1, "the saved record is not changed")
+        self.assertEqual(len(previous["A"]["news"]["fresh"]), 1, "the saved record is not changed")
 
     def test_the_saved_record_itself_is_not_changed(self):
         from engine import build
@@ -603,44 +603,6 @@ class NewsTests(unittest.TestCase):
         self.assertEqual(items[-1]["age_min"], None)
         self.assertEqual(items[-1]["link"], "")
 
-    def test_sentiment(self):
-        self.assertEqual(news.headline_sentiment("Company shares surge after record profit")[1], "pos")
-        score, strong = news.headline_sentiment("Fraud probe: stock plunges")
-        self.assertEqual(strong, "neg")
-        self.assertLess(score, 0)
-
-    def test_ordinary_uses_of_default_and_fine_are_not_bad_news(self):
-        self.assertEqual(news.headline_sentiment("AWS sets new AgentCore runtime as default"), (0.0, None))
-        self.assertEqual(news.headline_sentiment("Fine-tuned model launches on the platform"), (0.0, None))
-        self.assertEqual(news.headline_sentiment("Company faces loan default, lenders worried")[1], "neg")
-        self.assertEqual(news.headline_sentiment("Firm fined over disclosure lapse")[0] < 0, True)
-
-    def test_trading_statistics_are_not_business_news(self):
-        self.assertEqual(news.headline_sentiment("Grasim sees significant open interest surge amid price pressure"), (0.0, None))
-        self.assertEqual(news.headline_sentiment("Grasim shares surge after record profit")[1], "pos")
-
-    def test_bank_is_not_ban(self):
-        self.assertEqual(news.headline_sentiment("State Bank opens new branch"), (0.0, None))
-
-    def test_neutral(self):
-        self.assertEqual(news.headline_sentiment("Company schedules annual meeting"), (0.0, None))
-
-    def test_score_recency_weighted(self):
-        items = news.parse_rss(RSS, self.NOW)
-        score = news.news_score(items)
-        self.assertLess(score, 0)
-        self.assertTrue(-1 <= score <= 1)
-
-    def test_score_none_without_recent_news(self):
-        old = [{"age_min": 60 * 100, "sentiment": 1.0}, {"age_min": None, "sentiment": 1.0}]
-        self.assertIsNone(news.news_score(old))
-        self.assertIsNone(news.news_score([]))
-
-    def test_strong_alerts(self):
-        items = news.parse_rss(RSS, self.NOW)
-        alerts = news.strong_alerts(items)
-        self.assertEqual([a["strong"] for a in alerts], ["neg", "pos"])
-
     def test_relevance_requires_the_company_name(self):
         rel = news.is_relevant
         self.assertFalse(rel("Apple unveils new iPhone", "Apple"), "one shared word and no business wording is not enough")
@@ -707,19 +669,6 @@ class NewsTests(unittest.TestCase):
         self.assertTrue(rel("Walmart (NASDAQ:WMT) Shares Up 1.5% on Analyst Upgrade", "Walmart", "WMT"))
         self.assertTrue(rel("Berkshire's Buyback Spree Masks a Thinner Insurance Haul (BRK.B)", "Berkshire Hathaway", "BRK-B"))
 
-    def test_upgrade_is_good_news_only_when_it_is_a_rating(self):
-        s = news.headline_sentiment
-        self.assertEqual(s("Vedanta Power Ltd Upgraded to Sell on Mixed Quality and Technical Signals"), (0.0, None))
-        self.assertEqual(s("SAIL clears Rs 1,714 crore upgrade for Durgapur alloy steel plant"), (0.0, None))
-        self.assertEqual(s("Vishal Nirmiti sees credit rating upgrade for its bank facilities")[1], "pos")
-        self.assertEqual(s("Walmart Shares Up 1.5% on Analyst Upgrade")[1], "pos")
-        self.assertEqual(s("Eicher Motors Downgraded to Hold Amid Valuation Concerns")[1], "neg")
-
-    def test_breaking_alerts_are_only_for_the_last_few_hours(self):
-        item = lambda age: {"title": "Acme probe", "strong": "neg", "relevant": True, "age_min": age}
-        found = news.strong_alerts([item(30), item(5 * 60), item(7 * 60), item(14 * 60), item(None)])
-        self.assertEqual([i["age_min"] for i in found], [30, 300])
-
     def test_ages_are_written_for_people(self):
         self.assertEqual(news.age_text(5), "5 min ago")
         self.assertEqual(news.age_text(89), "89 min ago")
@@ -728,15 +677,60 @@ class NewsTests(unittest.TestCase):
         self.assertEqual(news.age_text(60 * 24 * 4), "4 d ago")
         self.assertEqual(news.age_text(None), "")
 
-    def test_irrelevant_headlines_do_not_alert_or_score(self):
+    def test_headlines_carry_no_tone_or_sentiment(self):
+        for item in news.parse_rss(RSS, self.NOW):
+            self.assertEqual(set(item), {"title", "link", "source", "ts", "age_min"})
+        for name in ("headline_sentiment", "news_score", "strong_alerts"):
+            self.assertFalse(hasattr(news, name), name)
+
+    def test_only_headlines_about_the_company_from_the_last_few_hours_are_fresh(self):
+        item = lambda age, relevant=True: {"title": "x", "relevant": relevant, "age_min": age}
+        found = news.fresh_headlines([item(30), item(5 * 60), item(7 * 60), item(14 * 60), item(None), item(10, False)])
+        self.assertEqual([i["age_min"] for i in found], [30, 300])
+
+    def test_the_company_must_be_the_subject_of_the_headline(self):
+        rel = news.is_relevant
+        self.assertFalse(rel("ICICI Lombard raises Axis Bank stake in India", "ICICI Bank", "ICICIBANK"), "ICICI Lombard is not ICICI Bank")
+        self.assertFalse(rel("Watch | Pope Leo XIV flies to Andes town by helicopter, once reached it in a Mahindra", "Mahindra & Mahindra", "M&M"))
+        self.assertFalse(rel("SENSEX up 400 pts, NIFTY50 hovers around 25,200 in early trade; Eicher Motors, Airtel, ITC in focus", "Bharti Airtel", "BHARTIARTL"))
+        self.assertFalse(rel("Eternal, Infosys & Wipro: Three Stocks, Three Different Trading Opportunities", "Wipro", "WIPRO"))
+        self.assertFalse(rel("Amazon vs. Target: Which Stock Is the Better Portfolio Addition?", "Amazon", "AMZN"))
+        self.assertFalse(rel("IBM Nov 2026 207.500 put (IBM261120P00207500) stock price, news, quote and history", "IBM", "IBM"))
+
+    def test_clear_company_headlines_still_count_under_the_subject_rule(self):
+        rel = news.is_relevant
+        self.assertTrue(rel("Citi maintains Buy rating on Eicher Motors with Rs 9,500 target price", "Eicher Motors", "EICHERMOT"))
+        self.assertTrue(rel("Hindalco shares fall 1% after Novelis announces $265-million sale of China units", "Hindalco Industries", "HINDALCO"))
+        self.assertTrue(rel("BEL share price: Defence PSU stock in focus on Rs 619 crore order win", "Bharat Electronics", "BEL"))
+        self.assertTrue(rel("Intel sued by shareholders following 29% stock plunge", "Intel", "INTC"))
+        self.assertTrue(rel("ICICI Bank shares rise after Q2 results", "ICICI Bank", "ICICIBANK"))
+        self.assertTrue(rel("S&P says Adani Ports can absorb INR 27,000 crore Evos acquisition costs", "Adani Ports and SEZ", "ADANIPORTS"))
+
+    def test_a_headline_about_two_listed_companies_is_credited_to_neither(self):
+        def rec(symbol, name, items):
+            return {"symbol": symbol, "name": name, "news": {"items": items, "fresh": items}}
+        shared = {"title": "HUDCO, PFC raise bonds", "link": "https://x/shared", "relevant": True, "age_min": 10}
+        own_a = {"title": "PFC results", "link": "https://x/a", "relevant": True, "age_min": 20}
+        own_b = {"title": "HUDCO shares rise on plant", "link": "https://x/b", "relevant": True, "age_min": 30}
+        records = [rec("PFC.NS", "Power Finance", [dict(shared), dict(own_a)]), rec("HUDCO.NS", "HUDCO", [dict(shared), dict(own_b)])]
+        news.keep_stock_specific(records)
+        self.assertEqual([i["title"] for i in records[0]["news"]["fresh"]], ["PFC results"])
+        self.assertEqual([i["title"] for i in records[1]["news"]["fresh"]], ["HUDCO shares rise on plant"])
+        self.assertFalse(records[0]["news"]["items"][0]["relevant"])
+
+    def test_two_share_classes_of_one_company_share_its_news(self):
+        item = {"title": "Alphabet results", "link": "https://x/g", "relevant": True, "age_min": 10}
+        records = [{"symbol": s, "name": "Alphabet", "news": {"items": [dict(item)], "fresh": [dict(item)]}} for s in ("GOOG", "GOOGL")]
+        news.keep_stock_specific(records)
+        self.assertTrue(all(len(r["news"]["fresh"]) == 1 for r in records))
+
+    def test_headlines_about_another_company_are_not_marked_relevant(self):
         items = news.parse_rss(RSS, self.NOW)
         news.mark_relevance(items, "Somebody Else Corp", "SOME")
-        self.assertTrue(all(i["relevant"] is False and i["strong"] is None for i in items))
-        self.assertIsNone(news.news_score(items))
-        self.assertEqual(news.strong_alerts(items), [])
+        self.assertTrue(all(i["relevant"] is False for i in items))
+        self.assertEqual(news.fresh_headlines(items), [])
         items = news.mark_relevance(news.parse_rss(RSS, self.NOW), "Acme", "ACME")
-        self.assertTrue(news.news_score(items) is not None)
-        self.assertTrue(news.strong_alerts(items))
+        self.assertTrue(news.fresh_headlines(items))
 
     def test_rejects_dtd(self):
         with self.assertRaises(fetch.FetchError):

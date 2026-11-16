@@ -58,8 +58,8 @@ class ReplyTests(unittest.TestCase):
         self.assertEqual(ids, [self.hit["id"]])
         self.assertEqual(left, [])
         self.assertEqual(sent[0][1], 11)
-        self.assertTrue(sent[0][0].startswith("REFERENCE LEVEL REACHED: Aaa Ltd (AAA)"))
-        self.assertIn("Full analysis: https://x/#stock=AAA", sent[0][0])
+        self.assertTrue(sent[0][0].startswith("✅ Reference level reached: Aaa Ltd (AAA)"))
+        self.assertIn("• Open analysis: https://x/#stock=AAA", sent[0][0])
         self.assertNotIn("https", texts[0])
 
     def test_a_failed_send_is_retried_and_a_sent_one_is_not_repeated(self):
@@ -85,7 +85,7 @@ class ReplyTests(unittest.TestCase):
                               "exit_price": 104.0, "return_pct": -4.0, "days_held": 2})
         sent = []
         tracking.send_replies([plain["id"]], self.led, [], lambda t, r: sent.append((t, r)) or True)
-        self.assertTrue(sent[0][0].startswith("VOLATILITY RISK LEVEL REACHED"))
+        self.assertTrue(sent[0][0].startswith("⚠️ Volatility risk level reached"))
         self.assertIsNone(sent[0][1])
 
     def test_a_burst_is_capped_and_the_rest_waits(self):

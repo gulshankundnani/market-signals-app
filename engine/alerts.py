@@ -1,4 +1,4 @@
-"""Alerts: a watched stock changes signal, or breaking news names it.
+"""Alerts: a watched stock changes signal, or a fresh headline about it appears.
 
 Each alert says what changed, gives a resistance or support reference and a volatility risk level, lists the
 indicator readings behind it, and links to the stock's full analysis on the site. Alerts are written into the site's own data file (the "alerts" list)
@@ -27,7 +27,7 @@ NOTE = "Levels are indicative, from fixed chart rules. Not advice."
 # +/-25. A Buy or Sell is only dropped once its score falls back through +/-10.
 ENTER = 25
 LEAVE = 10
-NEWS_TONES = ("neg", "pos")
+NEWS_PER_RUN = 6      # at most this many headlines go into one run's alerts; the rest stay on the site
 
 
 # How labels and sides are worded in messages. The stored labels stay Buy/Hold/Sell so records keep working.
@@ -99,8 +99,10 @@ BASIS_TEXT = {"resistance": "nearest resistance", "support": "nearest support", 
               "52-week low": "52-week low"}
 
 
-def _levels_line(record, new_side, horizon):
-    """The reference-level line for a bullish or bearish move, or None if it cannot be worked out."""
+def level_details(record, new_side, horizon):
+    """The reference level and volatility risk level for a bullish or bearish move, or None if they cannot be worked out.
+
+    {"kind", "price", "pct", "basis", "risk_price", "risk_pct"}"""
     indicators = record.get("indicators") or {}
     zones = (record.get("levels") or {}).get("zones")
     levels = signals.target_levels(record.get("price"), indicators.get("atr"), zones, indicators.get("hi252"),
@@ -112,18 +114,39 @@ def _levels_line(record, new_side, horizon):
     if basis is None:
         multiple = signals.SHORT_FALLBACK_R if horizon == "short" else signals.LONG_FALLBACK_R
         basis = f"volatility-based, {multiple:g}x the risk distance"
-    kind = "Resistance reference" if new_side == "buy" else "Support reference"
-    return (f"{kind} {target['price']:.2f} ({target['pct']:+.1f}%, {basis}). "
-            f"Volatility risk level {levels['stop']['price']:.2f} ({levels['stop']['pct']:+.1f}%).")
+    return {"kind": "Resistance reference" if new_side == "buy" else "Support reference", "price": target["price"],
+            "pct": target["pct"], "basis": basis, "risk_price": levels["stop"]["price"], "risk_pct": levels["stop"]["pct"]}
 
 
-def _reasons_line(signal, announced, new_side):
+def _levels_line(record, new_side, horizon):
+    """The reference-level line for a bullish or bearish move, or None if it cannot be worked out."""
+    d = level_details(record, new_side, horizon)
+    if not d:
+        return None
+    return (f"{d['kind']} {d['price']:.2f} ({d['pct']:+.1f}%, {d['basis']}). "
+            f"Volatility risk level {d['risk_price']:.2f} ({d['risk_pct']:+.1f}%).")
+
+
+def reason_texts(signal, announced, new_side):
     """The reasons behind the new signal. For a signal that faded to hold, the reasons that weaken the old side."""
     wanted = {"buy": {"pos"}, "sell": {"neg"}}.get(new_side)
     if wanted is None:
         wanted = {"neg", "neutral"} if announced == "buy" else {"pos", "neutral"} if announced == "sell" else {"neutral"}
-    texts = [r["text"] for r in (signal.get("reasons") or []) if isinstance(r, dict) and r.get("tone") in wanted and r.get("text")]
-    return "Indicator readings: " + "; ".join(texts[:MAX_REASONS]) + "." if texts else None
+    return [r["text"] for r in (signal.get("reasons") or []) if isinstance(r, dict) and r.get("tone") in wanted and r.get("text")][:MAX_REASONS]
+
+
+def _reasons_line(signal, announced, new_side):
+    texts = reason_texts(signal, announced, new_side)
+    return "Indicator readings: " + "; ".join(texts) + "." if texts else None
+
+
+CURRENCY_SIGNS = {"INR": "\u20b9", "USD": "$"}
+
+
+def money_text(value, currency):
+    """1234.5, "INR" -> "\u20b91,234.50". Currencies without a sign are shown with their code after the number."""
+    sign = CURRENCY_SIGNS.get(currency)
+    return f"{sign}{value:,.2f}" if sign else f"{value:,.2f} {currency or ''}".strip()
 
 
 def format_signal_alert(record, symbol, horizon, announced, new_side, signal):
@@ -145,21 +168,25 @@ def format_signal_alert(record, symbol, horizon, announced, new_side, signal):
     return "\n".join(lines)
 
 
-def build_messages(previous, current, watch, seen, first_run, news_tones=NEWS_TONES, sides=None, items=None):
+def build_messages(previous, current, watch, seen, first_run, news_on=True, sides=None, items=None):
     """previous/current: {symbol: record}. Returns (lines, updated_seen_list).
 
     sides remembers, for each stock and horizon, the side (buy, hold or sell) last announced. It is updated in
     place, so the caller can keep it between runs. A move is measured from that side, which means a score that
     drifts up slowly cannot slip past without an alert.
 
-    items, if given, receives {"symbol", "kind"} for each line in the same order, so the caller can add links.
+    items, if given, receives one dict per line in the same order, with what is needed to lay the alert out
+    ({"kind": "signal", ...} or {"kind": "news", ...}) and to link it. Readings come before headlines.
 
-    On the first run nothing is reported, the current headlines are only recorded as seen. Headlines of a tone
-    that is switched off are also recorded as seen, so turning the tone on later does not replay old news.
+    News is passed on exactly as published: a headline about the company from the last few hours, with its source
+    and link. No good-or-bad tone is worked out from its words, and news never changes a reading.
+
+    On the first run nothing is reported, the current headlines are only recorded as seen. At most one headline per
+    stock and NEWS_PER_RUN per run are reported. The others are recorded as seen and stay on the site.
     """
     sides = {} if sides is None else sides
-    items = [] if items is None else items
-    seen_set, seen_list, lines = set(seen), list(seen), []
+    seen_set, seen_list = set(seen), list(seen)
+    readings, headlines = [], []
     for symbol in watch:
         record = current.get(symbol)
         if not record:
@@ -180,54 +207,35 @@ def build_messages(previous, current, watch, seen, first_run, news_tones=NEWS_TO
             if new_side:
                 stored[horizon] = new_side
                 if not first_run:
-                    lines.append(format_signal_alert(record, symbol, horizon, announced, new_side, signal))
-                    items.append({"symbol": symbol, "kind": "signal", "horizon": horizon, "side": new_side, "announced": announced})
-        for item in record["news"]["alerts"]:
+                    score = signal.get("score")
+                    readings.append((format_signal_alert(record, symbol, horizon, announced, new_side, signal), {
+                        "symbol": symbol, "kind": "signal", "horizon": horizon, "side": new_side, "announced": announced,
+                        "name": record["name"], "label": label, "score": score if isinstance(score, int) and not isinstance(score, bool) else None,
+                        "price": record.get("price"), "currency": record.get("currency") or "",
+                        "levels": level_details(record, new_side, horizon) if new_side in ("buy", "sell") else None,
+                        "reasons": reason_texts(signal, announced, new_side)}))
+        reported_for_stock = False
+        for item in (record.get("news") or {}).get("fresh", []):
             key = news_key(item)
             if key in seen_set:
                 continue
             seen_set.add(key)
             seen_list.append(key)
-            if not first_run and item["strong"] in news_tones:
-                tone = "Negative" if item["strong"] == "neg" else "Positive"
-                lines.append(f"{tone} news, {record['name']} ({symbol}): {item['title']} ({item['source']}, {news.age_text(item['age_min'])})")
-                items.append({"symbol": symbol, "kind": "news"})
+            if first_run or not news_on or reported_for_stock or len(headlines) >= NEWS_PER_RUN:
+                continue
+            reported_for_stock = True
+            headlines.append((f"News, {record['name']} ({symbol}): {item['title']} ({item['source']}, {news.age_text(item['age_min'])})", {
+                "symbol": symbol, "kind": "news", "name": record["name"], "title": item["title"], "source": item["source"],
+                "link": item.get("link") or "", "age_min": item["age_min"]}))
+    lines = []
+    items = [] if items is None else items
+    for text, detail in readings + headlines:
+        lines.append(text)
+        items.append(detail)
     return lines, seen_list[-SEEN_LIMIT:]
 
 
 ADVISORY = "Educational information only, not investment advice. We are not a SEBI-registered adviser or research analyst."
-
-
-def digest(lines, links=None, limit=DIGEST_LINES, max_chars=TELEGRAM_MAX_CHARS, note=""):
-    """One message for a run. See digest_with_count."""
-    return digest_with_count(lines, links, limit, max_chars, note)[0]
-
-
-def digest_with_count(lines, links=None, limit=DIGEST_LINES, max_chars=TELEGRAM_MAX_CHARS, note=""):
-    """One message for a run, and how many of the alerts it contains (always the first ones).
-
-    links, if given, has one address (or None) per line. Alerts that do not fit the message are counted, not
-    dropped: all of them stay in the app."""
-    footer_room = 80 + len(ADVISORY) + 2 + (len(note) + 2 if note else 0)
-    blocks = []
-    for index, line in enumerate(lines):
-        link = links[index] if links and index < len(links) else None
-        blocks.append(line + (f"\nFull analysis: {link}" if link else ""))
-    shown, used = [], 0
-    for block in blocks[:limit]:
-        cost = len(block) + 2
-        if used + cost > max_chars - footer_room and shown:
-            break
-        shown.append(block)
-        used += cost
-    text = "\n\n".join(shown)
-    if len(lines) > len(shown):
-        text += f"\n\n+{len(lines) - len(shown)} more alerts. Open the app to see them."
-    if note and text:
-        text += f"\n\n{note}"
-    if text:
-        text += f"\n\n{ADVISORY}"
-    return text, len(shown)
 
 
 def post_telegram(token, chat_id, text, reply_to=None):
@@ -262,41 +270,41 @@ def send_telegram(token, chat_id, text):
 def format_outcome(call, outcome, link=None):
     """The reply sent when a reading's price reaches its reference level or its volatility risk level."""
     name = call.get("name") or call["symbol"]
-    horizon = HORIZON_TEXT[call["horizon"]].lower()
     hit_target = outcome["outcome"] == "target"
+    currency = call.get("currency") or ""
     price, exit_price = call["price"], outcome["exit_price"]
     move = (exit_price / price - 1) * 100
     verb = "rose" if exit_price >= price else "fell"
     side_word = SIDE_TEXT.get(call["side"], call["side"])
-    agreed = f"in line with the {side_word} reading" if hit_target else f"against the {side_word} reading"
     days = outcome["days_held"]
-    lines = [f"{'REFERENCE LEVEL REACHED' if hit_target else 'VOLATILITY RISK LEVEL REACHED'}: {name} ({call['symbol']}) {horizon}, {side_word} reading",
-             f"Price {verb} to {exit_price:.2f} on {outcome['resolved_date']} ({move:+.1f}% from the {price:.2f} alert price), {agreed}. "
-             f"{days} trading day{'s' if days != 1 else ''} after the alert."]
+    head = "\u2705 Reference level reached" if hit_target else "\u26a0\ufe0f Volatility risk level reached"
+    lines = [f"{head}: {name} ({call['symbol']})",
+             f"\u2022 {HORIZON_TEXT[call['horizon']]} \u00b7 {side_word.capitalize()} reading \u00b7 alerted at {money_text(price, currency)}",
+             f"\u2022 Price {verb} to {money_text(exit_price, currency)} ({move:+.1f}%) on {outcome['resolved_date']}, "
+             f"{days} trading day{'s' if days != 1 else ''} after the alert"]
     if link:
-        lines.append(f"Full analysis: {link}")
-    lines.append(ADVISORY)
+        lines.append(f"\u2022 Open analysis: {link}")
+    lines.append("\u2139\ufe0f " + ADVISORY)
     return "\n".join(lines)
 
 
-_NEWS_LINE = re.compile(r"^(Positive|Negative) news, .*? \(([^()]+)\): (.*) \((.*), [^,()]*\)$", re.S)
+_NEWS_LINE = re.compile(r"^((?:Positive |Negative )?)[Nn]ews, .*? \(([^()]+)\): (.*) \((.*), [^,()]*\)$", re.S)
 
 
 def drop_irrelevant(log, records):
-    """Remove logged news alerts that no longer pass the relevance and tone rules, so a wrong one does not linger on the page.
+    """Clean the logged alerts: remove news that is not clearly about its stock, and old "Positive news" or
+    "Negative news" entries, whose tone was guessed from words and is no longer shown.
 
     records: {symbol: record}. Entries that are not news alerts, or whose stock is unknown, are kept."""
     kept = []
     for entry in log:
         text = entry.get("text") if isinstance(entry, dict) else None
         match = _NEWS_LINE.match(text) if isinstance(text, str) else None
+        if match and match.group(1):
+            continue
         record = records.get(match.group(2)) if match else None
-        if record:
-            tone, symbol, title, source = match.groups()
-            if not news.is_relevant(title, record["name"], symbol.split(".")[0], source):
-                continue
-            if news.headline_sentiment(title)[1] != ("pos" if tone == "Positive" else "neg"):
-                continue
+        if record and not news.is_relevant(match.group(3), record["name"], match.group(2).split(".")[0], match.group(4)):
+            continue
         kept.append(entry)
     return kept
 

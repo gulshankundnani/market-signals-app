@@ -27,12 +27,12 @@ def make_calls(items, records, now_ts):
     return found
 
 
-def attach_message(calls, shown, message_id):
-    """Remember which Telegram message announced each call, for those that were in the sent digest."""
+def attach_message(calls, shown, message_id, start=0):
+    """Remember which Telegram message announced each call: those whose position is from start up to shown."""
     if not message_id:
         return
     for index, call in calls:
-        if index < shown:
+        if start <= index < shown:
             call["telegram_message_id"] = message_id
 
 

@@ -11,7 +11,7 @@ It is not investment advice. Signals come from fixed rules on free, delayed data
 | Feature | Source | Notes |
 |---|---|---|
 | Prices, signals, patterns, risk, backtest | Yahoo Finance (free) | Prices can be up to 15 minutes late |
-| News and tone | Google News | A headline counts toward a stock's news tone or alerts only if it is clearly about the company: the full name, a ticker that is not an ordinary word, or a single name word together with business wording (shares, results, Q2, dividend). Stories about people or sports that share a name are ignored. Breaking-news alerts need a headline from the last 6 hours; older ones still count toward the tone for up to 48 hours |
+| News | Google News | Shown as published, with source and age. No good-or-bad tone is worked out from the words. The stock comes first: a headline is attached to a stock only if it is clearly about the company: the full name, a ticker that is not an ordinary word, or a single name word together with business wording (shares, results, Q2, dividend). Stories about people or sports that share a name, rating headlines that name a bank only as the one giving the rating, lists and roundups, and headlines about more than one listed company are ignored. A headline is "fresh", and can be sent as an alert, for 6 hours |
 | Buying / selling pressure | Volume (Chaikin Money Flow, up-volume share) | A proxy. The exchange order book is not published for free |
 | NSE delivery % and bulk/block deals | NSE end-of-day files | India only, updated after each trading day |
 | Dividends | Actual payments from Yahoo | Frequency, amount, 12-month and recurring yield, specials, overdue payments |
@@ -56,30 +56,54 @@ not vanish from the page.
 `config/alerts.json` controls what is watched:
 
 ```json
-{"symbols": ["*"], "news": ["neg", "pos"]}
+{"symbols": ["*"], "news": true}
 ```
 
 * `symbols`: `["*"]` watches every stock. Or list the ones you want, for example `["TCS.NS", "SBIN.NS", "AAPL"]`.
-* `news`: which breaking headlines count. Use `["neg"]` for bad news only, to keep the channel quieter.
+* `news`: `true` includes fresh headlines about the stock in the alerts, `false` leaves them out. Headlines are shown as
+  published, with their source and a link to the article. The app never judges one as good or bad news.
 
-An alert is raised when a watched stock's short- or long-term signal moves between buy, hold and sell, and when
-breaking news that names the company appears. To stop a score that hovers at a threshold from sending a message
+An alert is raised when a watched stock's short- or long-term signal moves between buy, hold and sell, and when a
+headline from the last 6 hours that is clearly about the company appears (at most one per stock and 6 per run). To stop a score that hovers at a threshold from sending a message
 every run, a stock only moves into Buy or Sell at a score of +/-25 and only drops back once it falls through
 +/-10. The move is measured from the side last announced, so a slow drift is still reported once it is clear.
-The first run only records the current state and raises nothing. If many stocks move in one run, the message
-shows the first 15 and counts the rest, and the Market tab lists all recent alerts.
+The first run only records the current state and raises nothing. A busy run is sent as up to 3 messages, and anything
+beyond them is counted, with all alerts listed on the Market tab.
 
 ### What an alert looks like
 
-Each alert says what changed, gives a resistance or support reference and a volatility risk level, lists the
-indicator readings behind it, and links to the full analysis:
+Each Telegram message is a short list of bulleted cards, readings first and headlines second. A reading card says what
+changed, gives a resistance or support reference and a volatility risk level, lists the indicator readings behind it,
+and links to the full analysis. A headline card shows the headline as published, its source and age, and links to the
+article and to the stock's analysis:
 
 ```
-STRONGLY ALIGNED BULLISH: Apple (AAPL)
-Weeks view: Mixed -> Strongly aligned bullish (indicator alignment +53). Price 356.27 USD
-Resistance reference 389.14 (+9.2%, volatility-based, 2x the risk distance). Volatility risk level 339.83 (-4.6%).
-Why: Trend: price above 20-day average, 20-day above 50-day; Momentum: MACD positive and rising; RSI 61 is in the normal range.
-Full analysis: https://marketsignals-app.github.io/market-signals-app/#stock=AAPL&section=signals
+📊 Market Signals · Mon 16 Nov, 09:38 IST
+1 reading change · 1 headline
+
+━━ READINGS ━━
+
+🔴 Coal India (COALINDIA.NS)
+Aligned bearish · Weeks view
+• Change: Mixed → Aligned bearish (alignment -27)
+• Price: ₹398.80
+• Support reference: ₹364.95 (-8.5%, volatility-based, 2x the risk distance)
+• Volatility risk level: ₹415.73 (+4.2%)
+• Indicator readings:
+   – Trend: price below 20-day average, 20-day below 50-day
+   – Volume pressure: selling pressure over 20 days
+• Open analysis: https://marketsignals-app.github.io/market-signals-app/#stock=COALINDIA.NS&section=signals
+
+━━ NEWS ━━
+
+📰 Berkshire Hathaway (BRK-B)
+• Headline: Berkshire's Rails and Renewables Offset a Costlier GEICO as Buybacks Outrun Forecasts
+• Source: ad-hoc-news.de · 64 min ago
+• Read article: https://news.google.com/...
+• Open analysis: https://marketsignals-app.github.io/market-signals-app/#stock=BRK-B&section=news
+
+ℹ️ Levels are indicative, from fixed chart rules. Not advice.
+Educational information only, not investment advice. We are not a SEBI-registered adviser or research analyst.
 ```
 
 Alert links are built from the repository's owner and name on every run, so they follow the repository if it is
@@ -89,9 +113,12 @@ moved or renamed. Nothing in the code holds the address.
   it for a bearish one). This distance is called R.
 * **Short-term target:** the nearest resistance (buy) or support (sell) if it is 1 to 4 R away, otherwise 2 R.
 * **Long-term target:** the 52-week high (buy) or low (sell) if it is at least 1 R away, otherwise 3 R.
-* **Why:** the reasons on the stock's page that support the new signal. For a signal that has faded to hold, the
+* **Indicator readings:** the reasons on the stock's page that support the new signal. For a signal that has faded to hold, the
   reasons that weakened the old one, and no reference level is given.
-* **News alerts** name the headline, its source and age, and link to the stock's news.
+* **News is separate from readings.** It never changes a reading and is never graded as good or bad. A headline is
+  attached to a stock only when it is clearly about that stock (see the News row in the table above), and a headline about
+  more than one company in the list is attached to none of them. The stock comes first and its news follows, never the
+  other way round.
 
 The reference levels come from fixed rules, are not forecasts, and prices can gap past the volatility risk level. Tapping the
 link opens that stock's page on the site, with the alert at the top followed by the full analysis (signals,
@@ -170,7 +197,7 @@ Then open http://127.0.0.1:8765/. Python 3.10+ and Node 18+ are the only require
 
 ## How the signals work
 
-* **Short-term (weeks):** trend (20/50-day averages), MACD, RSI, volume, volume pressure and news tone.
+* **Short-term (weeks):** trend (20/50-day averages), MACD, RSI, volume and volume pressure. News is not part of it.
 * **Long-term (months to years):** price against the 200-day average, golden/death cross, 6-month return, 52-week position and volatility.
 * Each score runs from -100 to +100: +20 or more is Buy, -20 or less is Sell, and +/-50 is Strong.
 * **Backtest:** the same fixed rules are run on up to 5 years of each stock, trading at the next open with a 0.1% cost per trade, and compared with buy-and-hold. The most recent 40% is reported separately. In strong bull markets the rules often lag buy-and-hold, and the app says so.

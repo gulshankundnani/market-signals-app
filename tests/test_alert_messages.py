@@ -2,7 +2,7 @@ import json
 import unittest
 from urllib.parse import unquote
 
-from engine import alerts, signals
+from engine import alerts, digest, signals
 
 
 class TargetTests(unittest.TestCase):
@@ -88,7 +88,7 @@ class ReasonPartsTests(unittest.TestCase):
 
     def test_every_reason_carries_its_component_and_value(self):
         ind = signals.build_indicators(self.bars())
-        for score, reasons, weights in (signals.short_score(ind, 299, news=0.5) + (signals.SHORT_WEIGHTS,),
+        for score, reasons, weights in (signals.short_score(ind, 299) + (signals.SHORT_WEIGHTS,),
                                         signals.long_score(ind, 299) + (signals.LONG_WEIGHTS,)):
             self.assertIsNotNone(score)
             self.assertTrue(reasons)
@@ -131,7 +131,7 @@ def record(label="Buy", score=30, long_label="Hold", long_score=0, **overrides):
            "levels": {"zones": {"resistance": [{"level": 108.0, "touches": 2}], "support": [{"level": 92.0, "touches": 2}]}},
            "short": {"label": label, "score": score, "reasons": reasons()},
            "long": {"label": long_label, "score": long_score, "reasons": reasons()},
-           "news": {"alerts": []}}
+           "news": {"fresh": []}}
     rec.update(overrides)
     return rec
 
@@ -213,16 +213,54 @@ class SignalMessageTests(unittest.TestCase):
         self.assertFalse(text.split("\n")[1].endswith(" "))
 
 
+def headline(title="Quarterly results", n=1, age=5):
+    return {"title": title, "link": f"https://x/{n}", "source": "Wire", "age_min": age}
+
+
 class BuildItemsTests(unittest.TestCase):
-    def test_items_line_up_with_the_lines_and_say_what_kind_of_alert_each_is(self):
-        news = {"title": "Probe opened", "link": "https://x/1", "source": "S", "strong": "neg", "age_min": 5}
-        current = {"A": record("Buy", 30, news={"alerts": [news]}), "B": record("Buy", 30)}
-        sides = {"A": {"short": "hold", "long": "hold"}, "B": {"short": "hold", "long": "hold"}}
+    SIDES = {"hold": "hold"}
+
+    @staticmethod
+    def run_items(current, seen=(), **kwargs):
+        sides = {s: {"short": "hold", "long": "hold"} for s in current}
         items = []
-        lines, _ = alerts.build_messages({}, current, ["A", "B"], [], False, sides=sides, items=items)
+        lines, seen_after = alerts.build_messages({}, current, list(current), list(seen), False, sides=sides, items=items, **kwargs)
+        return lines, items, seen_after
+
+    def test_readings_come_before_headlines_and_items_line_up_with_lines(self):
+        current = {"A": record("Buy", 30, news={"fresh": [headline()]}), "B": record("Buy", 30)}
+        lines, items, _ = self.run_items(current)
         self.assertEqual(len(lines), len(items))
-        self.assertEqual([(i["symbol"], i["kind"]) for i in items], [("A", "signal"), ("A", "news"), ("B", "signal")])
-        self.assertTrue(lines[1].startswith("Negative news"))
+        self.assertEqual([(i["symbol"], i["kind"]) for i in items], [("A", "signal"), ("B", "signal"), ("A", "news")])
+        self.assertTrue(lines[2].startswith("News, "))
+        self.assertNotRegex(lines[2], "Positive|Negative")
+
+    def test_a_reading_item_carries_what_the_card_needs(self):
+        _, items, _ = self.run_items({"A": record("Buy", 30)})
+        item = items[0]
+        self.assertEqual((item["name"], item["label"], item["score"], item["price"], item["side"], item["announced"]),
+                         ("Acme Ltd", "Buy", 30, 100.0, "buy", "hold"))
+        self.assertEqual(item["levels"]["kind"], "Resistance reference")
+        self.assertTrue(item["reasons"])
+
+    def test_a_headline_item_carries_its_source_and_article_link(self):
+        _, items, _ = self.run_items({"A": record("Hold", 0, news={"fresh": [headline("Plant opened", 7, 64)]})})
+        self.assertEqual(items, [{"symbol": "A", "kind": "news", "name": "Acme Ltd", "title": "Plant opened",
+                                  "source": "Wire", "link": "https://x/7", "age_min": 64}])
+
+    def test_one_headline_per_stock_and_a_cap_per_run_and_the_rest_are_marked_seen(self):
+        two = {"fresh": [headline("First", 1), headline("Second", 2)]}
+        lines, items, seen = self.run_items({"A": record("Hold", 0, news=two)})
+        self.assertEqual([i["title"] for i in items], ["First"])
+        self.assertEqual(len(seen), 2, "the second headline is recorded so it is not reported later")
+        many = {f"S{n}": record("Hold", 0, news={"fresh": [headline(f"Title {n}", n)]}) for n in range(alerts.NEWS_PER_RUN + 4)}
+        _, items, _ = self.run_items(many)
+        self.assertEqual(len(items), alerts.NEWS_PER_RUN)
+
+    def test_news_never_changes_a_reading(self):
+        base = self.run_items({"A": record("Buy", 30)})[0]
+        with_news = self.run_items({"A": record("Buy", 30, news={"fresh": [headline("Fraud probe opened")]})})[0]
+        self.assertEqual(base[0], with_news[0])
 
     def test_signal_alerts_in_a_run_carry_targets(self):
         lines, _ = alerts.build_messages({}, {"A": record("Buy", 30)}, ["A"], [], False, sides={"A": {"short": "hold", "long": "hold"}})
@@ -244,42 +282,93 @@ class LinkAndDigestTests(unittest.TestCase):
             self.assertEqual(unquote(encoded), symbol)
             self.assertNotRegex(encoded, r"[&#? =]")
 
-    def test_each_alert_gets_its_own_link(self):
-        text = alerts.digest(["one", "two"], [self.SITE + "#a", None])
-        self.assertIn("one\nFull analysis: " + self.SITE + "#a", text)
-        self.assertEqual(text.count("Full analysis:"), 1)
-        self.assertEqual(alerts.digest(["only"], None), "only" + chr(10)*2 + alerts.ADVISORY)
-        self.assertEqual(alerts.digest(["only"], []), "only" + chr(10)*2 + alerts.ADVISORY)
+    ITEMS_LINKS = None
 
-    def test_the_note_is_added_once_at_the_end(self):
-        text = alerts.digest(["one", "two"], note=alerts.NOTE)
-        self.assertTrue(text.endswith(alerts.NOTE + chr(10)*2 + alerts.ADVISORY))
+    @staticmethod
+    def reading(n=1, side="sell"):
+        return {"kind": "signal", "symbol": f"S{n}.NS", "name": f"Stock {n}", "horizon": "short", "side": side, "announced": "hold",
+                "label": "Sell" if side == "sell" else "Buy", "score": -27 if side == "sell" else 31, "price": 398.8, "currency": "INR",
+                "levels": {"kind": "Support reference", "price": 364.95, "pct": -8.5, "basis": "nearest support", "risk_price": 415.73, "risk_pct": 4.2},
+                "reasons": ["Trend: price below 20-day average", "Volume pressure: selling pressure over 20 days"]}
+
+    @staticmethod
+    def story(n=1, link="https://news.google.com/a"):
+        return {"kind": "news", "symbol": f"N{n}", "name": f"Name {n}", "title": f"Headline number {n}", "source": "Livemint",
+                "link": link, "age_min": 75}
+
+    def test_a_reading_card_is_a_bulleted_list_with_its_figures_and_link(self):
+        card = digest.reading_card(self.reading(), self.SITE + "#stock=S1.NS")
+        for expected in ("Stock 1 (S1.NS)", "Aligned bearish \u00b7 Weeks view", "\u2022 Change: Mixed \u2192 Aligned bearish (alignment -27)",
+                         "\u2022 Price: \u20b9398.80", "\u2022 Support reference: \u20b9364.95 (-8.5%, nearest support)",
+                         "\u2022 Volatility risk level: \u20b9415.73 (+4.2%)", "\u2022 Indicator readings:",
+                         "   \u2013 Trend: price below 20-day average", "\u2022 Open analysis: " + self.SITE + "#stock=S1.NS"):
+            self.assertIn(expected, card)
+
+    def test_a_reading_that_faded_says_there_is_no_reference_level(self):
+        item = {**self.reading(), "side": "hold", "label": "Hold", "levels": None, "announced": "sell", "score": 2}
+        card = digest.reading_card(item, None)
+        self.assertIn("\u2022 No reference level: the reading has faded to mixed", card)
+        self.assertNotIn("Open analysis", card)
+
+    def test_a_news_card_has_the_headline_source_age_and_both_links_and_no_tone(self):
+        card = digest.news_card(self.story(), self.SITE + "#stock=N1&section=news")
+        for expected in ("Name 1 (N1)", "\u2022 Headline: Headline number 1", "\u2022 Source: Livemint \u00b7 75 min ago",
+                         "\u2022 Read article: https://news.google.com/a", "\u2022 Open analysis: " + self.SITE):
+            self.assertIn(expected, card)
+        self.assertNotRegex(card, "(?i)positive|negative|bullish|bearish")
+
+    def test_a_news_card_without_an_article_link_or_source_still_reads_cleanly(self):
+        card = digest.news_card({**self.story(), "link": "", "source": "", "age_min": None}, None)
+        self.assertIn("Source: unknown \u00b7 time unknown", card)
+        self.assertNotIn("Read article", card)
+
+    def test_the_digest_has_a_header_with_counts_sections_and_one_footer(self):
+        items = [self.reading(1), self.reading(2, "buy"), self.story(1)]
+        links = [self.SITE + f"#{n}" for n in range(3)]
+        [(text, start, end)] = digest.render(items, links, 1_794_700_000)
+        self.assertEqual((start, end), (0, 3))
+        self.assertTrue(text.startswith("\U0001F4CA Market Signals \u00b7 Sun 15 Nov, 05:16 IST\n2 reading changes \u00b7 1 headline"))
+        self.assertLess(text.index("READINGS"), text.index("NEWS"))
+        self.assertEqual(text.count("READINGS"), 1)
+        self.assertEqual(text.count("\U0001F534"), 1)
+        self.assertEqual(text.count("\U0001F7E2"), 1)
+        self.assertTrue(text.endswith(alerts.NOTE + chr(10) + alerts.ADVISORY))
         self.assertEqual(text.count(alerts.NOTE), 1)
-        self.assertEqual(alerts.digest([], note=alerts.NOTE), "")
 
-    def test_the_message_never_exceeds_telegrams_limit_and_counts_what_is_left_out(self):
-        big = "x" * 380
-        lines = [f"{i} {big}" for i in range(30)]
-        links = [self.SITE + f"#stock=S{i}" for i in range(30)]
-        text = alerts.digest(lines, links, note=alerts.NOTE)
-        self.assertLessEqual(len(text), alerts.TELEGRAM_MAX_CHARS)
-        shown = text.count("Full analysis:")
-        self.assertGreater(shown, 0)
-        self.assertLess(shown, 30)
-        self.assertIn(f"+{30 - shown} more alerts. Open the app to see them.", text)
-        self.assertTrue(text.endswith(alerts.NOTE + chr(10)*2 + alerts.ADVISORY))
+    def test_nothing_to_send_gives_no_message(self):
+        self.assertEqual(digest.render([], [], 1_794_700_000), [])
 
-    def test_the_first_alert_is_always_shown(self):
-        text = alerts.digest(["y" * 5000, "second"], max_chars=1000)
-        self.assertTrue(text.startswith("y"))
-        self.assertIn("+1 more alerts", text)
+    def test_a_busy_run_is_split_into_messages_within_telegrams_limit_with_no_gaps(self):
+        items = [self.reading(n) for n in range(30)]
+        links = [self.SITE + f"#stock=S{n}" for n in range(30)]
+        messages = digest.render(items, links, 1_794_700_000)
+        self.assertGreater(len(messages), 1)
+        self.assertLessEqual(len(messages), digest.MAX_MESSAGES)
+        for text, start, end in messages:
+            self.assertLessEqual(len(text), alerts.TELEGRAM_MAX_CHARS)
+            self.assertTrue(text.endswith(alerts.ADVISORY))
+        self.assertEqual(messages[0][1], 0)
+        for (_, _, end), (_, start, _) in zip(messages, messages[1:]):
+            self.assertEqual(end, start)
+        self.assertIn(f"({len(messages)}/{len(messages)})", messages[-1][0].split("\n")[0])
 
-    def test_a_realistic_busy_run_fits(self):
-        rec = record("Strong Buy", 55)
-        lines = [message(rec) for _ in range(15)]
-        links = [alerts.stock_link(self.SITE, f"STOCK{i}.NS") for i in range(15)]
-        text = alerts.digest(lines, links, note=alerts.NOTE)
-        self.assertLessEqual(len(text), alerts.TELEGRAM_MAX_CHARS)
+    def test_alerts_beyond_the_last_message_are_counted_not_dropped(self):
+        items = [self.reading(n) for n in range(60)]
+        messages = digest.render(items, [None] * 60, 1_794_700_000)
+        sent = messages[-1][2]
+        self.assertLess(sent, 60)
+        self.assertIn(f"+{60 - sent} more alerts. Open the app to see them.", messages[-1][0])
+
+    def test_headlines_that_follow_readings_get_their_own_section_in_the_message_that_carries_them(self):
+        items = [self.reading(1), self.story(1), self.story(2)]
+        [(text, _, _)] = digest.render(items, [None] * 3, 1_794_700_000)
+        self.assertEqual(text.count("NEWS"), 1)
+        self.assertIn("2 headlines", text)
+
+    def test_one_very_long_headline_is_shortened(self):
+        card = digest.news_card({**self.story(), "title": "word " * 200}, None)
+        self.assertLessEqual(len(card.split("\n")[1]), digest.MAX_TITLE + 30)
+        self.assertIn("\u2026", card)
 
 
 class LogSymbolTests(unittest.TestCase):
@@ -303,12 +392,11 @@ class LogSymbolTests(unittest.TestCase):
 
 class AdvisoryTests(unittest.TestCase):
     def test_every_digest_and_outcome_message_carries_the_advisory_and_stays_in_limits(self):
-        many = [f"STRONG BUY signal: Company {n} ({n})" + "x" * 300 for n in range(40)]
-        text = alerts.digest(many, [f"https://s/#stock={n}" for n in range(40)])
-        self.assertTrue(text.endswith(alerts.ADVISORY))
-        self.assertLessEqual(len(text), alerts.TELEGRAM_MAX_CHARS)
-        self.assertEqual(alerts.digest([]), "")
-        reply = alerts.format_outcome({"symbol": "A", "name": "A", "horizon": "short", "side": "buy", "price": 100.0},
+        items = [LinkAndDigestTests.reading(n) for n in range(40)]
+        for text, _, _ in digest.render(items, [f"https://s/#stock={n}" for n in range(40)], 1_794_700_000):
+            self.assertTrue(text.endswith(alerts.ADVISORY))
+            self.assertLessEqual(len(text), alerts.TELEGRAM_MAX_CHARS)
+        reply = alerts.format_outcome({"symbol": "A", "name": "A", "horizon": "short", "side": "buy", "price": 100.0, "currency": "USD"},
                                       {"outcome": "target", "exit_price": 108.0, "resolved_date": "2026-01-01", "days_held": 3})
         self.assertTrue(reply.endswith(alerts.ADVISORY))
 
@@ -321,15 +409,19 @@ class DropIrrelevantTests(unittest.TestCase):
         return {"id": text[:8], "symbol": symbol, "text": text, "ts": 1}
 
     def test_wrong_news_alerts_are_removed_and_right_ones_stay(self):
-        wrong = self.entry("Negative news, Trent (TRENT.NS): The Gary Trent Jr. Investigation Could DESTROY the Franchise (Yahoo Sports, 876 min ago)", "TRENT.NS")
-        roundup = self.entry("Positive news, Power Finance Corporation (PFC.NS): Upcoming dividend, buyback record date: MRF, SCI, PFC, PTC (Livemint, 197 min ago)", "PFC.NS")
-        right = self.entry("Positive news, Apple (AAPL): Apple (AAPL) shares surge after record profit (Reuters, 12 min ago)", "AAPL")
+        wrong = self.entry("News, Trent (TRENT.NS): The Gary Trent Jr. Investigation Could DESTROY the Franchise (Yahoo Sports, 14 h ago)", "TRENT.NS")
+        roundup = self.entry("News, Power Finance Corporation (PFC.NS): Upcoming dividend, buyback record date: MRF, SCI, PFC, PTC (Livemint, 3 h ago)", "PFC.NS")
+        broker = self.entry("News, Apple (AAPL): Ecolab (ECL) Shares Rise After Apple Upgrade (Wire, 5 min ago)", "AAPL")
+        right = self.entry("News, Apple (AAPL): Apple (AAPL) shares surge after record profit (Reuters, 12 min ago)", "AAPL")
         signal = self.entry("ALIGNED BULLISH: Apple (AAPL)" + chr(10) + "Weeks view: Mixed -> Aligned bullish. Price 100.00 USD", "AAPL")
-        wrong_tone = self.entry("Positive news, Apple (AAPL): Apple (AAPL) shares upgraded to Sell on weak signals (MarketsMojo, 5 min ago)", "AAPL")
-        broker = self.entry("Positive news, Apple (AAPL): Ecolab (ECL) Shares Rise After Apple Upgrade (Wire, 5 min ago)", "AAPL")
-        unknown = self.entry("Negative news, Ghost Corp (GHOST): Ghost fraud probe (Wire, 5 min ago)", "GHOST")
-        kept = alerts.drop_irrelevant([wrong, roundup, wrong_tone, broker, right, signal, unknown], self.RECORDS)
+        unknown = self.entry("News, Ghost Corp (GHOST): Ghost files results (Wire, 5 min ago)", "GHOST")
+        kept = alerts.drop_irrelevant([wrong, roundup, broker, right, signal, unknown], self.RECORDS)
         self.assertEqual(kept, [right, signal, unknown])
+
+    def test_old_entries_that_guessed_good_or_bad_news_are_removed(self):
+        positive = self.entry("Positive news, Apple (AAPL): Apple (AAPL) shares surge after record profit (Reuters, 12 min ago)", "AAPL")
+        negative = self.entry("Negative news, Apple (AAPL): Apple (AAPL) faces probe (Reuters, 12 min ago)", "AAPL")
+        self.assertEqual(alerts.drop_irrelevant([positive, negative], self.RECORDS), [])
 
     def test_junk_in_the_log_is_ignored(self):
         self.assertEqual(alerts.drop_irrelevant(["x", None, {"text": 5}, {}], self.RECORDS), ["x", None, {"text": 5}, {}])
