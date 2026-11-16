@@ -1,8 +1,8 @@
-const CACHE = 'signals-v30';
+const CACHE = 'signals-v31';
 const SHELL = ['./', 'index.html', 'advisory.html', 'style.css', 'app.js', 'ipo.js', 'icon.svg', 'manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL.map((path) => new Request(path, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (event) => {
@@ -13,13 +13,15 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-/* Network first, so the page always gets fresh data. The cache is only a fallback when offline. */
+/* Network first, so the page always gets fresh data. "no-cache" makes the browser check with the server instead of reusing its
+   own 10-minute copy of a file (GitHub Pages' default), so a new version shows up on the next visit. The cache is only a
+   fallback when offline. */
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
   event.respondWith(
-    fetch(request)
+    fetch(request, { cache: 'no-cache' })
       .then((response) => {
         if (response.ok) {
           const copy = response.clone();
