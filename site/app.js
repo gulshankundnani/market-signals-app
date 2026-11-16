@@ -70,7 +70,9 @@
   function badge(sig) {
     const label = (sig && sig.label) || 'N/A';
     const cls = label.includes('Buy') ? 'buy' : label.includes('Sell') ? 'sell' : label === 'Hold' ? 'hold' : 'na';
-    return h('span', { class: `badge ${cls}` }, labelText(label), isNum(sig && sig.score) ? h('small', null, ` ${sig.score > 0 ? '+' : ''}${sig.score}`) : null);
+    const shortText = { 'Strong Buy': 'Strong bullish', Buy: 'Bullish', Sell: 'Bearish', 'Strong Sell': 'Strong bearish' }[label] || labelText(label);
+    return h('span', { class: `badge ${cls}`, title: labelText(label) }, h('span', { class: 'bfull' }, labelText(label)), h('span', { class: 'bshort' }, shortText),
+      isNum(sig && sig.score) ? h('small', null, ` ${sig.score > 0 ? '+' : ''}${sig.score}`) : null);
   }
 
   /* ---------- state ---------- */
@@ -554,34 +556,85 @@
       reasonsList(sig.reasons));
   }
 
+  /* Every level in one list, highest price first, so the gaps above and below the price read at a glance. */
+  function levelRows(s) {
+    const zones = ((s.levels || {}).zones) || { support: [], resistance: [] };
+    const rows = [];
+    for (const z of zones.resistance.slice(0, 1)) rows.push({ kind: 'res', label: 'Resistance', note: 'a price area where rises have stalled before', v: z.level });
+    for (const z of zones.support.slice(0, 1)) rows.push({ kind: 'sup', label: 'Support', note: 'a price area where falls have paused before', v: z.level });
+    if (s.stop && isNum(s.stop.price)) rows.push({ kind: 'risk', label: 'Risk level', note: 'two average daily ranges below the price; a close below it means the move has gone against the reading', v: s.stop.price });
+    return rows.filter((r) => isNum(r.v)).sort((a, b) => b.v - a.v);
+  }
+
+  function levelsLadder(s) {
+    const rows = levelRows(s);
+    if (!rows.length || !isNum(s.price)) return null;
+    const now = { kind: 'now', label: 'Price now', v: s.price };
+    const all = [...rows, now].sort((a, b) => b.v - a.v);
+    return h('div', { class: 'ladder' },
+      h('table', { class: 'leveltable' },
+        h('caption', { class: 'sr' }, 'Resistance, support and risk level compared with the price'),
+        h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Level'), h('th', { scope: 'col', class: 'num' }, 'Price'), h('th', { scope: 'col', class: 'num' }, 'From price'))),
+        h('tbody', null, all.map((r) => h('tr', { class: `l-${r.kind}`, title: r.note || '' },
+          h('th', { scope: 'row' }, r.label), h('td', { class: 'num' }, money(r.v, s.currency)),
+          h('td', { class: 'num gap' }, r.kind === 'now' ? '–' : signed((r.v / s.price - 1) * 100, 1)))))),
+      h('p', { class: 'muted small', style: 'margin:4px 0 0' }, 'Resistance: rises have stalled here before. Support: falls have paused here before. Risk level: two average daily ranges below the price.'));
+  }
+
+  /* The price line for the last 90 trading days. Press or drag on it to read the price on any day. */
   function chart(s) {
     const closes = s.spark.filter(isNum);
     if (closes.length < 5) return h('p', { class: 'muted small' }, 'Not enough price history for a chart.');
     const sma = s.spark_sma50;
-    const stop = s.stop && s.stop.price;
-    const zones = ((s.levels || {}).zones) || { support: [], resistance: [] };
+    const rows = levelRows(s);
     const lo0 = Math.min(...closes), hi0 = Math.max(...closes);
     const near = (v) => isNum(v) && v > lo0 * 0.88 && v < hi0 * 1.12;
-    const overlays = [];
-    if (near(stop)) overlays.push({ v: stop, color: 'var(--sell)', dash: '6 4', label: 'Risk level' });
-    for (const z of zones.support.slice(0, 1)) if (near(z.level)) overlays.push({ v: z.level, color: 'var(--buy)', dash: '2 4', label: 'Support' });
-    for (const z of zones.resistance.slice(0, 1)) if (near(z.level)) overlays.push({ v: z.level, color: 'var(--muted)', dash: '2 4', label: 'Resistance' });
+    const colors = { res: ['var(--muted)', '2 4', 'Resistance'], sup: ['var(--buy)', '2 4', 'Support'], risk: ['var(--sell)', '6 4', 'Risk level'] };
+    const overlays = rows.filter((r) => near(r.v));
     const all = closes.concat(overlays.map((o) => o.v));
     const lo = Math.min(...all), hi = Math.max(...all), pad = (hi - lo) * 0.08 || 1;
-    const W = 640, H = 220, L = 8, R = 118, T = 10, B = 20;
+    const W = 560, H = 230, L = 8, R = 100, T = 14, B = 22;
     const x = (i) => L + (i / (closes.length - 1)) * (W - L - R);
     const y = (v) => T + (1 - (v - (lo - pad)) / (hi - lo + 2 * pad)) * (H - T - B);
     const line = (values) => values.map((v, i) => (isNum(v) ? `${i && isNum(values[i - 1]) ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}` : '')).join(' ');
-    const g = svg('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Price over the last ${closes.length} trading days, from ${closes[0].toFixed(2)} to ${closes[closes.length - 1].toFixed(2)}` });
+    const last = closes[closes.length - 1];
+    const g = svg('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Price over the last ${closes.length} trading days, from ${closes[0].toFixed(2)} to ${last.toFixed(2)}` });
     g.append(svg('path', { d: line(sma), fill: 'none', stroke: 'var(--muted)', 'stroke-width': 1.5, 'stroke-dasharray': '5 3' }));
-    g.append(svg('path', { d: line(closes), fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2 }));
+    g.append(svg('path', { d: line(closes), fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2.2 }));
+    const seen = {};
     for (const o of overlays) {
-      g.append(svg('line', { x1: L, x2: W - R, y1: y(o.v), y2: y(o.v), stroke: o.color, 'stroke-width': 1.3, 'stroke-dasharray': o.dash }));
-      g.append(svg('text', { x: W - R + 4, y: y(o.v) + 4, fill: o.color, 'font-size': 11 }, `${o.label} ${o.v.toFixed(2)}`));
+      seen[o.kind] = (seen[o.kind] || 0) + 1;
+      const [color, dash, base] = colors[o.kind];
+      const name = seen[o.kind] > 1 ? `${base} ${seen[o.kind]}` : base;
+      g.append(svg('line', { x1: L, x2: W - R, y1: y(o.v), y2: y(o.v), stroke: color, 'stroke-width': 1.6, 'stroke-dasharray': dash }));
+      g.append(svg('text', { x: W - R + 4, y: y(o.v) + 4, fill: color, 'font-size': 13, 'font-weight': 700 }, name));
     }
-    g.append(svg('text', { x: W - R + 4, y: y(closes[closes.length - 1]) + 4, fill: 'var(--text)', 'font-size': 11, 'font-weight': 700 }, closes[closes.length - 1].toFixed(2)));
-    g.append(svg('text', { x: L, y: H - 4, fill: 'var(--muted)', 'font-size': 11 }, `${closes.length} trading days · dashed grey = 50-day average`));
-    return g;
+    g.append(svg('circle', { cx: x(closes.length - 1), cy: y(last), r: 4, fill: 'var(--accent)' }));
+    g.append(svg('text', { x: W - R + 4, y: y(last) + 4, fill: 'var(--text)', 'font-size': 13, 'font-weight': 700 }, 'Price'));
+    const cross = svg('line', { y1: T, y2: H - B, stroke: 'var(--text)', 'stroke-width': 1, visibility: 'hidden' });
+    const dot = svg('circle', { r: 5, fill: 'var(--text)', visibility: 'hidden' });
+    g.append(cross, dot);
+
+    const readout = h('div', { class: 'chartread small', 'aria-live': 'off' }, `Latest ${money(last, s.currency)}. Press or drag on the chart to read a day.`);
+    const show = (ev) => {
+      const box = g.getBoundingClientRect();
+      const i = clamp(Math.round(((ev.clientX - box.left) / box.width * W - L) / (W - L - R) * (closes.length - 1)), 0, closes.length - 1);
+      const daysAgo = closes.length - 1 - i;
+      cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.setAttribute('visibility', 'visible');
+      dot.setAttribute('cx', x(i)); dot.setAttribute('cy', y(closes[i])); dot.setAttribute('visibility', 'visible');
+      readout.textContent = `${daysAgo ? daysAgo + ' trading days ago' : 'Latest'}: ${money(closes[i], s.currency)}${daysAgo ? ` (${signed((last / closes[i] - 1) * 100, 1)} since then)` : ''}`;
+    };
+    const hide = () => { cross.setAttribute('visibility', 'hidden'); dot.setAttribute('visibility', 'hidden'); readout.textContent = `Latest ${money(last, s.currency)}. Press or drag on the chart to read a day.`; };
+    g.style.touchAction = 'pan-y';
+    g.addEventListener('pointerdown', show);
+    g.addEventListener('pointermove', (ev) => { if (ev.pointerType === 'mouse' || ev.buttons) show(ev); });
+    g.addEventListener('pointerleave', hide);
+    g.addEventListener('pointerup', (ev) => { if (ev.pointerType !== 'mouse') hide(); });
+
+    const legend = h('div', { class: 'chartkey small' },
+      h('span', null, h('i', { class: 'sw line' }), 'Price'), h('span', null, h('i', { class: 'sw avg' }), '50-day average'),
+      rows.length ? h('span', { class: 'muted' }, 'Levels and their values are listed at the top of the page.') : null);
+    return h('div', null, readout, g, legend);
   }
 
   function positionCalculator(s) {
@@ -767,7 +820,7 @@
       h('div', { class: 'heroprice' }, h('span', { class: 'px' }, money(s.price, s.currency)), changeChip(s.change_pct), h('span', { class: 'muted small' }, `as of ${s.as_of}`)),
       qualityLine(s),
       h('div', { class: 'verdicts' }, verdictCard('Weeks view', s.short), verdictCard('Months-to-years view', s.long)),
-      glanceSummary(s), rangeBar(s), statsGrid(s), glanceChips(s));
+      glanceSummary(s), levelsLadder(s), rangeBar(s), statsGrid(s), glanceChips(s));
 
     const panels = {
       overview: [
@@ -778,10 +831,7 @@
       technicals: [
         section('Buying and selling pressure', ...pressureBlock(s)),
         positionCalculator(s),
-        section('Levels and risk', kv([
-          ['Volatility risk level', s.stop ? `${money(s.stop.price, s.currency)} (${signed(s.stop.pct, 1)})` : '–'],
-          ['Support', ((s.levels || {}).zones || { support: [] }).support.map((z) => z.level.toFixed(2)).join(', ') || '–'],
-          ['Resistance', ((s.levels || {}).zones || { resistance: [] }).resistance.map((z) => z.level.toFixed(2)).join(', ') || '–'],
+        section('Levels and risk', h('p', { class: 'small muted' }, 'The resistance, support and risk levels are listed at the top of the page. They come from fixed rules on past prices and are references, not promises or advice. Below are the volatility figures.'), kv([
           ['Yearly volatility', r ? percent(r.annual_vol, 0) : '–'], ['1-day loss (95% VaR)', r ? percent(r.var95) : '–'],
           ['Bad-day average loss', r ? percent(r.expected_shortfall95) : '–'], ['Worst fall (1 year)', r ? percent(r.max_drawdown, 0) : '–'], ['Beta', r ? number(r.beta) : '–']])),
         section('Patterns', (s.patterns || []).length ? (s.patterns).map((p) => h('div', { title: p.note, style: 'margin-bottom:6px' }, h('span', { class: `tag ${p.bias === 'bearish' ? 'warn' : ''}` }, `${p.name} (${p.bias})`), h('span', { class: 'muted small' }, p.note))) : h('p', { class: 'muted small' }, 'No notable pattern on the latest candles.'))],

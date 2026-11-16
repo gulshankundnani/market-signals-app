@@ -269,3 +269,47 @@ details.ev[open] > summary::after { transform: rotate(90deg); }
   .catchips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-right: -8px; }
   .catchips .chip { flex: 0 0 auto; white-space: nowrap; }
 }
+
+/* Levels ladder and chart key */
+.ladder { display: grid; gap: 2px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.lrow { display: grid; grid-template-columns: 92px 1fr auto; align-items: center; gap: 8px; min-height: 30px; padding: 2px 6px; border-left: 4px solid var(--hold); border-radius: 4px; }
+.lname { font-size: 12.5px; font-weight: 700; } .lval { font-variant-numeric: tabular-nums; text-align: right; } .lgap { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 92px; text-align: right; }
+.l-res { border-left-color: var(--muted); } .l-sup { border-left-color: var(--buy); } .l-sup .lname { color: var(--buy); }
+.l-risk { border-left-color: var(--sell); } .l-risk .lname { color: var(--sell); }
+.l-now { border-left-color: var(--accent); background: var(--hold-bg); } .l-now .lname { color: var(--accent); }
+.chartread { min-height: 20px; margin-bottom: 2px; font-variant-numeric: tabular-nums; }
+.chartkey { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px; }
+.chartkey .sw { display: inline-block; width: 16px; height: 0; margin-right: 5px; border-top: 3px solid var(--muted); vertical-align: middle; }
+.chartkey .sw.line { border-top-color: var(--accent); } .chartkey .sw.avg { border-top-style: dashed; }
+.chartkey .k-sup .sw { border-top-color: var(--buy); border-top-style: dotted; } .chartkey .k-res .sw { border-top-style: dotted; } .chartkey .k-risk .sw { border-top-color: var(--sell); border-top-style: dashed; }
+svg.chart { cursor: crosshair; }
+@media (max-width: 400px) { .lrow { grid-template-columns: 78px 1fr auto; gap: 4px; } .lgap { min-width: 78px; } }
+
+/* Compact labels in tables and cards on phones, so nothing is clipped */
+.bshort { display: none; }
+@media (max-width: 720px) {
+  td .bfull, .verdict .bfull, .glance .bfull { display: none; } td .bshort, .verdict .bshort { display: inline; }
+  td .badge { white-space: nowrap; }
+  .helpbtn { width: 36px; height: 36px; }
+  details > summary { min-height: 40px; display: flex; align-items: center; }
+}
+@media (max-width: 720px) {
+  td .badge { padding: 1px 5px; font-size: 11.5px; }
+  .star { min-width: 30px; }
+}
+
+/* Levels as a table */
+.ladder { display: block; }
+.leveltable { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.leveltable th, .leveltable td { padding: 7px 8px; text-align: left; border-bottom: 1px solid var(--line); }
+.leveltable thead th { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.leveltable th.num, .leveltable td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.leveltable tbody th { font-weight: 700; border-left: 4px solid var(--hold); }
+.leveltable tr:last-child th, .leveltable tr:last-child td { border-bottom: 0; }
+.leveltable td.gap { color: var(--muted); }
+.leveltable .l-res th { border-left-color: var(--muted); }
+.leveltable .l-sup th { border-left-color: var(--buy); color: var(--buy); }
+.leveltable .l-risk th { border-left-color: var(--sell); color: var(--sell); }
+.leveltable .l-now th, .leveltable .l-now td { background: var(--hold-bg); }
+.leveltable .l-now th { border-left-color: var(--accent); color: var(--accent); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
