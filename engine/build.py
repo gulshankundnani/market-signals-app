@@ -8,6 +8,7 @@ import math
 import os
 import sys
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
@@ -25,7 +26,30 @@ SPARK_MARKET = 30
 MAX_FAILURE_SHARE = 0.6
 NEW_MAX_BARS = 250
 CARRY_MAX_AGE_DAYS = 4
+NEWS_FAILURE_LIMIT = 12     # news lookups that fail in a row before the rest of the run skips them
 TOO_NEW = "Too new for signals: about 60 trading days of history are needed"
+
+
+class Breaker:
+    """Stops asking a source that keeps failing, so one outage cannot make a whole run take twenty minutes.
+
+    After `limit` failures in a row it is open and the caller skips the source for the rest of the run. Any success
+    resets the count. Safe to share between the worker threads."""
+
+    def __init__(self, limit):
+        self.limit, self.count, self._lock = limit, 0, threading.Lock()
+
+    @property
+    def open(self):
+        return self.count >= self.limit
+
+    def failed(self):
+        with self._lock:
+            self.count += 1
+
+    def succeeded(self):
+        with self._lock:
+            self.count = 0
 
 
 def r(value, digits=4):
@@ -95,10 +119,18 @@ def analyse(entry, ctx):
     age_days = (ctx["today"] - date.fromisoformat(bars["d"][i])).days
 
     ticker_base = symbol.split(".")[0]
-    try:
-        items, news_error = news.fetch_news(f'"{entry["name"]}" (shares OR stock OR results)', market, ctx["now"]), False
-    except fetch.FetchError:
+    breaker = ctx.get("news_breaker")
+    if breaker is not None and breaker.open:
         items, news_error = [], True
+    else:
+        try:
+            items, news_error = news.fetch_news(f'"{entry["name"]}" (shares OR stock OR results)', market, ctx["now"]), False
+            if breaker is not None:
+                breaker.succeeded()
+        except fetch.FetchError:
+            items, news_error = [], True
+            if breaker is not None:
+                breaker.failed()
     news.mark_relevance(items, entry["name"], ticker_base)
 
     ind = signals.build_indicators(bars)
@@ -232,7 +264,7 @@ def status_block(config, records, errors, carried, overview, conditions, ipos, d
         f"{len(records)} stocks loaded" + (f", {failed} failed to load" if failed else "") + (f", {len(carried)} kept from the previous run" if carried else ""))
     news_down = sum(1 for x in records if (x.get("news") or {}).get("error"))
     add("News", "warn" if records and news_down / len(records) > 0.2 else "ok",
-        "Headlines loaded" if not news_down else f"Headlines missing for {news_down} stocks")
+        "Headlines loaded" if not news_down else f"Headlines missing for {news_down} stocks" + (" (the news source is not answering)" if news_down == len(records) else ""))
     wanted, got = len(config.get("market_watch", [])), len((overview or {}).get("watch", []))
     add("Index and market data", "ok" if got >= wanted else "warn", f"{got} of {wanted} market series loaded")
     missing = [m for m, c in (conditions or {}).items() if not c.get("regime")]
@@ -412,7 +444,7 @@ def run(args):
             print("benchmark failed:", err)
 
     ctx = {"now": now, "today": today, "now_ts": int(now.timestamp()), "delivery": delivery, "deals": deals, "bench": bench,
-           "bars": {}}
+           "bars": {}, "news_breaker": Breaker(NEWS_FAILURE_LIMIT)}
 
     def safe(entry):
         try:

@@ -259,7 +259,7 @@ def parse_rss(xml_text, now):
 def fetch_news(query, market, now, limit=8):
     url = "https://news.google.com/rss/search?q={}&{}".format(
         urllib.parse.quote(query + " when:2d"), FEEDS.get(market, FEEDS["US"]))
-    return parse_rss(http_get(url).decode("utf-8", "replace"), now)[:limit]
+    return parse_rss(http_get(url, timeout=15, retries=2).decode("utf-8", "replace"), now)[:limit]
 
 
 def _story_key(item):

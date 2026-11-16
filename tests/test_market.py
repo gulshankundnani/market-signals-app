@@ -193,5 +193,33 @@ class StatusTests(unittest.TestCase):
         self.assertNotIn("SECRET", str(self.status(token="SECRET", chat="CHAT")))
 
 
+class BreakerTests(unittest.TestCase):
+    def test_it_opens_after_enough_failures_in_a_row_and_a_success_resets_it(self):
+        breaker = build.Breaker(3)
+        for _ in range(2):
+            breaker.failed()
+        self.assertFalse(breaker.open)
+        breaker.succeeded()
+        for _ in range(2):
+            breaker.failed()
+        self.assertFalse(breaker.open, "a success in between starts the count again")
+        breaker.failed()
+        self.assertTrue(breaker.open)
+
+    def test_a_failing_news_source_is_asked_only_a_few_times_not_once_per_stock(self):
+        from unittest import mock
+        from engine import fetch, news
+        entry = {"symbol": "AAA", "name": "Aaa Ltd", "market": "IN", "sector": "IT", "tags": []}
+        closes = [100.0 + i * 0.1 for i in range(300)]
+        chart = {"bars": {"t": list(range(300)), "d": [f"2026-01-{1 + i % 28:02d}" for i in range(300)], "o": closes, "h": closes,
+                          "l": closes, "c": closes, "v": [1000.0] * 300}, "dividends": [], "meta": {"currency": "INR", "exchange": "NSE"}}
+        ctx = {"today": __import__("datetime").date(2026, 11, 16), "now": __import__("datetime").datetime(2026, 11, 16), "now_ts": 1,
+               "delivery": {}, "deals": {}, "bench": {}, "bars": {}, "news_breaker": build.Breaker(3)}
+        with mock.patch.object(fetch, "fetch_chart", return_value=chart),                 mock.patch.object(news, "fetch_news", side_effect=fetch.FetchError("blocked")) as asked:
+            records = [build.analyse(entry, ctx) for _ in range(10)]
+        self.assertEqual(asked.call_count, 3)
+        self.assertTrue(all(r["news"]["error"] and r["news"]["fresh"] == [] for r in records))
+
+
 if __name__ == "__main__":
     unittest.main()
