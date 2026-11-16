@@ -382,10 +382,10 @@ class FetchTests(unittest.TestCase):
         out = fetch.clean_chart(p, "T")
         self.assertEqual(len(out["bars"]["c"]), 67)
 
-    def test_null_volume_becomes_zero(self):
+    def test_null_volume_stays_missing(self):
         p = self.payload()
         p["chart"]["result"][0]["indicators"]["quote"][0]["volume"][0] = None
-        self.assertEqual(fetch.clean_chart(p, "T")["bars"]["v"][0], 0.0)
+        self.assertIsNone(fetch.clean_chart(p, "T")["bars"]["v"][0])
 
     def test_errors(self):
         with self.assertRaises(fetch.FetchError):
@@ -465,10 +465,33 @@ class CarryUsIposTests(unittest.TestCase):
 
     def test_a_failed_load_keeps_the_last_good_list_and_says_so(self):
         previous = {"us": self.DEALS, "us_fetched_at": "2026-11-13T08:00:00+00:00"}
-        out = self.carry({"us": [], "us_ok": False}, previous)
-        self.assertEqual(out["us"], self.DEALS)
+        out = self.carry({"us": [], "us_ok": False, "us_error": "HTTP 403 Access Denied: the source refuses automated requests"}, previous)
+        self.assertEqual([d["name"] for d in out["us"]], ["Acme"])
+        self.assertTrue(all(d["stale"] for d in out["us"]), "carried records are never presented as current")
         self.assertTrue(out["us_carried"])
         self.assertEqual(out["us_fetched_at"], "2026-11-13T08:00:00+00:00", "the original time must be kept, not reset")
+        status = out["us_status"]
+        self.assertEqual((status["state"], status["original_date"], status["age_days"]), ("stale", "2026-11-13", 1))
+        self.assertEqual(status["last_success"], "2026-11-13T08:00:00+00:00")
+        self.assertIn("403", status["error"])
+
+    def test_carried_records_whose_date_has_passed_are_flagged(self):
+        deals = [{"name": "Past", "symbol": "P", "status": "upcoming", "date": "11/10/2026"}, {"name": "Soon", "symbol": "S", "status": "upcoming", "date": "11/19/2026"},
+                 {"name": "Odd", "symbol": "O", "status": "upcoming", "date": "TBD"}]
+        out = self.carry({"us": [], "us_ok": False}, {"us": deals, "us_fetched_at": "2026-11-13T08:00:00+00:00"})
+        passed = {d["name"]: d["date_passed"] for d in out["us"]}
+        self.assertEqual(passed, {"Past": True, "Soon": False, "Odd": False})
+
+    def test_a_fresh_list_has_a_current_status_and_no_error(self):
+        out = self.carry({"us": self.DEALS, "us_ok": True, "us_error": None}, None)
+        self.assertEqual(out["us_status"]["state"], "current")
+        self.assertEqual(out["us_status"]["last_success"], "2026-11-14T08:00:00+00:00")
+        self.assertNotIn("stale", out["us"][0])
+
+    def test_a_list_too_old_to_carry_is_unavailable_not_current(self):
+        out = self.carry({"us": [], "us_ok": False, "us_error": "boom"}, {"us": self.DEALS, "us_fetched_at": "2026-10-01T08:00:00+00:00"})
+        self.assertEqual((out["us"], out["us_status"]["state"]), ([], "unavailable"))
+        self.assertEqual(out["us_status"]["last_success"], "2026-10-01T08:00:00+00:00")
 
     def test_a_list_older_than_a_week_is_dropped(self):
         previous = {"us": self.DEALS, "us_fetched_at": "2026-11-01T08:00:00+00:00"}

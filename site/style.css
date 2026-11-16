@@ -344,3 +344,16 @@ details.ev[open] > summary::after { transform: rotate(90deg); }
 .gbig { font-size: 24px; font-weight: 800; display: flex; align-items: center; gap: 6px; }
 details.moredetail > summary, details.opencalls > summary { min-height: 40px; display: flex; align-items: center; }
 dl.terms { margin: 0; font-size: 13px; } dl.terms dd { margin: 0 0 6px; color: var(--muted); }
+
+/* Reading explanations */
+.warnline { color: var(--warn); margin: 6px 0 0; }
+.invalid { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); color: var(--muted); }
+.datanote { display: grid; gap: 2px; color: var(--muted); }
+.provnote { margin-top: 4px; padding: 6px 8px; border-radius: 8px; background: var(--warn-bg); color: var(--warn); }
+
+.staleipo { border-left: 5px solid var(--warn); background: var(--warn-bg); color: var(--warn); font-size: 13.5px; margin-bottom: 8px; }
+.staleipo a { color: inherit; font-weight: 700; }
+
+.na { color: var(--muted); font-weight: 500; font-style: italic; }
+
+.verifyline { margin: 4px 0; } .verifyline a { font-weight: 700; }

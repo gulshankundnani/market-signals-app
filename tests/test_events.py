@@ -142,7 +142,10 @@ class BuildTests(unittest.TestCase):
                          [("2026-11-20", "earnings", "Aaa"), ("2026-11-20", "ex_dividend", "Bbb"), ("2026-12-01", "earnings", "Bbb")])
         self.assertEqual(out["counts"], {"earnings": 2, "ex_dividend": 1})
         self.assertEqual(out["as_of"], TODAY)
-        self.assertEqual(events.build([], TODAY), {"as_of": TODAY, "items": [], "announcements": [], "counts": {}, "estimate_check": None, "news_check": None})
+        empty = events.build([], TODAY)
+        self.assertEqual({k: empty[k] for k in ("as_of", "items", "announcements", "counts", "estimate_check", "news_check")},
+                         {"as_of": TODAY, "items": [], "announcements": [], "counts": {}, "estimate_check": None, "news_check": None})
+        self.assertEqual((empty["official"]["ok"], empty["official"]["confirmed"], empty["official"]["unverified"]), (False, 0, 0))
 
 
 class CachedFundamentalsTests(unittest.TestCase):

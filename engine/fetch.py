@@ -65,7 +65,9 @@ def clean_chart(payload, symbol, min_bars=MIN_BARS):
         bars["h"].append(float(h))
         bars["l"].append(float(l))
         bars["c"].append(float(c))
-        bars["v"].append(float(v or 0))
+        # Missing volume stays None. A genuine zero stays 0.0. Turning "no data" into zero would make a stock look
+        # as if nobody traded it and skew every volume-based indicator.
+        bars["v"].append(None if v is None else float(v))
     if len(bars["c"]) < min_bars:
         raise ShortSeriesError(f"{symbol}: only {len(bars['c'])} usable bars")
 
@@ -91,8 +93,31 @@ def clean_chart(payload, symbol, min_bars=MIN_BARS):
             "exchange": meta.get("fullExchangeName"),
             "name": meta.get("longName") or meta.get("shortName"),
             "market_time": meta.get("regularMarketTime"),
+            "session_start": ((meta.get("currentTradingPeriod") or {}).get("regular") or {}).get("start"),
+            "session_end": ((meta.get("currentTradingPeriod") or {}).get("regular") or {}).get("end"),
         },
     }
+
+
+PROVISIONAL_GRACE = 1800   # seconds after the close before Yahoo's volume and range for the day are treated as final
+
+
+def last_bar_provisional(bars, meta, now_ts, grace=PROVISIONAL_GRACE):
+    """True when the newest daily bar belongs to a session that is still running (or only just closed).
+
+    Yahoo's daily series includes today's unfinished candle while the market is open: its close is the live price, its
+    high and low are the range so far, and its volume is only what has traded so far. Checked on 2026-11-16 at 10:34 UTC
+    with the Xetra and London markets open: SAP.DE's 16 Nov bar had volume 155,629 against 1.41 million the day before.
+    Such a bar must not be read as a completed candle."""
+    start, end = meta.get("session_start"), meta.get("session_end")
+    if not bars["t"] or not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+        return False
+    return bars["t"][-1] >= start and now_ts < end + grace
+
+
+def trim_last_bar(bars):
+    """A copy of the bars without the newest one."""
+    return {k: list(v[:-1]) for k, v in bars.items()}
 
 
 def fetch_chart(symbol, range_="5y", min_bars=MIN_BARS, short_retries=1):

@@ -25,7 +25,7 @@ def call(side="buy", horizon="short", price=100.0, stop=96.0, target=108.0, **ex
     base = {"type": "call", "id": f"{side[0]}{horizon[0]}{price:g}"[:12], "ts": 1_793_000_000, "date": day(0), "symbol": "AAA",
             "name": "Aaa Ltd", "market": "US", "sector": "Tech", "horizon": horizon, "from": "hold", "side": side,
             "label": "Buy" if side == "buy" else "Sell", "score": 40 if side == "buy" else -40, "price": price, "currency": "USD",
-            "stop": stop, "target": target, "target_basis": "volatility", "expiry_days": 5, "parts": {}, "model": "v1"}
+            "stop": stop, "target": target, "target_basis": "volatility", "expiry_days": 5, "parts": {}, "model": ledger.MODEL}
     base.update(extra)
     return base
 
@@ -335,6 +335,18 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(s["recent"], [])
         self.assertIn("noise", s["suggestions"][0]["text"])
         json.dumps(s, allow_nan=False)
+
+    def test_calls_from_an_earlier_rule_version_are_kept_but_not_counted(self):
+        old_target, old_stop, new_row = resolved_row("target", 8.0), resolved_row("stop", -4.0), resolved_row("target", 6.0)
+        old_target[0]["model"] = old_stop[0]["model"] = "v1"
+        old_open = call(price=61.0, id="old_open")
+        old_open["model"] = "v1"
+        led = self.ledger_with([old_target, old_stop, new_row], [old_open, call(price=62.0, id="new_open")])
+        s = ledger.summarise(led, self.NOW)
+        self.assertEqual((s["calls_total"], s["older_model_calls"], s["resolved"], s["open"]), (2, 3, 1, 1))
+        self.assertEqual(s["overall"]["n"], 1)
+        self.assertEqual(s["overall"]["target_pct"], 100.0)           # the two v1 outcomes (one target, one stop) did not leak in
+        self.assertEqual(len(led.calls), 5, "nothing is removed from the record")
 
     def test_counts_and_recent_calls(self):
         rows = [resolved_row("target", 8.0, resolved=f"2026-11-{10 + i:02d}") for i in range(30)]

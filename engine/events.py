@@ -16,6 +16,8 @@ available. Splits that already happened are kept on each stock's page.
 from datetime import date, timedelta
 from statistics import median
 
+from . import official as nse
+
 HORIZON_DAYS = 120
 ESTIMATE_WINDOW_DAYS = 75
 YAHOO = "Yahoo Finance"
@@ -164,7 +166,103 @@ def news_check(records, news_events, today):
     return {"n": len(pairs), "agree_pct": round(100 * sum(1 for p in pairs if p <= 1) / len(pairs))}
 
 
-def build(records, today, news_events=None):
+CONFIRMED, UNVERIFIED, CONFLICT = "CONFIRMED", "UNVERIFIED", "CONFLICT"
+ACTION_TYPE = {"dividend": "ex_dividend", "split": "split", "bonus": "bonus", "rights": "corporate_action", "other": "corporate_action"}
+OFFICIAL_SOURCE = "NSE corporate actions (official)"
+MEETING_SOURCE = "NSE board-meeting intimation (official)"
+
+
+def _days_apart(a, b):
+    return abs((date.fromisoformat(a) - date.fromisoformat(b)).days)
+
+
+def _verify(items, records, official, today, horizon):
+    """Mark every event with whether an OFFICIAL source confirms it, and add official events Yahoo and the news missed.
+
+    CONFIRMED means the NSE's own announcement feed gives the same date (within a day). CONFLICT means the NSE gives a different
+    date, which is shown. UNVERIFIED is everything else, with the reason and a link to the official page: no US feed exists, the
+    NSE feed was not reachable, or the company has not announced it to the exchange yet. Nothing is called confirmed otherwise."""
+    ok = bool(official and official.get("ok"))
+    checked = (official or {}).get("fetched_at")
+    error = (official or {}).get("error")
+    actions, meetings = (official or {}).get("actions") or {}, (official or {}).get("meetings") or {}
+    claimed = set()                                   # official records already matched to an event
+    for e in items:
+        e["official_url"] = nse.link_for(e["symbol"], e["market"])
+        e["last_checked"] = checked[:10] if checked else None
+        e["verification"], e["verification_note"] = UNVERIFIED, ""
+        if e["market"] != "IN":
+            e["last_checked"] = None                     # nothing official was consulted for a US date
+            e["verification_note"] = "No official machine-readable feed exists for US dates. Confirm in the company's press release or its SEC filings."
+            continue
+        if not ok:
+            e["verification_note"] = f"The NSE feed could not be read ({error or 'no answer'}). Check the official page."
+            continue
+        base = e["symbol"][:-3]
+        if e["type"] in ("ex_dividend", "split", "bonus", "corporate_action"):
+            kinds = {"ex_dividend": ("dividend",), "split": ("split",), "bonus": ("bonus",), "corporate_action": ("split", "bonus", "rights", "other", "dividend")}[e["type"]]
+            pool = [(i, a) for i, a in enumerate(actions.get(base, [])) if a["kind"] in kinds and today <= a["ex_date"] <= horizon]
+            reach = 6 if e.get("until") else 1
+            near = [(i, a) for i, a in pool if _days_apart(a["ex_date"], e["date"]) <= reach]
+            if near:
+                i, a = near[0]
+                claimed.add((base, i))
+                e.update(verification=CONFIRMED, official={"date": a["ex_date"], "record_date": a["record_date"], "subject": a["subject"], "amount": a["amount"], "ratio": a["ratio"]},
+                         verification_note=f"NSE corporate action: {a['subject']} (ex-date {a['ex_date']}).")
+                e["bases"] = list(dict.fromkeys(e.get("bases", []) + ["nse"]))
+            elif pool:
+                a = pool[0][1]
+                e.update(verification=CONFLICT, official={"date": a["ex_date"], "subject": a["subject"], "amount": a["amount"], "ratio": a["ratio"]},
+                         verification_note=f"The NSE lists a different date: {a['subject']}, ex-date {a['ex_date']}.")
+            else:
+                e["verification_note"] = "The company has not announced this to the NSE yet (or it is not a corporate action the NSE lists)."
+        elif e["type"] == "earnings":
+            results = [m for m in meetings.get(base, []) if m["results"] and today <= m["date"] <= horizon]
+            low, high = e["date"], e.get("until") or e["date"]
+            near = [m for m in results if low <= m["date"] <= high or _days_apart(m["date"], low) <= 1 or _days_apart(m["date"], high) <= 1]
+            if near:
+                m = near[0]
+                e.update(verification=CONFIRMED, official={"date": m["date"], "subject": m["purpose"], "announced": m["announced"], "link": m["link"]},
+                         verification_note=f"Board meeting for results intimated to the NSE for {m['date']}.")
+                e["bases"] = list(dict.fromkeys(e.get("bases", []) + ["nse"]))
+            elif results:
+                m = results[0]
+                e.update(verification=CONFLICT, official={"date": m["date"], "subject": m["purpose"], "announced": m["announced"], "link": m["link"]},
+                         verification_note=f"The NSE has a results board meeting on {m['date']}, not on this date.")
+            else:
+                e["verification_note"] = "No results board meeting has been intimated to the NSE yet."
+        else:
+            e["verification_note"] = "The NSE feeds used here do not list payment dates."
+    if not ok:
+        return items
+    # official events that no Yahoo, estimated or news event covers
+    for rec in records:
+        if rec["market"] != "IN" or not rec["symbol"].endswith(".NS"):
+            continue
+        base = rec["symbol"][:-3]
+        for i, a in enumerate(actions.get(base, [])):
+            if (base, i) in claimed or not today <= a["ex_date"] <= horizon:
+                continue
+            kind = ACTION_TYPE.get(a["kind"], "corporate_action")
+            if any(e["symbol"] == rec["symbol"] and e["type"] == kind and _days_apart(e["date"], a["ex_date"]) <= 1 for e in items):
+                continue
+            ev = _event(rec, a["ex_date"], kind, f"{a['subject']} (record date {a['record_date'] or 'not stated'})", OFFICIAL_SOURCE, "official",
+                        amount=a["amount"], ratio=a["ratio"], official={"date": a["ex_date"], "record_date": a["record_date"], "subject": a["subject"], "amount": a["amount"], "ratio": a["ratio"]})
+            ev.update(verification=CONFIRMED, verification_note=f"Announced to the NSE: {a['subject']}.", official_url=nse.link_for(rec["symbol"], "IN"), last_checked=checked[:10] if checked else None)
+            items.append(ev)
+        if not any(e["symbol"] == rec["symbol"] and e["type"] == "earnings" for e in items):
+            results = [m for m in meetings.get(base, []) if m["results"] and today <= m["date"] <= horizon]
+            if results:
+                m = min(results, key=lambda r: r["date"])
+                ev = _event(rec, m["date"], "earnings", f"Board meeting intimated to the NSE: {m['purpose']}", MEETING_SOURCE, "official",
+                            official={"date": m["date"], "subject": m["purpose"], "announced": m["announced"], "link": m["link"]})
+                ev.update(verification=CONFIRMED, verification_note=f"Board meeting for results intimated to the NSE for {m['date']}.", official_url=nse.link_for(rec["symbol"], "IN"),
+                          last_checked=checked[:10] if checked else None)
+                items.append(ev)
+    return items
+
+
+def build(records, today, news_events=None, official=None):
     """{"as_of", "items": [...], "counts": {type: n}, "estimate_check": {...}} for every stock, soonest first."""
     horizon = (date.fromisoformat(today) + timedelta(days=HORIZON_DAYS)).isoformat()
     items, announcements = [], []
@@ -172,10 +270,18 @@ def build(records, today, news_events=None):
         found, notes = _with_news(rec, stock_events(rec, today), (news_events or {}).get(rec["symbol"]), today, horizon)
         items += found
         announcements += notes
+    items = _verify(items, records, official, today, horizon)
+    for a in announcements:        # reported in the news without a date: never verified
+        a.setdefault("verification", UNVERIFIED)
+        a.setdefault("official_url", nse.link_for(a["symbol"], a["market"]))
     items.sort(key=lambda e: (e["date"], e["type"], e["name"]))
     announcements.sort(key=lambda a: (a["name"], a["type"]))
     counts = {}
     for e in items:
         counts[e["type"]] = counts.get(e["type"], 0) + 1
     return {"as_of": today, "items": items, "announcements": announcements, "counts": counts,
-            "estimate_check": estimate_check(records, today), "news_check": news_check(records, news_events, today)}
+            "estimate_check": estimate_check(records, today), "news_check": news_check(records, news_events, today),
+            "official": {"ok": bool(official and official.get("ok")), "fetched_at": (official or {}).get("fetched_at"), "checked_at": (official or {}).get("checked_at"),
+                         "error": (official or {}).get("error"), "source": (official or {}).get("source"),
+                         "confirmed": sum(1 for e in items if e["verification"] == CONFIRMED), "conflicts": sum(1 for e in items if e["verification"] == CONFLICT),
+                         "unverified": sum(1 for e in items if e["verification"] == UNVERIFIED)}}

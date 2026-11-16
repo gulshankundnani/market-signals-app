@@ -64,12 +64,13 @@ def _breakouts(bars, ind):
     if i < 21:
         return found
     avg_vol = ind["avg_volume20"][i]
-    heavy = bool(avg_vol) and v[i] >= 1.3 * avg_vol
+    heavy = bool(avg_vol) and v[i] is not None and v[i] >= 1.3 * avg_vol
+    volume_note = " on normal volume, less reliable" if v[i] is not None and avg_vol else " (volume not reported, so its strength is unknown)"
     top, bottom = ta.prior_max(h, i, 20), ta.prior_min(l, i, 20)
     if c[i] > top:
-        found.append(_pattern("20-day breakout", "bullish", "Closed above the 20-day high" + (" on heavy volume" if heavy else " on normal volume, less reliable")))
+        found.append(_pattern("20-day breakout", "bullish", "Closed above the 20-day high" + (" on heavy volume" if heavy else volume_note)))
     elif c[i] < bottom:
-        found.append(_pattern("20-day breakdown", "bearish", "Closed below the 20-day low" + (" on heavy volume" if heavy else " on normal volume, less reliable")))
+        found.append(_pattern("20-day breakdown", "bearish", "Closed below the 20-day low" + (" on heavy volume" if heavy else volume_note)))
     hi, lo = ind["hi252"][i], ind["lo252"][i]
     if hi and c[i] >= hi * 0.97:
         found.append(_pattern("Near 52-week high", "bullish", "Within 3% of the 52-week high"))

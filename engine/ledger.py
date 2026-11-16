@@ -19,7 +19,8 @@ from statistics import median
 
 from . import signals
 
-MODEL = "v2"          # v2: score components change smoothly with the price instead of in hard steps
+MODEL = "v3"          # v2: score components change smoothly with the price instead of in hard steps
+                      # v3: readings use completed daily candles only, and missing volume is no longer read as zero
 EXPIRY_DAYS = {"short": 20, "long": 120}      # trading days before a call counts as expired
 MIN_SAMPLE = 30                               # below this, percentages are shown as unreliable
 MIN_GROUP = 10                                # smallest group compared in the component insights
@@ -294,8 +295,12 @@ def suggestions(overall, by_group, insights):
 
 
 def summarise(ledger, now_ts):
-    """Everything the Track record tab shows."""
-    rows = [{"call": ledger.calls[cid], "outcome": out} for cid, out in ledger.outcomes.items() if cid in ledger.calls]
+    """Everything the Track record tab shows.
+
+    Only calls made by the current rule version are counted. Calls from earlier versions stay in the record, untouched, and
+    keep being resolved, but mixing versions would blend results from different rules into one success rate."""
+    current = {cid for cid, c in ledger.calls.items() if c.get("model") in (None, MODEL)}
+    rows = [{"call": ledger.calls[cid], "outcome": out} for cid, out in ledger.outcomes.items() if cid in current]
     rows.sort(key=lambda r: (r["outcome"]["resolved_date"], r["call"]["id"]))
     overall = group_stats(rows)
     cutoff = utc_date(now_ts - 90 * 86400)
@@ -322,10 +327,10 @@ def summarise(ledger, now_ts):
                 "currency": c.get("currency"), "resolved_date": o["resolved_date"], "outcome": o["outcome"],
                 "return_pct": o["return_pct"], "days_held": o["days_held"]}
 
-    open_calls = sorted(ledger.open_calls(), key=lambda c: c["ts"], reverse=True)
+    open_calls = sorted((c for c in ledger.open_calls() if c["id"] in current), key=lambda c: c["ts"], reverse=True)
     return {
         "generated_at": datetime.fromtimestamp(now_ts, timezone.utc).isoformat(timespec="seconds"),
-        "model": MODEL, "min_sample": MIN_SAMPLE, "calls_total": len(ledger.calls), "open": len(open_calls), "resolved": len(rows),
+        "model": MODEL, "min_sample": MIN_SAMPLE, "calls_total": len(current), "older_model_calls": len(ledger.calls) - len(current), "open": len(open_calls), "resolved": len(rows),
         "expiry_days": EXPIRY_DAYS, "overall": overall, "last_90_days": last90, "by_group": by_group, "by_score_band": by_band,
         "by_market": by_market, "components": insights, "suggestions": notes,
         "recent": [recent_row(r) for r in reversed(rows[-RECENT:])],

@@ -437,3 +437,52 @@ class IpoTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UsIpoRefreshTests(unittest.TestCase):
+    """The Nasdaq calendar refuses automated requests (HTTP 403 from its CDN). That must be logged, must not be retried on every
+    run, and must never be worked around."""
+    NOW = __import__("datetime").datetime(2026, 11, 16, 12, 0, tzinfo=__import__("datetime").timezone.utc)
+
+    def run_fetch(self, previous=None, side_effect=None):
+        from unittest import mock
+        from engine import news
+        logs = []
+        with mock.patch.object(ipo, "http_get", side_effect=side_effect) as asked, mock.patch.object(news, "fetch_news", return_value=[]):
+            out = ipo.fetch_ipos(self.NOW, previous, log=logs.append)
+        return out, logs, asked
+
+    def test_a_refusal_is_logged_with_its_reason_and_starts_a_pause(self):
+        from engine.fetch import FetchError
+        out, logs, asked = self.run_fetch(side_effect=FetchError("https://api.nasdaq.com/api/ipo/calendar: HTTP Error 403: Forbidden"))
+        self.assertFalse(out["us_ok"])
+        self.assertIn("403", out["us_error"])
+        self.assertEqual(asked.call_count, 1, "a refused source is not asked again for the next month")
+        self.assertTrue(any("failed" in line and "403" in line for line in logs))
+        self.assertEqual(out["us_blocked_until"], "2026-11-16T18:00:00+00:00")
+
+    def test_during_the_pause_the_source_is_not_asked_at_all(self):
+        out, logs, asked = self.run_fetch(previous={"us_blocked_until": "2026-11-16T18:00:00+00:00"}, side_effect=AssertionError("must not be called"))
+        self.assertEqual(asked.call_count, 0)
+        self.assertFalse(out["us_ok"])
+        self.assertEqual(out["us_blocked_until"], "2026-11-16T18:00:00+00:00")
+        self.assertTrue(any("skipped" in line for line in logs))
+
+    def test_after_the_pause_it_is_asked_again(self):
+        payload = json.dumps({"data": {"upcoming": {"upcomingTable": {"rows": [{"companyName": "Acme", "proposedTickerSymbol": "ACME", "proposedSharePrice": "10-12", "expectedPriceDate": "11/20/2026"}]}}}})
+        out, logs, asked = self.run_fetch(previous={"us_blocked_until": "2026-11-16T11:00:00+00:00"}, side_effect=lambda *a, **k: payload.encode())
+        self.assertEqual(asked.call_count, 2)
+        self.assertTrue(out["us_ok"])
+        self.assertIsNone(out["us_error"])
+        self.assertIsNone(out["us_blocked_until"])
+
+    def test_failure_descriptions(self):
+        self.assertEqual(ipo.describe_failure(Exception("x: HTTP Error 403: Forbidden"))[1], True)
+        self.assertEqual(ipo.describe_failure(Exception("x: HTTP Error 429: Too Many Requests")), ("HTTP 429: too many requests", False))
+        self.assertEqual(ipo.describe_failure(ValueError("bad")), ("the answer was not valid JSON", False))
+
+    def test_deal_dates(self):
+        import datetime as dt
+        self.assertEqual(ipo.deal_date("11/19/2026"), dt.date(2026, 11, 19))
+        self.assertIsNone(ipo.deal_date("TBD"))
+        self.assertIsNone(ipo.deal_date(None))

@@ -19,6 +19,9 @@ TREND_LONG_SCALE = 0.05    # 5% above or below the 200-day average (or 50 vs 200
 TREND_SHORT_SCALE = 0.02   # 2% for the 20-day average and for 20 vs 50
 MACD_SCALE = 0.004         # a MACD histogram of 0.4% of the price counts as the full +-1
 LEVEL_BAND = 0.005         # within 0.5% of an average the wording says "about level with"
+CROSS_WINDOW = 20          # a 50/200-day crossover counts as a recent event for this many sessions
+FULL_COVERAGE = 0.99       # the share of the rule's weight that had data, at or above which confidence is "full"
+REDUCED_COVERAGE = 0.75   # below this the reading rests on too little of its rule: "limited"
 
 
 def _side(gap):
@@ -70,7 +73,7 @@ def build_indicators(bars):
         "atr": ta.atr(high, low, close, 14),
         "vol30": ta.rolling_vol(close, 30),
         "vwap20": ta.rolling_vwap(high, low, close, volume, 20),
-        "avg_volume20": ta.sma(volume, 20),
+        "avg_volume20": ta.sma_complete(volume, 20),
         "cmf20": ta.chaikin_money_flow(high, low, close, volume, 20),
         "upvol20": ta.up_volume_share(close, volume, 20),
         "momentum126": momentum,
@@ -80,19 +83,55 @@ def build_indicators(bars):
     }
 
 
-def _combine(components, weights, min_weight_share=0.5):
-    """components: {name: (value, text) or None}. Returns (score, reasons) or (None, [])."""
+def _combine_detail(components, weights, min_weight_share=0.5):
+    """components: {name: (value, text) or None}.
+
+    Returns {"score", "reasons", "coverage", "missing"}. coverage is the share of the rule's total weight that had data;
+    missing lists the components that could not be worked out. score is None when too little had data."""
     used = {k: v for k, v in components.items() if v is not None}
+    missing = [k for k in weights if k not in used]
     total = sum(weights[k] for k in used)
+    coverage = total / sum(weights.values())
     if total < min_weight_share * sum(weights.values()):
-        return None, []
+        return {"score": None, "reasons": [], "coverage": round(coverage, 2), "missing": missing}
     score = sum(weights[k] * used[k][0] for k in used) / total * 100
     reasons = []
     for k, (value, text) in used.items():
         tone = "pos" if value > 0.15 else "neg" if value < -0.15 else "neutral"
         # key and value let the track record measure which components actually help
         reasons.append({"text": text, "tone": tone, "key": k, "value": round(value, 2)})
-    return round(score), reasons
+    return {"score": round(score), "reasons": reasons, "coverage": round(coverage, 2), "missing": missing}
+
+
+def _combine(components, weights, min_weight_share=0.5):
+    """components: {name: (value, text) or None}. Returns (score, reasons) or (None, [])."""
+    detail = _combine_detail(components, weights, min_weight_share)
+    return detail["score"], detail["reasons"]
+
+
+def confidence(coverage):
+    """How complete the data behind a reading was: full, reduced or limited."""
+    if coverage is None:
+        return None
+    return "full" if coverage >= FULL_COVERAGE else "reduced" if coverage >= REDUCED_COVERAGE else "limited"
+
+
+def recent_cross(ind, i, window=CROSS_WINDOW):
+    """The latest 50/200-day crossover in the last `window` sessions: ("golden" | "death", sessions_ago) or None.
+
+    A crossover is an event: the 50-day average moved from one side of the 200-day average to the other. A stock whose
+    50-day average simply sits above the 200-day has bullish alignment but no recent golden cross."""
+    s50, s200 = ind["sma50"], ind["sma200"]
+    for j in range(i, max(0, i - window), -1):
+        now, before = (s50[j], s200[j]), (s50[j - 1], s200[j - 1])
+        if None in now or None in before:
+            continue
+        gap_now, gap_before = now[0] - now[1], before[0] - before[1]
+        if gap_before <= 0 < gap_now:
+            return "golden", i - j
+        if gap_before >= 0 > gap_now:
+            return "death", i - j
+    return None
 
 
 def buy_sell_pressure(ind, i):
@@ -105,7 +144,7 @@ def buy_sell_pressure(ind, i):
     return {"value": value, "label": name, "money_flow": cmf, "up_volume_share": share}
 
 
-def short_score(ind, i):
+def short_detail(ind, i):
     """Swing view (days to weeks). Price, volume and indicators only: news is never part of a reading."""
     bars = ind["bars"]
     close, volume = bars["c"], bars["v"]
@@ -140,7 +179,7 @@ def short_score(ind, i):
         c["rsi"] = (value, text)
 
     avg_volume = ind["avg_volume20"][i]
-    if avg_volume and i > 0:
+    if avg_volume and i > 0 and volume[i] is not None:
         spike = volume[i] > 1.5 * avg_volume
         if spike and close[i] > close[i - 1]:
             c["volume"] = (1.0, "Volume spike on a rising day")
@@ -153,10 +192,15 @@ def short_score(ind, i):
     if pressure is not None:
         c["pressure"] = (pressure["value"], f"Volume pressure: {pressure['label'].lower()} over 20 days")
 
-    return _combine(c, SHORT_WEIGHTS, min_weight_share=0.75)
+    return _combine_detail(c, SHORT_WEIGHTS, min_weight_share=0.75)
 
 
-def long_score(ind, i):
+def short_score(ind, i):
+    detail = short_detail(ind, i)
+    return detail["score"], detail["reasons"]
+
+
+def long_detail(ind, i):
     """Investor view (months to years)."""
     close = ind["bars"]["c"]
     c = {}
@@ -167,8 +211,17 @@ def long_score(ind, i):
         c["trend200"] = (clamp(gap / TREND_LONG_SCALE), "Price is " + _side(gap) + " the 200-day average")
         if sma50 is not None:
             spread = sma50 / sma200 - 1
-            zone = "" if abs(spread) < LEVEL_BAND else " (" + ("golden" if spread > 0 else "death") + " cross zone)"
-            c["cross"] = (clamp(spread / TREND_LONG_SCALE), "50-day is " + _side(spread) + " the 200-day" + zone)
+            event = recent_cross(ind, i)
+            if event:
+                kind, ago = event
+                when = "today" if ago == 0 else f"{ago} session{'s' if ago != 1 else ''} ago"
+                text = f"50-day crossed {'above' if kind == 'golden' else 'below'} the 200-day {when} ({kind} cross)"
+            elif abs(spread) < LEVEL_BAND:
+                text = "50-day is about level with the 200-day"
+            else:
+                text = "50-day is " + ("above" if spread > 0 else "below") + " the 200-day (" + ("bullish" if spread > 0 else "bearish") + " alignment, no recent crossover)"
+            # The score follows the alignment (where the averages are now), not the event.
+            c["cross"] = (clamp(spread / TREND_LONG_SCALE), text)
 
     mom = ind["momentum126"][i]
     if mom is not None:
@@ -183,7 +236,38 @@ def long_score(ind, i):
     if vol is not None:
         c["volatility"] = (0.5 * clamp((0.30 - vol) / 0.20), f"Volatility {vol * 100:.0f}% a year")
 
-    return _combine(c, LONG_WEIGHTS)
+    return _combine_detail(c, LONG_WEIGHTS)
+
+
+def long_score(ind, i):
+    detail = long_detail(ind, i)
+    return detail["score"], detail["reasons"]
+
+
+def invalidation(ind, i, horizon, score):
+    """Plain statements of what would weaken or reverse a reading, from the current levels. [] without a reading."""
+    if score is None:
+        return []
+    price = ind["bars"]["c"][i]
+    average = ind["sma20"][i] if horizon == "short" else ind["sma200"][i]
+    name = "20-day" if horizon == "short" else "200-day"
+    bull, bear = score >= BUY, score <= SELL
+    out = []
+    if average:
+        if bull:
+            out.append(f"a close below the {name} average ({average:,.2f})")
+        elif bear:
+            out.append(f"a close above the {name} average ({average:,.2f})")
+        else:
+            out.append(f"a clear move beyond the {name} average ({average:,.2f}) in either direction")
+    if horizon == "short":
+        out.append("the MACD histogram turning negative" if bull else "the MACD histogram turning positive" if bear else "the MACD histogram settling on one side of zero")
+    else:
+        out.append("the 50-day average falling below the 200-day" if bull else "the 50-day average rising above the 200-day" if bear else "the 50-day and 200-day averages separating")
+    atr = ind["atr"][i]
+    if bull and atr and price - 2 * atr > 0:
+        out.append(f"price reaching the volatility risk level ({price - 2 * atr:,.2f})")
+    return out
 
 
 def stop_loss(price, atr_value, multiple=2.0):

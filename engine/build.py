@@ -15,7 +15,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from . import digest, event_news, events, market as market_view, verify
-from . import alerts, backtest, discover, dividends, exchange, fetch, fundamentals, ipo, ipo_gmp, ledger, news, patterns, risk, signals, tracking
+from . import alerts, backtest, costs, discover, membership as index_membership, official, dividends, exchange, fetch, fundamentals, ipo, ipo_gmp, ledger, news, patterns, risk, signals, tracking
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKERS = 6
@@ -74,10 +74,18 @@ def load_previous(source, name):
         return {}
 
 
-def signal_block(score, reasons):
+def signal_block(detail, ind=None, i=None, horizon=None):
+    """One reading for the page: score, label, the reasons behind it and how complete the data was.
+
+    detail is signals.short_detail / long_detail. confidence is "full", "reduced" or "limited" by the share of the rule's
+    weight that had data; missing names the parts that could not be worked out. invalidation says what would weaken it."""
+    score, reasons = detail["score"], detail["reasons"]
     if score is None:
-        return {"score": None, "label": "N/A", "reasons": reasons or [{"text": TOO_NEW, "tone": "neutral"}]}
-    return {"score": score, "label": signals.label(score), "reasons": reasons}
+        return {"score": None, "label": "N/A", "reasons": reasons or [{"text": TOO_NEW, "tone": "neutral"}],
+                "coverage": detail["coverage"], "confidence": signals.confidence(detail["coverage"]), "missing": detail["missing"], "invalidation": []}
+    return {"score": score, "label": signals.label(score), "reasons": reasons,
+            "coverage": detail["coverage"], "confidence": signals.confidence(detail["coverage"]), "missing": detail["missing"],
+            "invalidation": signals.invalidation(ind, i, horizon, score) if ind is not None else []}
 
 
 def first_valid(fn, start, end):
@@ -87,14 +95,25 @@ def first_valid(fn, start, end):
     return None
 
 
-def run_backtests(ind, n):
+BACKTEST_NOTES = [
+    "Long only: the rule holds the stock or sits in cash (cash earns nothing). The score at the close of one day decides the trade at the next day's open.",
+    "Costs are assumptions (taxes, fees and slippage) charged on each entry and exit; a gross run without costs is shown as gross_return. A position still open at the end is valued as if sold at the last close, less the exit cost.",
+    "Headline figures are price-only. A second set (total) includes cash dividends on the ex-date for the rule and for buy-and-hold alike, reinvested at the ex-date close at no cost, with no tax on dividends. Prices and dividend amounts are Yahoo's and are adjusted for splits and bonus issues; spin-offs and mergers are not modelled.",
+    "The stocks are today's list, so companies that were delisted or dropped out are missing (survivorship bias). A stock is only tested from the day it joined the S&P 500 where that date is known (all US stocks here joined before the test window, so this changes nothing today); no addition dates are available for India. This is NOT a survivorship-bias-free test.",
+    "The recent 40% is the last part of the same history tested with the same fixed rules. It is not an independent out-of-sample test, because the rules were designed knowing earlier market history.",
+    "Sharpe and Sortino use daily returns and a zero risk-free rate. CAGR compounds the total return over the tested trading days.",
+]
+
+
+def run_backtests(ind, n, market="US", overrides=None, dividends=None, min_start=0):
     if n < 260:
         return None
     out = {}
     rules = {"short": lambda i: signals.short_score(ind, i)[0], "long": lambda i: signals.long_score(ind, i)[0]}
     for name, fn in rules.items():
-        start = first_valid(fn, 0, n - backtest.MIN_DAYS)
-        result = backtest.backtest(ind["bars"], fn, start) if start is not None else None
+        start = first_valid(fn, min_start, n - backtest.MIN_DAYS)
+        entry_cost, exit_cost = costs.sides(market, overrides)
+        result = backtest.backtest(ind["bars"], fn, start, entry_cost=entry_cost, exit_cost=exit_cost, dividends=dividends) if start is not None else None
         out[name] = scrub(result)
     return out
 
@@ -111,13 +130,20 @@ def analyse(entry, ctx):
     symbol, market = entry["symbol"], entry["market"]
     min_bars = 5 if entry.get("new") else fetch.MIN_BARS
     chart = fetch.fetch_chart(symbol, "5y", min_bars)
-    bars = chart["bars"]
-    ctx.get("bars", {})[symbol] = bars
+    live_bars = chart["bars"]
+    ctx.get("bars", {})[symbol] = live_bars
+    # While the market is open Yahoo's newest daily bar is today's unfinished candle (live price, range so far and only the
+    # volume traded so far). The price shown is that live price. Every indicator and reading is worked out from completed
+    # candles, and today's unfinished candle gets a separate, clearly marked provisional reading.
+    provisional = fetch.last_bar_provisional(live_bars, chart["meta"], ctx["now_ts"]) and len(live_bars["c"]) > min_bars
+    bars = fetch.trim_last_bar(live_bars) if provisional else live_bars
+    ctx.setdefault("completed_bars", {})[symbol] = bars      # the track record is checked against completed candles only
     close = bars["c"]
     n, i = len(close), len(close) - 1
-    price = close[i]
-    change = (price / close[i - 1] - 1) * 100 if n > 1 else None
-    age_days = (ctx["today"] - date.fromisoformat(bars["d"][i])).days
+    live_close = live_bars["c"]
+    price = live_close[-1]
+    change = (price / live_close[-2] - 1) * 100 if len(live_close) > 1 else None
+    age_days = (ctx["today"] - date.fromisoformat(live_bars["d"][-1])).days
 
     ticker_base = symbol.split(".")[0]
     breaker = ctx.get("news_breaker")
@@ -135,9 +161,16 @@ def analyse(entry, ctx):
     news.mark_relevance(items, entry["name"], ticker_base)
 
     ind = signals.build_indicators(bars)
-    short_score, short_reasons = signals.short_score(ind, i)
-    long_score, long_reasons = signals.long_score(ind, i)
+    short_detail, long_detail = signals.short_detail(ind, i), signals.long_detail(ind, i)
     pressure = signals.buy_sell_pressure(ind, i)
+    live = None
+    if provisional:
+        partial = {k: list(v) for k, v in live_bars.items()}
+        partial["v"][-1] = None            # the day's volume is incomplete, so volume rules must not use it
+        live_ind = signals.build_indicators(partial)
+        live_i = len(partial["c"]) - 1
+        live = {"short": signal_block(signals.short_detail(live_ind, live_i), live_ind, live_i, "short"),
+                "long": signal_block(signals.long_detail(live_ind, live_i), live_ind, live_i, "long")}
     dividend = dividends.dividend_profile(chart["dividends"], price, ctx["now_ts"])
     recent_splits = [{"date": datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d"), "ratio": f"{num:g}:{den:g}"}
                      for ts, num, den in chart.get("splits", []) if ctx["now_ts"] - ts <= SPLIT_MEMORY_DAYS * 86400][-3:]
@@ -157,10 +190,11 @@ def analyse(entry, ctx):
         "sector": "Other" if relabelled else entry["sector"],
         "tags": [] if relabelled else entry.get("tags", []), "new": is_new, "listed": entry.get("listed"),
         "currency": chart["meta"]["currency"], "exchange": chart["meta"]["exchange"],
-        "price": r(price), "change_pct": r(change, 2), "as_of": bars["d"][i], "stale": age_days > STALE_DAYS,
+        "price": r(price), "change_pct": r(change, 2), "as_of": live_bars["d"][-1], "stale": age_days > STALE_DAYS,
         "bars": n,
-        "short": signal_block(short_score, short_reasons),
-        "long": signal_block(long_score, long_reasons),
+        "provisional": provisional, "confirmed_as_of": bars["d"][i],
+        "short": signal_block(short_detail, ind, i, "short"),
+        "long": signal_block(long_detail, ind, i, "long"),
         "pressure": {"label": pressure["label"], "money_flow": r(pressure["money_flow"]),
                      "up_volume_share": r(pressure["up_volume_share"])} if pressure else None,
         "delivery": scrub(delivery),
@@ -169,26 +203,31 @@ def analyse(entry, ctx):
         "dividend_yield": r(dividend["ttm_yield"], 5) if dividend else 0.0,
         "dividend": scrub(dividend),
         "splits": recent_splits,
-        "spark": [r(v) for v in close[-SPARK_DAYS:]],
-        "spark_sma50": [r(v) for v in ind["sma50"][-SPARK_DAYS:]],
+        "spark": [r(v) for v in live_close[-SPARK_DAYS:]],
+        "spark_sma50": [r(v) for v in (ind["sma50"] + ([None] if provisional else []))[-SPARK_DAYS:]],
     }
+    if live:
+        record["live"] = live
     if n >= 30:
         record["patterns"] = patterns.detect_patterns(bars, ind)
     if n >= 60:
-        record["levels"] = scrub({**ta_levels(bars)})
+        record["levels"] = scrub({**ta_levels(bars, price)})
         record["stop"] = scrub(signals.stop_loss(price, ind["atr"][i]))
         record["indicators"] = {k: r(ind[k][i]) for k in
                                 ("rsi", "macd_hist", "sma20", "sma50", "sma200", "atr", "vwap20", "vol30",
                                  "cmf20", "upvol20", "momentum126", "hi252", "lo252")}
     if n > 60:
         record["risk"] = scrub(risk.risk_stats(close, dict(zip(bars["d"], close)), ctx["bench"].get(market)))
-    record["backtest"] = run_backtests(ind, n)
+    member_from = index_membership.lookup(ctx.get("membership"), market, symbol)
+    record["backtest"] = run_backtests(ind, n, market, ctx.get("costs"), backtest.dividends_by_bar(bars, chart["dividends"]),
+                                       index_membership.first_eligible_index(bars["d"], member_from))
+    record["member_from"] = member_from
     return record
 
 
-def ta_levels(bars):
+def ta_levels(bars, price=None):
     from .indicators import fibonacci_levels, support_resistance
-    return {"zones": support_resistance(bars["h"], bars["l"], bars["c"]),
+    return {"zones": support_resistance(bars["h"], bars["l"], bars["c"], price=price),
             "fib": fibonacci_levels(bars["h"], bars["l"])}
 
 
@@ -264,7 +303,7 @@ def send_formatted(token, chat, text, reply_to=None):
     return ok, message_id
 
 
-def status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy=None):
+def status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy=None, official_events=None):
     """Plain checks of how healthy this run was, for the status panel: [{"name", "state": ok|warn|info, "detail"}]."""
     checks = []
 
@@ -305,6 +344,16 @@ def status_block(config, records, errors, carried, overview, conditions, ipos, d
             healthy = healthy and s["mismatch"] == 0 and (s["agreement_pct"] or 0) >= 95
         add("Price cross-check", "ok" if healthy else "warn", "; ".join(parts))
     add("NSE delivery data", "ok" if latest else "info", f"Latest day {latest}" if latest else "Not loaded")
+    # Production evidence that does not need the Actions logs: what the two refusal-prone sources did in THIS run.
+    us = (ipos or {}).get("us_status")
+    if us:
+        add("US IPO calendar", "ok" if us["state"] == "current" else "warn",
+            "Loaded this run" if us["state"] == "current" else f"{us['state'].capitalize()}: {us.get('error') or 'no answer'}; last success {us.get('last_success') or 'never'}")
+    if official_events is not None:
+        if official_events.get("ok"):
+            add("NSE official events", "ok", f"Read {official_events.get('fetched_at')}" + (" (reused, under an hour old)" if official_events.get("reused") else ""))
+        else:
+            add("NSE official events", "warn", f"{official_events.get('error') or 'no answer'}; last success {official_events.get('fetched_at') or 'never'}")
     add("India IPOs", "ok" if (ipos or {}).get("india_ok") else "warn",
         "Fresh from the source" if (ipos or {}).get("india_ok") else "Source unavailable, showing older data")
     if track_record is None:
@@ -318,24 +367,55 @@ def status_block(config, records, errors, carried, overview, conditions, ipos, d
     return {"overall": overall, "checks": checks}
 
 
+INCOMPLETE_RETRY = 1800          # seconds before fundamentals that came back without a market cap are asked for again
+INCOMPLETE_TRIES = 4             # after this many incomplete answers in a row, go back to asking once a day
+INCOMPLETE_PER_RUN = 30          # at most this many such retries in one run, to stay gentle with Yahoo
+
+
+def fundamentals_fresh(cached, now_ts):
+    """Whether cached fundamentals can be used as they are. Yahoo sometimes answers with a partial document (for
+    example no market capitalisation for Reliance and TCS), and keeping that for a whole day left the gap on the page.
+    An answer without a market cap is therefore asked for again after half an hour, and after a few incomplete answers
+    in a row (some small companies really have none) once a day again."""
+    if not cached or "events" not in cached.get("data", {}):
+        return False
+    age = now_ts - cached.get("ts", 0)
+    if cached["data"].get("market_cap") is None:
+        return age < (INCOMPLETE_RETRY if cached.get("tries", 0) < INCOMPLETE_TRIES else FUNDAMENTALS_MAX_AGE)
+    return age < FUNDAMENTALS_MAX_AGE
+
+
 def fill_fundamentals(records, state, now_ts, session_factory):
-    """Use cached fundamentals when fresh, otherwise fetch them (once a day per stock)."""
+    """Use cached fundamentals when fresh, otherwise fetch them (once a day per stock, sooner when incomplete).
+
+    Missing values stay missing (None): nothing is replaced by zero, and a later partial answer never overwrites an
+    earlier complete one."""
     cache = state.get("fundamentals", {})
-    missing = []
+    missing, retries = [], 0
     for rec in records:
         cached = cache.get(rec["symbol"])
-        if cached and now_ts - cached.get("ts", 0) < FUNDAMENTALS_MAX_AGE and "events" in cached.get("data", {}):
+        if fundamentals_fresh(cached, now_ts):
             rec["fundamentals"] = cached["data"]
+        elif cached and cached["data"].get("market_cap") is None and "events" in cached.get("data", {}) and retries >= INCOMPLETE_PER_RUN:
+            rec["fundamentals"] = cached["data"]          # this run's share of retries is used up
         else:
+            if cached and cached["data"].get("market_cap") is None and "events" in cached.get("data", {}):
+                retries += 1
             missing.append(rec)
     if missing:
         session = session_factory()
         if session.start():
             for rec in missing:
+                old = cache.get(rec["symbol"]) or {}
                 data = fundamentals.fetch_fundamentals(session, rec["symbol"])
+                complete = bool(data) and data.get("market_cap") is not None
+                if not complete and old.get("data", {}).get("market_cap") is not None:
+                    data = old["data"]                    # keep the earlier complete answer rather than regress
+                    cache[rec["symbol"]] = {"ts": old.get("ts", now_ts), "data": data, "tries": old.get("tries", 0)}
+                elif data:
+                    tries = 0 if complete else old.get("tries", 0) + 1
+                    cache[rec["symbol"]] = {"ts": now_ts, "data": data, "tries": tries}
                 rec["fundamentals"] = data
-                if data:
-                    cache[rec["symbol"]] = {"ts": now_ts, "data": data}
                 time.sleep(0.15)
         else:
             print("Fundamentals unavailable this run (Yahoo session failed)")
@@ -362,19 +442,37 @@ US_IPO_MAX_AGE_DAYS = 7
 
 
 def carry_us_ipos(ipos, previous, now):
-    """Stamp a fresh US IPO list with its time. If the calendar failed to load, keep the last list that did
-    (up to a week old) and mark it, so the page does not lose it because of one refused request."""
-    if ipos.get("us_ok") and ipos.get("us"):
-        ipos["us_fetched_at"] = now.isoformat(timespec="seconds")
-        return ipos
+    """Stamp a fresh US IPO list with its time. If the calendar failed to load, keep the last list that did (up to a week
+    old) but never present it as current: every carried record is marked stale, records whose date has passed say so, and
+    ipos["us_status"] says what failed, when the list last loaded and how old it is."""
     previous = previous or {}
-    old, stamp = previous.get("us"), previous.get("us_fetched_at")
+    status = {"state": "current", "last_success": None, "original_date": None, "age_days": 0, "last_attempt": now.isoformat(timespec="seconds"),
+              "error": ipos.get("us_error"), "page_url": ipo.PAGE_URL}
+    if ipos.get("us_ok"):
+        ipos["us_fetched_at"] = now.isoformat(timespec="seconds")
+        status["last_success"] = status["original_date"] = ipos["us_fetched_at"]
+        ipos["us_status"] = status
+        return ipos
+    old, stamp = previous.get("us"), previous.get("us_fetched_at") or ((previous.get("us_status") or {}).get("last_success"))
     try:
         age_days = (now - datetime.fromisoformat(stamp)).days if stamp else None
     except (TypeError, ValueError):
         age_days = None
-    if not ipos.get("us_ok") and old and age_days is not None and 0 <= age_days <= US_IPO_MAX_AGE_DAYS:
-        ipos["us"], ipos["us_carried"], ipos["us_fetched_at"] = old, True, stamp
+    status["last_success"] = stamp
+    status["original_date"] = stamp[:10] if stamp else None
+    status["age_days"] = age_days
+    if old and age_days is not None and 0 <= age_days <= US_IPO_MAX_AGE_DAYS:
+        today = now.date()
+        carried = []
+        for deal in old:
+            when = ipo.deal_date(deal.get("date"))
+            carried.append({**deal, "stale": True, "date_passed": bool(when and when < today)})
+        ipos["us"], ipos["us_carried"], ipos["us_fetched_at"] = carried, True, stamp
+        status["state"] = "stale"
+    else:
+        ipos["us"] = []
+        status["state"] = "unavailable"
+    ipos["us_status"] = status
     return ipos
 
 
@@ -422,7 +520,7 @@ def track(args, state, prev_data, calls, ctx, now_ts, token, chat, link_for_symb
     try:
         for call in pending:
             led.add_call(call)
-        resolved = led.resolve_open(ctx.get("bars", {}), ctx["bench"])
+        resolved = led.resolve_open(ctx.get("completed_bars") or ctx.get("bars", {}), ctx["bench"])
         queue = queue + [o["id"] for _, o in resolved]
         led.save()
         stored = tracking.publish_ledger(directory, f"Ledger update {datetime.fromtimestamp(now_ts, timezone.utc):%Y-%m-%d %H:%M}", remote, git_token)
@@ -455,6 +553,10 @@ def run(args):
     now = datetime.now(timezone.utc)
     today = now.date()
     config = json.loads((ROOT / "config" / "universe.json").read_text(encoding="utf-8"))
+    member_path = ROOT / "config" / "membership.json"
+    member_dates = json.loads(member_path.read_text(encoding="utf-8")) if member_path.exists() else {}
+    cost_path = ROOT / "config" / "costs.json"
+    cost_overrides = json.loads(cost_path.read_text(encoding="utf-8")) if cost_path.exists() else {}
     alert_path = ROOT / "config" / "alerts.json"
     alert_cfg = json.loads(alert_path.read_text(encoding="utf-8")) if alert_path.exists() else {}
     prev_data = load_previous(args.prev, "data.json")
@@ -477,7 +579,7 @@ def run(args):
             print("benchmark failed:", err)
 
     ctx = {"now": now, "today": today, "now_ts": int(now.timestamp()), "delivery": delivery, "deals": deals, "bench": bench,
-           "bars": {}, "news_breaker": Breaker(NEWS_FAILURE_LIMIT)}
+           "bars": {}, "news_breaker": Breaker(NEWS_FAILURE_LIMIT), "costs": cost_overrides, "membership": member_dates}
 
     def safe(entry):
         try:
@@ -509,13 +611,14 @@ def run(args):
     for rec in records:
         rec["quality"] = quality.get(rec["symbol"])
     event_cache = event_news.sync(records, state.get("event_news"), now, breaker=Breaker(NEWS_FAILURE_LIMIT))
+    official_events = official.fetch_official(now, {r["symbol"][:-3] for r in records if r["symbol"].endswith(".NS")}, state.get("official"))
     news_events = {s: v.get("events", []) for s, v in event_cache["stocks"].items()}
     add_lists(records)
     raw_index = {}
     overview = market_overview(config, now, raw_index)
     info = {x["symbol"]: {"market": x["market"], "sector": x["sector"]} for x in records if not x.get("new") and x["sector"] != "Other"}
     conditions = market_view.analyse(config.get("regime"), raw_index, ctx["bars"], info)
-    ipos = carry_us_ipos(ipo.fetch_ipos(now), prev_data.get("ipos"), now)
+    ipos = carry_us_ipos(ipo.fetch_ipos(now, prev_data.get("ipos")), prev_data.get("ipos"), now)
     india, india_ok, india_at, ipo_cache = ipo_gmp.fetch_india(now, state.get("ipo_gmp"), fetch_news=news.fetch_news)
     ipos.update({"india": india, "india_ok": india_ok,
                  "india_source": {"name": "Investorgain", "url": ipo_gmp.URL, "fetched_at": india_at}})
@@ -553,15 +656,15 @@ def run(args):
     track_record, pending, queue, notified, outcome_lines = track(args, state, prev_data, calls, ctx, now_ts, token, chat, link_for_symbol)
     if outcome_lines:
         alert_log, _ = alerts.update_log(alert_log, [text for _, text in outcome_lines], now_ts, [sym for sym, _ in outcome_lines])
-    status = status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy)
+    status = status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy, official_events)
     data = {"version": 1, "generated_at": now.isoformat(timespec="seconds"), "market": overview, "conditions": conditions,
-            "status": status, "accuracy": accuracy, "events": events.build(records, today.isoformat(), news_events), "ipos": ipos,
+            "status": status, "accuracy": accuracy, "backtest_method": {"costs": costs.describe(cost_overrides), "notes": BACKTEST_NOTES}, "events": events.build(records, today.isoformat(), news_events, official_events), "ipos": ipos,
             "stocks": records, "errors": [{"symbol": e["symbol"], "error": e["error"]} for e in errors],
             "alerts": alert_log, "track_record": track_record,
             "exchange_data": {"delivery_dates": sorted(delivery)[-3:], "note": "NSE delivery data and bulk/block deals. The exchange order book (bid/ask depth) is not published for free."}}
     new_state = {"seen_alerts": seen, "delivery": delivery, "us_symbols": us_list, "new_listings": registry,
                  "fundamentals": fund_cache, "ipo_gmp": ipo_cache, "alert_log": alert_log,
-                 "alert_sides": sides, "eod_close": closes, "us_close": us_cache, "event_news": event_cache, "ledger_pending": pending, "reply_queue": queue, "notified_outcomes": notified}
+                 "alert_sides": sides, "eod_close": closes, "us_close": us_cache, "event_news": event_cache, "official": official_events, "ledger_pending": pending, "reply_queue": queue, "notified_outcomes": notified}
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

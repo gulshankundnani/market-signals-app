@@ -170,6 +170,25 @@ class StatusTests(unittest.TestCase):
     def states(self, out):
         return {c["name"]: c["state"] for c in out["checks"]}
 
+    def details(self, out):
+        return {c["name"]: c["detail"] for c in out["checks"]}
+
+    def test_a_refused_ipo_calendar_and_nse_feed_show_up_as_warnings_with_their_reason(self):
+        us = {"state": "stale", "error": "HTTP 403 Access Denied: the source refuses automated requests", "last_success": "2026-11-14T11:05:13+00:00"}
+        out = self.status(ipos={"india_ok": True, "us_status": us}, official_events={"ok": False, "error": "HTTP 403: the NSE refuses automated requests", "fetched_at": None})
+        self.assertEqual((self.states(out)["US IPO calendar"], self.states(out)["NSE official events"]), ("warn", "warn"))
+        self.assertIn("403", self.details(out)["US IPO calendar"])
+        self.assertIn("2026-11-14", self.details(out)["US IPO calendar"])
+        self.assertIn("last success never", self.details(out)["NSE official events"])
+
+    def test_healthy_sources_are_ok_and_absent_ones_are_not_reported(self):
+        out = self.status(ipos={"india_ok": True, "us_status": {"state": "current", "error": None}}, official_events={"ok": True, "fetched_at": "2026-11-16T12:00:00+00:00", "reused": True})
+        self.assertEqual((self.states(out)["US IPO calendar"], self.states(out)["NSE official events"]), ("ok", "ok"))
+        self.assertIn("reused", self.details(out)["NSE official events"])
+        plain = self.states(self.status())
+        self.assertNotIn("US IPO calendar", plain)
+        self.assertNotIn("NSE official events", plain)
+
     def test_a_healthy_run_is_all_ok(self):
         out = self.status()
         self.assertEqual(out["overall"], "ok")

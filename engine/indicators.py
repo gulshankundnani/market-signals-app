@@ -17,6 +17,20 @@ def sma(values, n):
     return out
 
 
+def _complete(values, lo, hi):
+    """True when every value in values[lo:hi] is a number. None marks an observation that was never reported."""
+    return all(v is not None for v in values[lo:hi])
+
+
+def sma_complete(values, n):
+    """Simple average over the last n values, or None where any value in that window is missing."""
+    out = [None] * len(values)
+    for i in range(n - 1, len(values)):
+        if _complete(values, i - n + 1, i + 1):
+            out[i] = sum(values[i - n + 1:i + 1]) / n
+    return out
+
+
 def ema(values, n):
     out = [None] * len(values)
     if n <= 0 or len(values) < n:
@@ -112,6 +126,8 @@ def rolling_vwap(high, low, close, volume, n=20):
     out = [None] * len(close)
     typical = [(h + l + c) / 3 for h, l, c in zip(high, low, close)]
     for i in range(n - 1, len(close)):
+        if not _complete(volume, i - n + 1, i + 1):
+            continue
         vol = sum(volume[i - n + 1:i + 1])
         if vol > 0:
             out[i] = sum(t * v for t, v in zip(typical[i - n + 1:i + 1], volume[i - n + 1:i + 1])) / vol
@@ -122,14 +138,16 @@ def chaikin_money_flow(high, low, close, volume, n=20):
     """Chaikin Money Flow, -1 (selling pressure) to +1 (buying pressure).
 
     Each bar's volume is weighted by where the close sits inside the day's range.
-    A volume-based proxy: free data has no real order book.
+    A volume-based proxy: free data has no real order book. Windows containing a bar with no reported volume give None.
     """
     out = [None] * len(close)
     flow = []
     for h, l, c, v in zip(high, low, close, volume):
         multiplier = 0.0 if h == l else ((c - l) - (h - c)) / (h - l)
-        flow.append(multiplier * v)
+        flow.append(None if v is None else multiplier * v)
     for i in range(n - 1, len(close)):
+        if not _complete(volume, i - n + 1, i + 1):
+            continue
         total_volume = sum(volume[i - n + 1:i + 1])
         if total_volume > 0:
             out[i] = sum(flow[i - n + 1:i + 1]) / total_volume
@@ -141,6 +159,8 @@ def up_volume_share(close, volume, n=20):
     out = [None] * len(close)
     for i in range(n, len(close)):
         window = range(i - n + 1, i + 1)
+        if not _complete(volume, i - n + 1, i + 1):
+            continue
         total = sum(volume[j] for j in window)
         if total > 0:
             out[i] = sum(volume[j] for j in window if close[j] > close[j - 1]) / total
@@ -169,8 +189,9 @@ def fibonacci_levels(high, low, lookback=120):
     return {"high": top, "low": bottom, "uptrend": uptrend, "levels": levels}
 
 
-def support_resistance(high, low, close, k=5, lookback=250, tolerance=0.015):
-    """Nearest two support and resistance zones from clustered swing pivots."""
+def support_resistance(high, low, close, k=5, lookback=250, tolerance=0.015, price=None):
+    """Nearest two support and resistance zones from clustered swing pivots. price defaults to the last close; pass the live
+    price when the last completed close is older."""
     n = len(close)
     pivots = []
     for i in range(max(k, n - lookback), n - k):
@@ -185,7 +206,7 @@ def support_resistance(high, low, close, k=5, lookback=250, tolerance=0.015):
         else:
             clusters.append([pivot])
     zones = [{"level": sum(c) / len(c), "touches": len(c)} for c in clusters]
-    price = close[-1]
+    price = close[-1] if price is None else price
     supports = sorted((z for z in zones if z["level"] < price), key=lambda z: -z["level"])[:2]
     resistances = sorted((z for z in zones if z["level"] > price), key=lambda z: z["level"])[:2]
     return {"support": supports, "resistance": resistances}

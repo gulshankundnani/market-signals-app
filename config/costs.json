@@ -1,0 +1,5 @@
+{
+  "_note": "Optional overrides for the backtest cost assumptions, as fractions of the trade value. See engine/costs.py for each rate.",
+  "IN": {},
+  "US": {}
+}

@@ -225,7 +225,7 @@
     [/^Open readings$/, 'Readings still running: price at the alert, the reference level and the volatility risk level they are being checked against.'],
     [/^Recent alerts for this stock$/, 'The latest alerts for this stock, with their reference level, volatility risk level and the indicator readings behind them.'],
     [/^Latest headlines$/, 'Headlines from the last few hours that are clearly about this company, shown as published with their source. No judgement of good or bad news is made from the words, and news is never part of a reading. Headlines come from outside sources and are not checked.'],
-    [/^(Short-term view|Long-term view)/, 'The label counts how many fixed indicator rules point the same way for this time frame. Weeks view uses trend, momentum, RSI, volume and volume pressure. Months-to-years view uses the 200-day average, golden or death cross, 6-month return, 52-week position and volatility. The bar runs from −100 to +100.'],
+    [/^(Short-term view|Long-term view)/, 'The label counts how many fixed indicator rules point the same way for this time frame. Weeks view uses trend, momentum, RSI, volume and volume pressure. Months-to-years view uses the 200-day average, whether the 50-day average sits above or below it (alignment, with any crossover in the last 20 sessions named separately), 6-month return, 52-week position and volatility. Readings use completed daily candles. While the market is open, the unfinished candle of the day gets its own provisional reading. The bar runs from −100 to +100.'],
     [/^Buying and selling pressure$/, 'An estimate from trading volume (money flow and the share of volume on up days) of whether buyers or sellers dominated recently. For India it adds the share of shares actually delivered. It is not exchange order-book data.'],
     [/^Position size$/, 'A calculator, not advice. Enter your capital and the share you are willing to lose, and it works out how many shares keep a move to the volatility risk level within that amount. Prices can gap past the level.'],
     [/^Levels and risk$/, 'Support and resistance are price areas from history where the price has turned before. The volatility risk level is 2 times the average daily range from the price. Volatility is the yearly size of swings. The 1-day loss (95%) is a loss a normal day has stayed within on 95% of days. The worst fall is the biggest drop over the last year.'],
@@ -234,7 +234,7 @@
     [/^Dividends$/, 'Actual dividend payments: how often they are paid, the yield over the last 12 months, special payments and any overdue one. Dividends are not guaranteed.'],
     [/^Peers in the same sector$/, 'Other stocks in this app\'s list from the same sector, to compare readings and valuation.'],
     [/^News$/, 'Recent headlines that are clearly about this company, shown as published with their source and age. They come from outside sources and are not checked. The app does not judge them as good or bad, and they do not change any reading.'],
-    [/^How have these rules worked on this stock\?/, 'The same fixed rules run over up to 5 years of this stock, trading at the next open with a 0.1% cost, compared with simply holding. The most recent 40% is reported on its own. It is past data only and does not predict the future.'],
+    [/^How have these rules worked on this stock\?/, 'The same fixed rules run over up to 5 years of this stock, trading at the next open with assumed taxes, fees and slippage, compared with simply holding. The most recent 40% is reported on its own, but it is the same history with the same rules, not an independent test. It is past data only and does not predict the future.'],
     [/^Lists$/, 'Tick the lists this stock belongs to, such as your watchlist or your own lists.'],
   ];
   let helpCount = 0;
@@ -265,7 +265,7 @@
   }
 
   function kv(pairs) {
-    return h('div', { class: 'kv' }, pairs.map(([k, v]) => h('div', null, h('span', null, k), h('b', null, v))));
+    return h('div', { class: 'kv' }, pairs.map(([k, v]) => h('div', null, h('span', null, k), h('b', null, naOr(v)))));
   }
 
   /* ---------- signals tab ---------- */
@@ -548,11 +548,32 @@
       h('div', { class: 'muted small' }, ago(Math.max(0, Math.round((Date.now() / 1000 - a.ts) / 60)))))))));
   }
 
+  const PART_NAMES = { trend: 'trend', macd: 'MACD momentum', rsi: 'RSI', volume: 'volume spike check', pressure: 'volume pressure',
+    trend200: '200-day average', cross: '50/200-day average', momentum: '6-month return', position: '52-week range', volatility: 'volatility' };
+
+  /* Why a reading is what it is: what supports it, what pulls against it, how complete the data was, and what would weaken it. */
   function signalCard(title, sig) {
     const pos = isNum(sig.score) ? clamp((sig.score + 100) / 2, 0, 100) : 50;
+    const reasons = sig.reasons || [];
+    const up = reasons.filter((r) => r.tone === 'pos').length, down = reasons.filter((r) => r.tone === 'neg').length;
+    const missing = (sig.missing || []).map((k) => PART_NAMES[k] || k);
+    const sure = sig.confidence && sig.confidence !== 'full'
+      ? h('p', { class: 'small warnline' }, `${sig.confidence === 'limited' ? 'Limited' : 'Reduced'} confidence: no data for ${missing.join(' and ')}, so this reading rests on the other parts only.`) : null;
     return h('div', null, h('h3', null, title), badge(sig),
       isNum(sig.score) ? h('div', { class: 'meter', role: 'img', 'aria-label': `Score ${sig.score} on a scale from minus 100 to plus 100` }, h('i', { style: `left:${pos}%` })) : null,
-      reasonsList(sig.reasons));
+      reasons.length ? h('p', { class: 'small muted', style: 'margin:4px 0' }, `${up} part${up === 1 ? '' : 's'} supporting, ${down} against, ${reasons.length - up - down} neutral.`) : null,
+      reasonsList(reasons), sure,
+      (sig.invalidation || []).length ? h('div', { class: 'small invalid' }, h('b', null, 'What would weaken this: '), sig.invalidation.join('; '), '.') : null);
+  }
+
+  /* Where the numbers come from and how current they are. */
+  function dataNote(s) {
+    const lines = [`Prices: free Yahoo Finance data, delayed by up to about 15 minutes. Price date ${s.as_of}.`,
+      `Readings use completed daily candles up to ${s.confirmed_as_of || s.as_of}.`];
+    const live = s.live;
+    return h('div', { class: 'card wide small datanote' },
+      lines.map((l) => h('div', null, l)),
+      s.provisional ? h('div', { class: 'provnote' }, h('b', null, 'Market open: '), `today's candle is unfinished, so the readings above are from the last completed day. Provisional reading with today's price so far (volume left out): ${live ? `weeks view ${labelText(live.short.label)}${isNum(live.short.score) ? ` ${live.short.score > 0 ? '+' : ''}${live.short.score}` : ''}, months-to-years view ${labelText(live.long.label)}${isNum(live.long.score) ? ` ${live.long.score > 0 ? '+' : ''}${live.long.score}` : ''}` : 'not available'}. It is recalculated after the close.`) : null);
   }
 
   /* Every level in one list, highest price first, so the gaps above and below the price read at a glance. */
@@ -615,17 +636,34 @@
   function backtestBlock(b, title) {
     if (!b) return h('div', null, h('h3', null, title), h('p', { class: 'muted small' }, 'Not enough history to test this rule.'));
     const o = b.oos;
-    const verdict = o.total_return > o.buy_hold_return
-      ? 'In the most recent 40% of the test, the rule beat buy-and-hold.'
-      : 'In the most recent 40% of the test, the rule did NOT beat buy-and-hold.';
+    const years = Math.round(b.tested_days / 252 * 10) / 10;
+    const verdict = b.total_return > b.buy_hold_return
+      ? `Over the whole ${years} years the rule beat buy-and-hold.` : `Over the whole ${years} years the rule did NOT beat buy-and-hold.`;
+    const recent = o.total_return > o.buy_hold_return ? 'It also beat it in the most recent 40%.' : 'It did not beat it in the most recent 40% either.';
+    const both = (b.total_return > b.buy_hold_return) === (o.total_return > o.buy_hold_return);
     return h('div', null, h('h3', null, title),
-      h('p', { class: o.total_return > o.buy_hold_return ? 'pos' : 'neg' }, verdict),
+      h('p', { class: b.total_return > b.buy_hold_return ? 'pos' : 'neg' }, verdict, ' ', both ? recent : (o.total_return > o.buy_hold_return ? 'It did beat it in the most recent 40%.' : 'It did not beat it in the most recent 40%.')),
       b.few_trades ? h('p', { class: 'tag warn' }, 'Few trades, so the result is not reliable') : null,
-      h('table', null, h('thead', null, h('tr', null, h('th', null, ''), h('th', { class: 'num' }, 'Rule'), h('th', { class: 'num' }, 'Buy and hold'))),
+      h('table', null, h('thead', null, h('tr', null, h('th', null, ''), h('th', { class: 'num' }, 'Rule (after costs)'), h('th', { class: 'num' }, 'Buy and hold'))),
         h('tbody', null,
-          h('tr', null, h('td', null, `Whole test (${Math.round(b.tested_days / 252 * 10) / 10} years)`), h('td', { class: 'num' }, percent(b.total_return)), h('td', { class: 'num' }, percent(b.buy_hold_return))),
-          h('tr', null, h('td', null, 'Recent 40%'), h('td', { class: 'num' }, percent(o.total_return)), h('td', { class: 'num' }, percent(o.buy_hold_return))))),
-      kv([['Trades', b.trades], ['Win rate', percent(b.win_rate, 0)], ['Profit factor', number(b.profit_factor)], ['Worst fall', percent(b.max_drawdown, 0)], ['Sharpe', number(b.sharpe)], ['Time invested', percent(b.exposure, 0)]]));
+          h('tr', null, h('td', null, `Whole test, total`), h('td', { class: 'num' }, percent(b.total_return)), h('td', { class: 'num' }, percent(b.buy_hold_return))),
+          h('tr', null, h('td', null, 'Whole test, per year'), h('td', { class: 'num' }, percent(b.cagr)), h('td', { class: 'num' }, percent(b.buy_hold_cagr))),
+          h('tr', null, h('td', null, 'Recent 40%, total'), h('td', { class: 'num' }, percent(o.total_return)), h('td', { class: 'num' }, percent(o.buy_hold_return))),
+          b.total ? [h('tr', { class: 'divrow' }, h('td', null, 'With dividends: whole test'), h('td', { class: 'num' }, percent(b.total.total_return)), h('td', { class: 'num' }, percent(b.total.buy_hold_return))),
+            h('tr', { class: 'divrow' }, h('td', null, 'With dividends: recent 40%'), h('td', { class: 'num' }, percent(b.total.recent_total_return)), h('td', { class: 'num' }, percent(b.total.recent_buy_hold_return)))] : null)),
+      kv([['Before costs', percent(b.gross_return)], ['Cost drag', percent(b.cost_drag)], ['Trades', b.trades], ['Win rate', percent(b.win_rate, 0)], ['Profit factor', number(b.profit_factor)],
+        ['Average trade', percent(b.expectancy)], ['Worst fall', percent(b.max_drawdown, 0)], ['Sharpe', number(b.sharpe)], ['Sortino', number(b.sortino)], ['Time invested', percent(b.exposure, 0)]]),
+      b.open_at_end ? h('p', { class: 'muted small' }, 'A position was still open at the end; it is counted as sold at the last close, less costs.') : null);
+  }
+
+  /* The assumptions and limits behind every backtest figure, published with the data. */
+  function backtestMethod(s) {
+    const m = S.data.backtest_method;
+    if (!m) return null;
+    const c = (m.costs || {})[s.market === 'IN' ? 'IN' : 'US'];
+    return h('details', { class: 'card wide' }, h('summary', null, 'Assumptions and limits of these tests'),
+      c ? h('p', { class: 'small' }, `Costs assumed for this market: ${c.entry_pct}% to buy and ${c.exit_pct}% to sell (${c.round_trip_pct}% for a round trip), including taxes, fees and slippage. These are assumptions: your broker's charges differ.`) : null,
+      h('ul', { class: 'clean small' }, (m.notes || []).map((n) => h('li', null, n))));
   }
 
   function fundamentalsBlock(s) {
@@ -743,11 +781,14 @@
     return h('span', { class: `tag ${cls}`, title: `${q.max_diff_pct}% largest difference against ${q.source}` }, text);
   }
 
+  /* A figure that is not available is shown as "n/a" with the reason, never as zero. */
+  const naOr = (v) => (v === DASH || v === '–' ? h('span', { class: 'na', title: 'Not available from the data source for this stock right now' }, 'n/a') : v);
+
   function statsGrid(s) {
     const f = s.fundamentals || {};
     const items = [['Market cap', big(f.market_cap, s.currency)], ['P/E', number(f.pe, 1)], ['Dividend yield', percent(s.dividend_yield, 2)],
       ['ROE', percent(f.roe, 0)], ['Beta', s.risk ? number(s.risk.beta) : DASH], ['Volatility / yr', s.risk ? percent(s.risk.annual_vol, 0) : DASH]];
-    return h('div', { class: 'stats' }, items.map(([k, v]) => h('div', null, h('span', { class: 'muted small' }, k), h('b', null, v))));
+    return h('div', { class: 'stats' }, items.map(([k, v]) => h('div', null, h('span', { class: 'muted small' }, k), h('b', null, naOr(v)))));
   }
 
   function glanceChips(s) {
@@ -758,6 +799,7 @@
     if (s.dividend && s.dividend.overdue) chips.push(h('span', { class: 'tag warn' }, 'Dividend overdue'));
     if (s.new) chips.push(h('span', { class: 'tag warn' }, 'New listing: few signals'));
     if (s.stale) chips.push(h('span', { class: 'tag warn' }, 'Price looks stale'));
+    if (s.provisional) chips.push(h('span', { class: 'tag warn', title: "Today's candle is unfinished. Readings use the last completed day." }, 'Market open: provisional'));
     return chips.length ? h('div', { class: 'chips-row' }, chips) : null;
   }
 
@@ -775,6 +817,7 @@
         h('p', { class: 'advisory wide' }, h('strong', null, 'Advisory: '), 'Not investment advice. Readings and levels come from fixed rules on past prices; the publisher is not a SEBI-registered adviser. ', h('a', { href: 'advisory.html', target: '_blank', rel: 'noopener' }, 'Full disclaimer')),
         alertsForStock(s),
         h('div', { class: 'grid wide', id: 'd-signals' }, h('section', { class: 'card' }, signalCard('Short-term view (weeks)', s.short)), h('section', { class: 'card' }, signalCard('Long-term view (months to years)', s.long))),
+        dataNote(s),
         h('div', { class: 'wide' }, qualityLine(s))],
       technicals: [
         section('Buying and selling pressure', ...pressureBlock(s)),
@@ -794,7 +837,8 @@
         section('News', newsList(s.news.items))],
       backtest: [
         wide(section('How have these rules worked on this stock?', h('div', { class: 'grid' }, backtestBlock(bt.short, 'Short-term rule'), backtestBlock(bt.long, 'Long-term rule')),
-          h('p', { class: 'muted small' }, 'Fixed rules tested on up to 5 years of this stock, trading at the next open with 0.1% cost per trade. Past results do not guarantee future results.')))],
+          h('p', { class: 'muted small' }, 'Fixed rules tested on up to 5 years of this stock, trading at the next open with assumed costs. Past results do not guarantee future results.'))),
+        backtestMethod(s)],
     };
     return h('div', { class: 'detail' },
       h('div', { class: 'dbar' },
@@ -822,16 +866,19 @@
       if (blend < 15) continue;
       const f = s.fundamentals || {};
       const quality = IPO.qualityFromFundamentals(f, null);
-      const q = isNum(quality.score) ? quality.score / 100 : 0;
+      const q = isNum(quality.score) ? quality.score / 100 : null;       // null = fundamentals unavailable: left out, not scored as zero
       // Cautious yield: the lower of what was paid and what the recurring payments imply. Overdue payers count as zero.
       const div = s.dividend;
       const cautious = div && isNum(div.forward_yield) ? Math.min(s.dividend_yield || 0, div.forward_yield) : (s.dividend_yield || 0);
       const dividend = div && div.overdue ? 0 : Math.min(cautious / 0.06, 1);
-      const growth = clamp((isNum(f.revenue_growth) ? f.revenue_growth : 0) / 0.3, -1, 1);
-      const momentum = clamp(((s.indicators || {}).momentum126 || 0) / 0.3, -1, 1);
+      const growth = isNum(f.revenue_growth) ? clamp(f.revenue_growth / 0.3, -1, 1) : null;
+      const momentumRaw = (s.indicators || {}).momentum126;
+      const momentum = isNum(momentumRaw) ? clamp(momentumRaw / 0.3, -1, 1) : null;
       const calm = clamp(1 - vol / 0.5, 0, 1);
-      const income = 0.3 * dividend + 0.3 * (blend / 100) + 0.2 * calm + 0.2 * q;
-      const growing = 0.3 * (blend / 100) + 0.25 * momentum + 0.2 * growth + 0.25 * q;
+      // A missing figure is left out and the weights of the others are scaled up, so unavailable data neither helps nor hurts a stock.
+      const mix = (parts) => { const have = parts.filter(([, x]) => x !== null); return have.reduce((a, [w, x]) => a + w * x, 0) / have.reduce((a, [w]) => a + w, 0); };
+      const income = mix([[0.3, dividend], [0.3, blend / 100], [0.2, calm], [0.2, q]]);
+      const growing = mix([[0.3, blend / 100], [0.25, momentum], [0.2, growth], [0.25, q]]);
       const score = p.goal === 'income' ? income : p.goal === 'growth' ? growing : (income + growing) / 2;
       picks.push({ s, score, blend, vol, quality, dividend: div && div.overdue ? 0 : cautious, growthRaw: f.revenue_growth });
     }
@@ -845,6 +892,7 @@
     if (pick.vol < 0.25) why.push(`Low volatility (${percent(pick.vol, 0)})`);
     if (isNum(pick.growthRaw) && pick.growthRaw > 0.1) why.push(`Revenue growth ${percent(pick.growthRaw, 0)}`);
     if (pick.quality.score !== null && pick.quality.score >= 30) why.push('Healthy fundamentals');
+    if (!isNum(pick.quality.score)) why.push('Fundamentals unavailable, so they were left out of the ranking');
     if (s.pressure && s.pressure.label.startsWith('Buying')) why.push('Buying pressure');
     if (s.lists.includes('Strong delivery buying')) why.push('Strong delivery buying');
     const risks = [`Moves about ${percent(pick.vol, 0)} a year`];
@@ -1096,10 +1144,18 @@
     const tag = (status) => h('span', { class: 'tag' }, status);
     const range = (d) => (isNum(d.price_low) ? (d.price_high !== d.price_low ? `$${d.price_low}–$${d.price_high}` : `$${d.price_low}`) : '–');
     const usTable = ipos.us.length ? h('div', { class: 'card', style: 'padding:0;overflow-x:auto' }, h('table', null,
-      h('thead', null, h('tr', null, h('th', null, 'Company'), h('th', null, 'Status'), h('th', { class: 'num' }, 'Price range'), h('th', { class: 'num hide-sm' }, 'Size'), h('th', null, 'Date'))),
+      h('thead', null, h('tr', null, h('th', null, 'Company'), h('th', null, 'Status'), h('th', { class: 'num' }, 'Price range'), h('th', { class: 'num hide-sm', title: 'As published on the Nasdaq calendar; it can include an over-allotment option' }, 'Size (per Nasdaq)'), h('th', null, 'Date'))),
       h('tbody', null, ipos.us.map((d) => h('tr', null, h('td', { class: 'name' }, h('b', null, d.name), h('span', null, `${d.symbol || 'ticker TBD'} ${d.exchange ? '· ' + d.exchange : ''}`)),
-        h('td', null, tag(d.status)), h('td', { class: 'num' }, range(d)), h('td', { class: 'num hide-sm' }, big(d.amount, 'USD')), h('td', null, d.date || '–')))))) :
-      h('div', { class: 'empty card' }, ipos.us_ok ? 'No US IPOs on the calendar right now.' : 'The US IPO calendar could not be loaded this time.');
+        h('td', null, tag(d.status), d.stale ? h('span', { class: 'tag warn', title: 'From an old copy of the calendar, not current' }, 'Stale') : null), h('td', { class: 'num' }, range(d)), h('td', { class: 'num hide-sm' }, big(d.amount, 'USD')),
+        h('td', null, d.date || '–', d.date_passed ? h('span', { class: 'tag warn', title: 'The date on the old list has already passed' }, 'Date passed') : null)))))) :
+      h('div', { class: 'empty card' }, ipos.us_ok ? 'No US IPOs on the calendar right now.' : 'No current US IPO list is available (see the notice above).');
+    const st = ipos.us_status;
+    const usNotice = st && st.state !== 'current' ? h('div', { class: 'card staleipo', role: 'alert' },
+      h('b', null, st.state === 'stale' ? 'This US IPO list is STALE, not current. ' : 'There is no current US IPO list. '),
+      st.error ? `Why: ${st.error}. ` : '',
+      st.last_success ? `Last successful refresh: ${st.last_success.slice(0, 16).replace('T', ' ')} UTC${isNum(st.age_days) ? ` (${st.age_days} day${st.age_days === 1 ? '' : 's'} ago)` : ''}. The records below are from that day (original data date ${st.original_date}) and may have changed. ` : 'It has not loaded successfully for a long time. ',
+      st.last_attempt ? `Last attempt: ${st.last_attempt.slice(0, 16).replace('T', ' ')} UTC. ` : '',
+      h('a', { href: st.page_url, target: '_blank', rel: 'noopener' }, 'Check the live Nasdaq calendar')) : null;
     const fresh = S.data.stocks.filter((s) => s.new).sort((a, b) => String(b.listed).localeCompare(String(a.listed)));
     const freshTable = fresh.length ? h('div', { class: 'card', style: 'padding:0;overflow-x:auto' }, h('table', null,
       h('thead', null, h('tr', null, h('th', null, 'Stock'), h('th', { class: 'num' }, 'Price'), h('th', null, 'Listed'), h('th', null, 'Signal'), h('th', null, 'Fundamentals check'))),
@@ -1116,7 +1172,7 @@
       indiaIpoSection(ipos),
       h('h2', null, 'Recently listed stocks (added automatically)'), h('p', { class: 'muted small' }, 'New listings found on the NSE list and the Nasdaq/NYSE symbol list are added on their own. Signals need about 60 trading days of history, and fundamentals appear once the company reports.'), freshTable,
       h('h2', null, 'US IPO calendar'), h('p', { class: 'muted small' }, 'From the Nasdaq calendar. Financials for companies that have not listed yet are not available here: use the optional checker at the bottom with figures from the prospectus.'),
-      ipos.us_carried ? h('p', { class: 'tag warn' }, 'The Nasdaq calendar could not be refreshed this time, so this is the last list that loaded.') : null, usTable,
+      usNotice, usTable,
       h('h2', null, 'IPO headlines'), h('div', { class: 'card' }, newsList(ipos.headlines, true)),
       h('h2', null, 'Check an IPO yourself (optional)'),
       h('p', { class: 'muted small' }, 'Everything above updates by itself. Use this only for an IPO that is not in the table above, or to score a company\'s financials: it is the one place you type figures.'),
@@ -1126,7 +1182,7 @@
   /* ---------- events ---------- */
   const EVENT_LABELS = { earnings: 'Results', ex_dividend: 'Ex-dividend', dividend_payment: 'Dividend paid', split: 'Split', bonus: 'Bonus', corporate_action: 'Corporate action' };
   const EVENT_SUBLABELS = { earnings: 'Results expected', ex_dividend: 'Ex-dividend date', dividend_payment: 'Dividend payment date', split: 'Stock split', bonus: 'Bonus issue', corporate_action: 'Record or ex-date' };
-  const BASIS_TAGS = { yahoo: 'YAHOO', estimate: 'ESTIMATED', news: 'NEWS' };
+  const BASIS_TAGS = { yahoo: 'YAHOO', estimate: 'ESTIMATED', news: 'NEWS', nse: 'OFFICIAL', official: 'OFFICIAL' };
   const EVENT_CATEGORIES = [
     { id: 'results', title: 'Results', blurb: 'Quarterly and annual results', types: ['earnings'] },
     { id: 'dividends', title: 'Dividend dates', blurb: 'Ex-dividend and payment dates', types: ['ex_dividend', 'dividend_payment'] },
@@ -1177,6 +1233,29 @@
   }
 
   /* One event as a compact, expandable row: date badge, what and who, the key figure, and the sources underneath. */
+  /* Whether an official source backs this date: CONFIRMED, CONFLICT (the exchange says another date) or UNVERIFIED. */
+  function verifyTag(e) {
+    if (e.verification === 'CONFIRMED') return h('span', { class: 'tag buy', title: e.verification_note || '' }, 'Confirmed by NSE');
+    if (e.verification === 'CONFLICT') return h('span', { class: 'tag warn', title: e.verification_note || '' }, `NSE says ${prettyDate((e.official || {}).date)}`);
+    return h('span', { class: 'tag', title: e.verification_note || '' }, 'Unverified');
+  }
+
+  function verifyLine(e) {
+    if (!e.verification) return null;
+    return h('div', { class: 'small verifyline' }, verifyTag(e), ' ', e.verification_note || '', ' ',
+      e.official_url ? h('a', { href: e.official_url, target: '_blank', rel: 'noopener' }, 'Official source') : null,
+      e.last_checked ? h('span', { class: 'muted' }, ` \u00B7 last checked ${prettyDate(e.last_checked)}`) : h('span', { class: 'muted' }, ' \u00B7 not checked against an official source'));
+  }
+
+  function officialNote() {
+    const o = (S.data.events || {}).official;
+    if (!o) return null;
+    const when = o.fetched_at ? `last read ${o.fetched_at.slice(0, 16).replace('T', ' ')} UTC` : 'not read successfully yet';
+    return h('p', { class: `small ${o.ok ? 'muted' : 'warnline'}`, role: o.ok ? null : 'status' },
+      o.ok ? `Indian dates are checked against the NSE's own announcement feeds (${when}): ${o.confirmed} confirmed, ${o.conflicts} with a different official date, ${o.unverified} unverified.`
+        : `The NSE announcement feed could not be read (${o.error || 'no answer'}), so no date is confirmed; ${when}. US dates have no official machine-readable feed, so they are never confirmed here.`);
+  }
+
   function eventItem(e, withStock) {
     const n = daysUntil(e.date);
     const category = categoryOf(e.type);
@@ -1190,7 +1269,7 @@
         h('div', null, (e.bases || []).map((b) => [src(BASIS_TAGS[b] || 'YAHOO'), ' ']), e.agree ? src('AGREED') : null,
           e.conflict ? h('span', { class: 'tag warn' }, 'differs from another source') : null),
         h('div', { class: 'muted small' }, eventDetail(e), ' ', h('span', null, `Source: ${e.source}.`)),
-        evidenceLine(e), viewStockButton(e, withStock)));
+        verifyLine(e), evidenceLine(e), viewStockButton(e, withStock)));
   }
 
   function announcementItem(a, withStock) {
@@ -1200,7 +1279,7 @@
         h('div', { class: 'evdate' }, h('b', null, '?'), h('span', null, 'no date')),
         h('div', { class: 'evmain' }, h('div', { class: 'evtitle' }, withStock ? stockName(a, true) : a.title), h('div', { class: 'muted small' }, a.title)),
         h('div', { class: 'evfig' }, fig)),
-      h('div', { class: 'evbody' }, h('div', null, src('NEWS')), evidenceLine(a), viewStockButton(a, withStock)));
+      h('div', { class: 'evbody' }, h('div', null, src('NEWS')), h('div', { class: 'small verifyline' }, h('span', { class: 'tag' }, 'Unverified'), ' No date stated. ', a.official_url ? h('a', { href: a.official_url, target: '_blank', rel: 'noopener' }, 'Official source') : null), evidenceLine(a), viewStockButton(a, withStock)));
   }
 
   function stockEvents(s) {
@@ -1272,7 +1351,7 @@
         h('label', { class: 'field' }, h('span', null, 'My watchlist only'), h('input', { type: 'checkbox', checked: f.mine, onchange: (ev) => { f.mine = ev.target.checked; draw(); } })),
         null));
 
-      root.replaceChildren(...[h('h2', null, 'Upcoming events'), controls, chips, empty, h('div', { class: 'evcards' }, cards), estimateNote(),
+      root.replaceChildren(...[h('h2', null, 'Upcoming events'), officialNote(), controls, chips, empty, h('div', { class: 'evcards' }, cards), estimateNote(),
         h('p', { class: 'muted small' }, 'Results, ex-dividend and payment dates for the stocks in this app, from Yahoo Finance and from headlines of prominent news outlets (CNBC TV18, Economic Times, Mint and similar), plus dividend dates estimated from each company\'s own payment pattern. Tap an event for its sources. Every date shows whether two agree, and news items show their headline. Dates can change, so check the exchange notice before acting. The NSE and BSE do not allow free scripted access to their own corporate-action lists, so splits and bonus issues appear only when a prominent outlet has reported them.')]
         .flat(Infinity).filter(Boolean));
       decorateHelp(root);
@@ -1287,6 +1366,7 @@
     DERIVED: 'Worked out by this app from the stocks in its own list, not from the whole exchange.',
     EXTERNAL: 'Headlines from outside sources. They are not checked or endorsed by this app.',
     YAHOO: 'A date taken from Yahoo Finance. The company confirms its dates by notice to the exchange, so check the official notice before relying on it.',
+    OFFICIAL: 'Taken from, or checked against, the announcements that companies make to the National Stock Exchange, read from its public announcement feeds.',
     NEWS: 'Reported in a headline from a prominent news outlet (shown below). Official sources could not be read, so check the exchange notice before relying on it.',
     AGREED: 'Two independent sources give this date: for example Yahoo and a news headline, or an estimate and a news headline.',
     ESTIMATED: 'Worked out by this app from how often the company has paid in the past. The company may announce a different date.',
@@ -1517,7 +1597,7 @@
     return h('div', null,
       h('h2', null, 'Track record'),
       scoreboard(t, min),
-      h('p', { class: 'muted small' }, `${t.calls_total} readings recorded: ${t.resolved} settled, ${t.open} open. A past record, not a forecast.`),
+      h('p', { class: 'muted small' }, `${t.calls_total} readings recorded under the current rules: ${t.resolved} settled, ${t.open} open.${t.older_model_calls ? ` ${t.older_model_calls} more from earlier versions of the rules are kept in the record but not counted here.` : ''} A past record, not a forecast.`),
       groupCards(t),
       recent.length ? [h('h3', null, 'Latest results'), table(['Reading', 'Result', 'Move', 'Dates'], recent)] : null,
       open.length ? h('details', { class: 'card opencalls', open: !o.n }, h('summary', null, `Open readings (${t.open}${t.open > open.length ? `, latest ${open.length} listed` : ''})`),

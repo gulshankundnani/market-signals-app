@@ -192,6 +192,57 @@ Modelled on what Groww, Angel One, Upstox and INDmoney do on a phone:
 * The labels stay neutral ("aligned bullish", "mixed", "aligned bearish") rather than buy, hold or sell, because the
   readings describe conditions and are not advice.
 
+## Method checks (what was verified, and how)
+
+These were checked on 2026-11-16 against independent calculations and sources. The numbers are in the tests, so they can be
+repeated.
+
+* **Missing volume is not zero.** Yahoo sometimes gives no volume for a day. That stays missing; a real zero stays zero. Any
+  volume indicator (VWAP, Chaikin money flow, up-volume share, average volume, the volume spike rule) that would need a
+  missing day gives no value, so a gap can never create a pressure reading. Each reading now carries a coverage figure (the
+  share of its rule's weight that had data), a confidence of full, reduced or limited, and the parts that were missing.
+* **Unfinished daily candles.** While a market is open Yahoo's newest daily bar is the day so far: the close is the live
+  price, the range is the range so far and the volume is only what has traded. (Seen on 16 Nov 2026 at 10:34 UTC with Xetra and
+  London open: SAP.DE's bar had volume 155,629 against 1.41 million the day before.) So the price shown stays live, but every
+  indicator, level, backtest and track-record check uses completed candles, and the unfinished candle gets a separate
+  "provisional" reading (volume left out) that is recalculated after the close. Yahoo's trading-period times in the chart
+  metadata decide when a bar is still running, with 30 minutes of grace after the close.
+* **Indicators.** SMA 20, 50, 200, EMA 12 and 26, RSI 14 (Wilder), MACD 12/26/9, ATR 14 (Wilder), 30-day annualised volatility,
+  VWAP 20, Chaikin money flow 20, up-volume share, 126-day momentum and 252-session highs and lows were compared with pandas and
+  numpy on the same 700-bar series: the largest relative difference was 9e-13 (EMA 26), most were below 1e-13. Nothing was
+  rewritten. Fibonacci levels and support/resistance have worked examples in the tests.
+* **Golden and death crosses are events.** "50-day crossed above the 200-day 9 sessions ago (golden cross)" appears only when
+  the crossover happened in the last 20 sessions. A 50-day average that simply sits above the 200-day is described as
+  "bullish alignment, no recent crossover". The score still follows the alignment.
+* **Thresholds are unchanged** (Buy at +20, Strong Buy at +50, and the same on the sell side): there are no settled results yet
+  to justify changing them, and they are never tuned to flatter the history.
+* **Backtests** have a second set of figures: CAGR, Sortino, expectancy, gross against net return (cost drag), and buy-and-hold
+  CAGR. Costs are now separate for entry and exit and include assumed taxes, fees and slippage (`engine/costs.py`,
+  overridable in `config/costs.json`); an open position at the end is valued as if sold. The simulation was re-implemented
+  independently and matched the engine to the last digit on 16 of 16 stock and rule pairs. The rule beat buy-and-hold over the
+  whole period in only 3 of those 16, and the "recent 40%" is not an independent out-of-sample test (same history, same rules).
+  Limits: prices exclude dividends, the stock list is today's (survivorship bias), no tax on gains.
+* **Track record** counts only calls made under the current rule version (now v3). Older calls stay in the ledger unchanged and
+  keep being resolved, but are not mixed into the success rate.
+
+## Verification tools and follow-up audit
+
+Details and evidence: `docs/audit-followup-2026-11-16.md`.
+
+* `python tools/verify_market_data.py --volume` checks the deployed prices (and NSE volumes) against the NSE end-of-day file and the
+  Cboe history, same session only. Not-yet-published references give UNVERIFIED, never a pass or a fail.
+* `python tools/check_production.py --cache signals-v33` reads what the deployed site published (data freshness, the NSE feed and US IPO
+  status as the Actions run saw them, stale handling, the service-worker cache name) and prints PASS, FAIL or UNVERIFIED for each. It cannot read
+  the Actions logs, which need a login, so "error logged" stays UNVERIFIED unless you read the run log yourself.
+* `python tools/strategy_report.py` measures the two rules against buy-and-hold (drawdown, downside deviation, Sharpe, Sortino,
+  Calmar, exposure, holding period, bull/bear/sideways) separately for NSE and US stocks, with dividends included for both.
+* `python tools/build_membership.py` refreshes the S&P 500 addition dates used to keep a backtest from using years before a stock
+  joined the index. Survivorship bias is not removed and is never claimed to be.
+* US IPO calendar: Nasdaq refuses automated requests (HTTP 403). The failure is logged, retried only every 6 hours, and an old list
+  is shown as stale with its original date, never as current.
+* Event dates: Indian dates are checked against the NSE's own announcement feeds (confirmed, different official date, or
+  unverified with a link and the last check time); US dates are never confirmed.
+
 ## Events tab
 
 The **Events** tab lists what is coming up for the stocks in this app: when results are expected, the ex-dividend date (buy
