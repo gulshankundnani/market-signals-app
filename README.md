@@ -171,12 +171,37 @@ signal components were stronger on winners, and suggested improvements.
   If the ledger cannot be saved, calls wait in the site's state and are saved on the next run.
 * The data branch is public if the repository is public.
 
+## Layout: glance first
+
+Modelled on what Groww, Angel One, Upstox and INDmoney do on a phone:
+
+* **Bottom navigation** on phones (Readings, Screens, IPOs, Market, Events, Record); the top tab row is used on larger screens.
+* **Stock page**: a sticky bar with the price and day change, then a glance block: both readings with their bars, an
+  overall line ("Both views aligned bullish", "The two views differ" and so on) with a bar showing how many of the fixed
+  technical checks point up, down or neither, the 52-week range with a marker, key figures, and chips for the next event
+  and fresh headlines. Below it are tabs: Overview, Technicals, Fundamentals, News & events, Backtest. Alert links open the
+  right tab.
+* **Readings**: each market has a stacked bar (bullish, mixed, bearish) and the index's trend and day move.
+* The labels stay neutral ("aligned bullish", "mixed", "aligned bearish") rather than buy, hold or sell, because the
+  readings describe conditions and are not advice.
+
 ## Events tab
 
 The **Events** tab lists what is coming up for the stocks in this app: when results are expected, the ex-dividend date (buy
-before it to receive the dividend) and the dividend payment date, grouped as this week, the next 30 days and later. It can
-be filtered by market, by type and to your watchlist. Each stock's page has an "Upcoming events" section and lists any
-splits of the last three years.
+before it to receive the dividend), the dividend payment date, and splits or bonus issues when a prominent outlet has
+reported them. The layout follows what established platforms do (Yahoo Finance's category tabs, Groww's
+event cards):
+
+* **One card per category**: Results, Dividend dates, Splits, bonus and other actions, and Announced in the news (no date
+  stated). Each card shows its count and what is next, groups events by day, and shows the first 8 with "Show all".
+* **Category chips with counts** at the top (a swipeable row on phones), plus search, market and "My watchlist only".
+* Each event is a row with a date badge, what it is, and the key figure on the right (dividend per share, split ratio).
+  Tap a row to open it: its sources (YAHOO, NEWS, ESTIMATED, AGREED), the news headline as evidence, and a button to the
+  stock's page.
+* It is built for phones first: one column, rows that are one large tap target, chips that scroll sideways, and two
+  columns of cards only on wide screens.
+
+Each stock's page also has an "Upcoming events" section and lists any splits of the last three years.
 
 * **Where the dates come from.** Results, ex-dividend and payment dates come from Yahoo Finance (taken from the same request
   that fetches fundamentals, so no extra calls). They can be estimates, mostly for Indian companies, so they are labelled

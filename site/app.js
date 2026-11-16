@@ -257,17 +257,6 @@
     }
   }
 
-  const JUMPS = [['Readings', 'signals'], ['Chart', 'price-chart'], ['Pressure', 'buying-and-selling-pressure'], ['Risk', 'levels-and-risk'],
-    ['Fundamentals', 'fundamentals'], ['Dividends', 'dividends'], ['Events', 'upcoming-events'], ['Peers', 'peers-in-the-same-sector'], ['News', 'news'],
-    ['Backtest', 'how-have-these-rules-worked-on-this-stock']];
-
-  function jumpBar() {
-    return h('nav', { class: 'jump', 'aria-label': 'Jump to a section' }, JUMPS.map(([label, id]) => h('button', {
-      type: 'button', class: 'chip',
-      onclick: () => { const target = document.getElementById('d-' + id); if (target) target.scrollIntoView({ block: 'start', behavior: 'smooth' }); },
-    }, label)));
-  }
-
   /* Marks a detail-view card to span the full width of the two-column layout. */
   function wide(el) {
     el.classList.add('wide');
@@ -453,15 +442,18 @@
     const head = h('div', { class: 'panelhead' },
       h('h2', null, MARKET_NAMES[code]),
       h('span', { class: 'muted small' }, `${rows.length} stock${rows.length === 1 ? '' : 's'}`),
-      h('span', { class: 'tag buy' }, `${count.buy} bullish`), h('span', { class: 'tag' }, `${count.hold} mixed`), h('span', { class: 'tag sell' }, `${count.sell} bearish`),
-      index && index.regime ? h('span', { class: `tag ${index.regime === 'Downtrend' ? 'warn' : ''}`, title: `${index.name} ${signed(index.change_pct)} today` }, `${index.name}: ${index.regime}`) : null);
+      index && index.regime ? h('span', { class: `tag ${index.regime === 'Downtrend' ? 'warn' : ''}`, title: `${index.name} ${signed(index.change_pct)} today` }, `${index.name}: ${index.regime}`, isNum(index.change_pct) ? ` ${signed(index.change_pct)}` : '') : null);
+    const bar = rows.length ? h('div', null,
+      h('div', { class: 'leanbar', role: 'img', 'aria-label': `${count.buy} aligned bullish, ${count.hold} mixed, ${count.sell} aligned bearish` },
+        [['u', count.buy], ['n', count.hold], ['d', count.sell]].map(([k, n]) => (n ? h('i', { class: k, style: `flex:${n}` }) : null))),
+      h('div', { class: 'leanlegend' }, h('span', { class: 'up' }, `${count.buy} bullish`), h('span', { class: 'muted' }, `${count.hold} mixed`), h('span', { class: 'down' }, `${count.sell} bearish`))) : null;
     const body = rows.length
       ? h('div', { class: 'tablewrap' }, h('table', null,
         h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Stock'), h('th', { class: 'num' }, 'Price'), h('th', { class: 'num' }, 'Day'),
           h('th', null, 'Signal'), extraColumns(S.filters.view).map((column) => h('th', { class: columnClass(column) }, column.label)))),
         h('tbody', null, rows.map(stockRow))))
       : h('div', { class: 'empty' }, 'No stocks match these filters.');
-    return h('section', { class: 'card panel', 'aria-label': MARKET_NAMES[code] }, head, body);
+    return h('section', { class: 'card panel', 'aria-label': MARKET_NAMES[code] }, head, bar, body);
   }
 
   function updateSignals() {
@@ -510,13 +502,14 @@
 
   /* ---------- detail dialog ---------- */
   let lastFocus = null;
-  function openDetail(symbol, opener) {
+  function openDetail(symbol, opener, tab) {
     const s = S.data.stocks.find((x) => x.symbol === symbol);
     if (!s) return;
     lastFocus = opener || document.activeElement;
     const dlg = $('#detail');
     dlg.replaceChildren(detailView(s));
     decorateHelp(dlg);
+    activateDetailTab(tab || 'overview');
     if (!dlg.open) dlg.showModal();
     dlg.scrollTop = 0;
   }
@@ -539,7 +532,7 @@
       clearHash();
       return;
     }
-    openDetail(symbol, null);
+    openDetail(symbol, null, SECTION_TAB[match[2]]);
     if (match[2]) {
       setTimeout(() => { const target = document.getElementById('d-' + match[2]); if (target) target.scrollIntoView({ block: 'start' }); }, 150);
     }
@@ -698,28 +691,91 @@
     return h('div', { class: 'row', style: 'gap:6px' }, watch, boxes, !names.length ? h('span', { class: 'muted small' }, 'Create more lists on the Signals tab with "+ New list".') : null);
   }
 
+  /* ---------- stock page: glance first, then tabs ---------- */
+  const DETAIL_TABS = [['overview', 'Overview'], ['technicals', 'Technicals'], ['fundamentals', 'Fundamentals'], ['news', 'News & events'], ['backtest', 'Backtest']];
+  const SECTION_TAB = { signals: 'overview', 'price-chart': 'overview', 'recent-alerts-for-this-stock': 'overview',
+    'buying-and-selling-pressure': 'technicals', 'position-size': 'technicals', 'levels-and-risk': 'technicals', patterns: 'technicals',
+    fundamentals: 'fundamentals', dividends: 'fundamentals', 'peers-in-the-same-sector': 'fundamentals', lists: 'fundamentals',
+    news: 'news', 'upcoming-events': 'news', 'latest-headlines': 'news', 'how-have-these-rules-worked-on-this-stock': 'backtest' };
+
+  function activateDetailTab(tab) {
+    const dlg = $('#detail');
+    for (const b of dlg.querySelectorAll('.dtab')) b.setAttribute('aria-selected', String(b.dataset.tab === tab));
+    for (const p of dlg.querySelectorAll('.tabpanel')) p.hidden = p.dataset.tab !== tab;
+    S.detailTab = tab;
+  }
+
+  const changeChip = (pct) => (isNum(pct) ? h('span', { class: `chg ${pct >= 0 ? 'up' : 'down'}` }, `${pct >= 0 ? '▲' : '▼'} ${signed(pct)}`) : null);
+
+  function verdictCard(title, sig) {
+    const pos = isNum(sig.score) ? clamp((sig.score + 100) / 2, 0, 100) : 50;
+    return h('button', { type: 'button', class: 'verdict', onclick: () => { activateDetailTab('overview'); const t = document.getElementById('d-signals'); if (t) t.scrollIntoView({ block: 'start', behavior: 'smooth' }); } },
+      h('span', { class: 'muted small' }, title), badge(sig),
+      isNum(sig.score) ? h('div', { class: 'meter', 'aria-hidden': 'true' }, h('i', { style: `left:${pos}%` })) : null);
+  }
+
+  /* One line that answers "which way do the checks lean?": both views, and how many of the fixed checks point up, down or neither. */
+  function glanceSummary(s) {
+    const checks = [...(s.short.reasons || []), ...(s.long.reasons || [])];
+    if (!checks.length) return null;
+    const up = checks.filter((c) => c.tone === 'pos').length, down = checks.filter((c) => c.tone === 'neg').length, flat = checks.length - up - down;
+    const sides = [side(s.short.label), side(s.long.label)];
+    const lean = sides[0] === sides[1] ? { buy: 'Both views aligned bullish', sell: 'Both views aligned bearish', hold: 'Both views mixed' }[sides[0]] : 'The two views differ';
+    const cls = sides[0] === sides[1] ? sides[0] : 'hold';
+    const part = (n, k) => (n ? h('i', { class: k, style: `flex:${n}` }) : null);
+    return h('div', { class: 'glance' },
+      h('div', { class: 'glancetop' }, h('span', { class: `badge ${cls}` }, lean), h('span', { class: 'small muted' }, `${up} of ${checks.length} checks point up · ${down} down · ${flat} neutral`)),
+      h('div', { class: 'stackbar', role: 'img', 'aria-label': `${up} checks point up, ${down} point down, ${flat} neutral` }, part(up, 'u'), part(flat, 'n'), part(down, 'd')),
+      h('p', { class: 'muted small', style: 'margin:4px 0 0' }, 'From fixed technical rules (trend, momentum, RSI, volume, averages, 52-week position, volatility). Not advice.'));
+  }
+
+  function rangeBar(s) {
+    const i = s.indicators || {};
+    if (!isNum(i.lo252) || !isNum(i.hi252) || i.hi252 <= i.lo252 || !isNum(s.price)) return null;
+    const pos = clamp((s.price - i.lo252) / (i.hi252 - i.lo252) * 100, 0, 100);
+    const below = (1 - s.price / i.hi252) * 100;
+    return h('div', { class: 'rangebox' },
+      h('div', { class: 'rangetop' }, h('span', { class: 'muted small' }, '52-week range'), h('span', { class: 'small' }, `${pos.toFixed(0)}% of the range${below > 0.05 ? ` · ${below.toFixed(1)}% below the high` : ' · at the high'}`)),
+      h('div', { class: 'rangebar', role: 'img', 'aria-label': `Price is at ${pos.toFixed(0)} percent of its 52-week range` }, h('i', { style: `left:${pos}%` })),
+      h('div', { class: 'rangeends small' }, h('span', null, money(i.lo252, s.currency)), h('span', null, money(i.hi252, s.currency))));
+  }
+
+  function statsGrid(s) {
+    const f = s.fundamentals || {};
+    const items = [['Market cap', big(f.market_cap, s.currency)], ['P/E', number(f.pe, 1)], ['Dividend yield', percent(s.dividend_yield, 2)],
+      ['ROE', percent(f.roe, 0)], ['Beta', s.risk ? number(s.risk.beta) : DASH], ['Volatility / yr', s.risk ? percent(s.risk.annual_vol, 0) : DASH]];
+    return h('div', { class: 'stats' }, items.map(([k, v]) => h('div', null, h('span', { class: 'muted small' }, k), h('b', null, v))));
+  }
+
+  function glanceChips(s) {
+    const chips = [];
+    const next = ((S.data.events || {}).items || []).find((e) => e.symbol === s.symbol && daysUntil(e.until || e.date) >= 0);
+    if (next) chips.push(h('button', { type: 'button', class: 'chip', onclick: () => activateDetailTab('news') }, `Next: ${EVENT_LABELS[next.type] || next.type} ${inDays(Math.max(0, daysUntil(next.date)))}`));
+    if (s.news.fresh.length) chips.push(h('button', { type: 'button', class: 'chip', onclick: () => activateDetailTab('news') }, `${s.news.fresh.length} new headline${s.news.fresh.length === 1 ? '' : 's'}`));
+    if (s.dividend && s.dividend.overdue) chips.push(h('span', { class: 'tag warn' }, 'Dividend overdue'));
+    if (s.new) chips.push(h('span', { class: 'tag warn' }, 'New listing: few signals'));
+    if (s.stale) chips.push(h('span', { class: 'tag warn' }, 'Price looks stale'));
+    return chips.length ? h('div', { class: 'chips-row' }, chips) : null;
+  }
+
   function detailView(s) {
     const bt = s.backtest || {};
     const r = s.risk;
-    return h('div', null,
-      h('div', { class: 'dhead' },
-        h('div', null, h('h2', { style: 'margin:0' }, s.name), h('div', { class: 'muted small' }, `${s.symbol} · ${s.exchange || ''} · ${s.sector}`),
-          h('div', { style: 'font-size:22px;font-weight:700' }, money(s.price, s.currency), ' ', h('span', { class: `small ${isNum(s.change_pct) && s.change_pct >= 0 ? 'up' : 'down'}` }, signed(s.change_pct))),
-          h('div', { class: 'muted small' }, `Last price date ${s.as_of}`, s.stale ? ' · price looks stale, the stock may be halted' : ''), qualityLine(s)),
-        jumpBar(),
-        h('button', { type: 'button', class: 'btn ghost', onclick: closeDetail }, 'Close')),
-      h('div', { class: 'dbody' },
+    const hero = h('div', { class: 'hero' },
+      h('div', { class: 'chips-row' }, h('span', { class: 'tag' }, s.market === 'IN' ? 'India' : 'US'), s.exchange ? h('span', { class: 'tag' }, s.exchange) : null, s.sector ? h('span', { class: 'tag' }, s.sector) : null),
+      h('h2', { class: 'heroname' }, s.name, ' ', h('span', { class: 'muted small' }, s.symbol)),
+      h('div', { class: 'heroprice' }, h('span', { class: 'px' }, money(s.price, s.currency)), changeChip(s.change_pct), h('span', { class: 'muted small' }, `as of ${s.as_of}`)),
+      qualityLine(s),
+      h('div', { class: 'verdicts' }, verdictCard('Weeks view', s.short), verdictCard('Months-to-years view', s.long)),
+      glanceSummary(s), rangeBar(s), statsGrid(s), glanceChips(s));
+
+    const panels = {
+      overview: [
         h('p', { class: 'advisory wide' }, h('strong', null, 'Advisory: '), 'Not investment advice or a recommendation. The publisher is not a SEBI-registered investment adviser. Resistance and support references and volatility risk levels come from fixed rules. Do your own research. ', h('a', { href: 'advisory.html', target: '_blank', rel: 'noopener' }, 'Full disclaimer')),
         alertsForStock(s),
-        h('div', { class: 'card wide' }, kv([
-          ['Market cap', big((s.fundamentals || {}).market_cap, s.currency)], ['P/E', number((s.fundamentals || {}).pe, 1)], ['ROE', percent((s.fundamentals || {}).roe, 0)],
-          ['Dividend yield (12m)', percent(s.dividend_yield, 2)],
-          ['52-week range', s.indicators && isNum(s.indicators.lo252) ? `${money(s.indicators.lo252, s.currency)} – ${money(s.indicators.hi252, s.currency)}` : DASH],
-          ['Beta', s.risk ? number(s.risk.beta) : DASH]])),
-        s.news.fresh.length ? h('section', { class: 'card wide' }, h('h3', null, 'Latest headlines'), newsList(s.news.fresh)) : null,
         h('div', { class: 'grid wide', id: 'd-signals' }, h('section', { class: 'card' }, signalCard('Short-term view (weeks)', s.short)), h('section', { class: 'card' }, signalCard('Long-term view (months to years)', s.long))),
-        s.new ? h('p', { class: 'tag warn wide' }, `New listing${s.listed ? ' (listed ' + s.listed + ')' : ''}: little price history, so signals are limited`) : null,
-        wide(section('Price chart', chart(s))),
+        wide(section('Price chart', chart(s)))],
+      technicals: [
         section('Buying and selling pressure', ...pressureBlock(s)),
         positionCalculator(s),
         section('Levels and risk', kv([
@@ -728,15 +784,30 @@
           ['Resistance', ((s.levels || {}).zones || { resistance: [] }).resistance.map((z) => z.level.toFixed(2)).join(', ') || '–'],
           ['Yearly volatility', r ? percent(r.annual_vol, 0) : '–'], ['1-day loss (95% VaR)', r ? percent(r.var95) : '–'],
           ['Bad-day average loss', r ? percent(r.expected_shortfall95) : '–'], ['Worst fall (1 year)', r ? percent(r.max_drawdown, 0) : '–'], ['Beta', r ? number(r.beta) : '–']])),
-        section('Patterns', (s.patterns || []).length ? (s.patterns).map((p) => h('div', { title: p.note, style: 'margin-bottom:6px' }, h('span', { class: `tag ${p.bias === 'bearish' ? 'warn' : ''}` }, `${p.name} (${p.bias})`), h('span', { class: 'muted small' }, p.note))) : h('p', { class: 'muted small' }, 'No notable pattern on the latest candles.')),
+        section('Patterns', (s.patterns || []).length ? (s.patterns).map((p) => h('div', { title: p.note, style: 'margin-bottom:6px' }, h('span', { class: `tag ${p.bias === 'bearish' ? 'warn' : ''}` }, `${p.name} (${p.bias})`), h('span', { class: 'muted small' }, p.note))) : h('p', { class: 'muted small' }, 'No notable pattern on the latest candles.'))],
+      fundamentals: [
         wide(section('Fundamentals', fundamentalsBlock(s))),
         wide(section('Dividends', dividendBlock(s))),
-        wide(section('Upcoming events', stockEvents(s))),
         wide(section('Peers in the same sector', peersBlock(s))),
-        section('News', newsList(s.news.items)),
+        section('Lists', listsBlock(s))],
+      news: [
+        s.news.fresh.length ? h('section', { class: 'card wide', id: 'd-latest-headlines' }, h('h3', null, 'Latest headlines'), newsList(s.news.fresh)) : null,
+        wide(section('Upcoming events', stockEvents(s))),
+        section('News', newsList(s.news.items))],
+      backtest: [
         wide(section('How have these rules worked on this stock?', h('div', { class: 'grid' }, backtestBlock(bt.short, 'Short-term rule'), backtestBlock(bt.long, 'Long-term rule')),
-          h('p', { class: 'muted small' }, 'Fixed rules tested on up to 5 years of this stock, trading at the next open with 0.1% cost per trade. Past results do not guarantee future results.'))),
-        section('Lists', listsBlock(s))));
+          h('p', { class: 'muted small' }, 'Fixed rules tested on up to 5 years of this stock, trading at the next open with 0.1% cost per trade. Past results do not guarantee future results.')))],
+    };
+    return h('div', { class: 'detail' },
+      h('div', { class: 'dbar' },
+        h('div', { class: 'dname' }, h('b', null, s.name), ' ', h('span', { class: 'muted small' }, s.symbol)),
+        h('div', { class: 'dpx' }, h('span', { class: 'px' }, money(s.price, s.currency)), changeChip(s.change_pct)),
+        h('button', { type: 'button', class: 'dclose', 'aria-label': 'Close', onclick: closeDetail }, '✕')),
+      hero,
+      h('div', { class: 'dtabs', role: 'tablist', 'aria-label': 'Sections' }, DETAIL_TABS.map(([id, label]) => h('button', {
+        type: 'button', class: 'dtab', role: 'tab', 'data-tab': id, 'aria-selected': 'false',
+        onclick: () => { activateDetailTab(id); const d = $('#detail'); const bar = d.querySelector('.dtabs'); if (bar && d.scrollTop > bar.offsetTop) d.scrollTo({ top: bar.offsetTop - 48 }); } }, label))),
+      DETAIL_TABS.map(([id]) => h('div', { class: 'dbody tabpanel', 'data-tab': id, role: 'tabpanel', hidden: true }, panels[id])));
   }
 
   /* ---------- suggestions tab ---------- */
@@ -1056,20 +1127,37 @@
 
   /* ---------- events ---------- */
   const EVENT_LABELS = { earnings: 'Results', ex_dividend: 'Ex-dividend', dividend_payment: 'Dividend paid', split: 'Split', bonus: 'Bonus', corporate_action: 'Corporate action' };
+  const EVENT_SUBLABELS = { earnings: 'Results expected', ex_dividend: 'Ex-dividend date', dividend_payment: 'Dividend payment date', split: 'Stock split', bonus: 'Bonus issue', corporate_action: 'Record or ex-date' };
   const BASIS_TAGS = { yahoo: 'YAHOO', estimate: 'ESTIMATED', news: 'NEWS' };
-  const EVENT_GROUPS = [['This week', 0, 7], ['Next 30 days', 8, 30], ['Later', 31, 9999]];
-  S.ev = { market: 'ALL', type: 'ALL', mine: false };
+  const EVENT_CATEGORIES = [
+    { id: 'results', title: 'Results', blurb: 'Quarterly and annual results', types: ['earnings'] },
+    { id: 'dividends', title: 'Dividend dates', blurb: 'Ex-dividend and payment dates', types: ['ex_dividend', 'dividend_payment'] },
+    { id: 'actions', title: 'Splits, bonus and other actions', blurb: 'Reported by prominent news outlets', types: ['split', 'bonus', 'corporate_action'] },
+    { id: 'announced', title: 'Announced in the news', blurb: 'Announced, but no date stated', types: [] },
+  ];
+  const CARD_LIMIT = 8;
+  S.ev = { market: 'ALL', category: 'ALL', mine: false, q: '', all: {} };
 
+  const categoryOf = (type) => (EVENT_CATEGORIES.find((c) => c.types.includes(type)) || EVENT_CATEGORIES[3]).id;
   const todayUtc = () => new Date().toISOString().slice(0, 10);
-  const daysUntil = (iso) => Math.round((Date.parse(iso + 'T00:00:00Z') - Date.parse(todayUtc() + 'T00:00:00Z')) / 86400000);
-  const prettyDate = (iso) => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+  const dayMs = (iso) => Date.parse(iso + 'T00:00:00Z');
+  const daysUntil = (iso) => Math.round((dayMs(iso) - dayMs(todayUtc())) / 86400000);
+  const prettyDate = (iso) => new Date(dayMs(iso)).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+  const monthShort = (iso) => new Date(dayMs(iso)).toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' });
   const inDays = (n) => (n <= 0 ? 'today' : n === 1 ? 'tomorrow' : `in ${n} days`);
+  const dayLabel = (iso) => { const n = daysUntil(iso); return n <= 0 ? `Today · ${prettyDate(iso)}` : n === 1 ? `Tomorrow · ${prettyDate(iso)}` : prettyDate(iso); };
+
+  function eventFigure(e) {
+    if (e.type === 'ex_dividend' && isNum(e.announced_amount)) return [money(e.announced_amount, e.currency), h('small', null, 'per share · announced')];
+    if (e.type === 'ex_dividend' && isNum(e.amount)) return [h('span', { class: 'muted' }, money(e.amount, e.currency)), h('small', null, 'per share · last paid')];
+    if (e.ratio) return [e.ratio, h('small', null, 'ratio')];
+    return null;
+  }
 
   function eventDetail(e) {
     const bits = [];
-    if (e.type === 'ex_dividend' && isNum(e.announced_amount)) bits.push(`Announced ${money(e.announced_amount, e.currency)} per share (reported in the news)`);
-    else if (e.type === 'ex_dividend' && isNum(e.amount)) bits.push(`Latest regular payment ${money(e.amount, e.currency)} per share; the announced amount may differ`);
-    if (e.ratio) bits.push(`ratio ${e.ratio}`);
+    if (e.type === 'ex_dividend' && isNum(e.amount) && !isNum(e.announced_amount)) bits.push('The announced amount may differ from the last payment');
+    if (e.until) bits.push(`Falls between ${prettyDate(e.date)} and ${prettyDate(e.until)}`);
     return [e.detail, ...bits].filter(Boolean).join('. ');
   }
 
@@ -1081,32 +1169,40 @@
       ` (${[ev.source, isNum(ev.age_min) ? ago(ev.age_min) : null].filter(Boolean).join(', ')})`);
   }
 
-  function eventRow(e, withStock) {
-    const n = daysUntil(e.date);
-    const open = withStock && S.data.stocks.some((s) => s.symbol === e.symbol);
-    const when = e.until ? `${prettyDate(e.date)} – ${prettyDate(e.until)}` : prettyDate(e.date);
-    return h('li', { class: 'eventrow' },
-      h('div', { class: 'edate' }, h('b', null, when), h('span', { class: 'muted small' }, e.until && n < 0 ? 'this week' : inDays(n))),
-      h('div', { class: 'ebody' },
-        h('div', null, withStock ? [open ? h('button', { type: 'button', class: 'linklike', onclick: (ev) => openDetail(e.symbol, ev.currentTarget) }, e.name) : e.name, ' ', h('span', { class: 'muted small' }, e.symbol), ' '] : null,
-          h('span', { class: 'tag' }, EVENT_LABELS[e.type] || e.type), ' ', (e.bases || []).map((b) => [src(BASIS_TAGS[b] || 'YAHOO'), ' ']), e.agree ? src('AGREED') : null,
-          e.conflict ? h('span', { class: 'tag warn' }, 'differs from another source') : null),
-        h('div', { class: 'muted small' }, eventDetail(e), ' ', h('span', null, `Source: ${e.source}.`)),
-        evidenceLine(e)));
+  function stockName(e, withStock) {
+    return withStock ? [h('b', null, e.name), ' ', h('span', { class: 'muted small' }, e.symbol)] : null;
   }
 
-  function announcementRow(a, withStock) {
-    const bits = [a.title];
-    if (isNum(a.amount)) bits.push(`${money(a.amount, a.currency)} per share`);
-    if (a.ratio) bits.push(`ratio ${a.ratio}`);
-    const open = withStock && S.data.stocks.some((s) => s.symbol === a.symbol);
-    return h('li', { class: 'eventrow' },
-      h('div', { class: 'edate' }, h('b', null, 'Date not stated')),
-      h('div', { class: 'ebody' },
-        h('div', null, withStock ? [open ? h('button', { type: 'button', class: 'linklike', onclick: (ev) => openDetail(a.symbol, ev.currentTarget) }, a.name) : a.name, ' ', h('span', { class: 'muted small' }, a.symbol), ' '] : null,
-          h('span', { class: 'tag' }, EVENT_LABELS[a.type] || a.type), ' ', src('NEWS')),
-        h('div', { class: 'muted small' }, bits.join(' · ')),
-        evidenceLine(a)));
+  function viewStockButton(e, withStock) {
+    if (!withStock || !S.data.stocks.some((s) => s.symbol === e.symbol)) return null;
+    return h('button', { type: 'button', class: 'chip evopen', onclick: (ev) => openDetail(e.symbol, ev.currentTarget) }, `View ${e.name}`);
+  }
+
+  /* One event as a compact, expandable row: date badge, what and who, the key figure, and the sources underneath. */
+  function eventItem(e, withStock) {
+    const n = daysUntil(e.date);
+    const category = categoryOf(e.type);
+    const sub = e.until ? `${EVENT_SUBLABELS[e.type]} · to ${prettyDate(e.until)}` : `${EVENT_SUBLABELS[e.type] || e.type} · ${inDays(n)}`;
+    return h('details', { class: `ev cat-${category}` },
+      h('summary', null,
+        h('div', { class: 'evdate' }, h('b', null, String(new Date(dayMs(e.date)).getUTCDate())), h('span', null, monthShort(e.date))),
+        h('div', { class: 'evmain' }, h('div', { class: 'evtitle' }, withStock ? stockName(e, true) : EVENT_LABELS[e.type] || e.type), h('div', { class: 'muted small' }, sub)),
+        h('div', { class: 'evfig' }, eventFigure(e))),
+      h('div', { class: 'evbody' },
+        h('div', null, (e.bases || []).map((b) => [src(BASIS_TAGS[b] || 'YAHOO'), ' ']), e.agree ? src('AGREED') : null,
+          e.conflict ? h('span', { class: 'tag warn' }, 'differs from another source') : null),
+        h('div', { class: 'muted small' }, eventDetail(e), ' ', h('span', null, `Source: ${e.source}.`)),
+        evidenceLine(e), viewStockButton(e, withStock)));
+  }
+
+  function announcementItem(a, withStock) {
+    const fig = isNum(a.amount) ? [money(a.amount, a.currency), h('small', null, 'per share')] : a.ratio ? [a.ratio, h('small', null, 'ratio')] : null;
+    return h('details', { class: 'ev cat-announced' },
+      h('summary', null,
+        h('div', { class: 'evdate' }, h('b', null, '?'), h('span', null, 'no date')),
+        h('div', { class: 'evmain' }, h('div', { class: 'evtitle' }, withStock ? stockName(a, true) : a.title), h('div', { class: 'muted small' }, a.title)),
+        h('div', { class: 'evfig' }, fig)),
+      h('div', { class: 'evbody' }, h('div', null, src('NEWS')), evidenceLine(a), viewStockButton(a, withStock)));
   }
 
   function stockEvents(s) {
@@ -1114,8 +1210,8 @@
     const notes = ((S.data.events || {}).announcements || []).filter((a) => a.symbol === s.symbol);
     const splits = s.splits || [];
     return [
-      mine.length ? h('ul', { class: 'clean events' }, mine.map((e) => eventRow(e, false))) : h('p', { class: 'muted small' }, 'No upcoming results, dividend or corporate-action dates were found for this stock.'),
-      notes.length ? [h('p', { class: 'small', style: 'margin-bottom:2px' }, h('b', null, 'Announced in the news, date not stated:')), h('ul', { class: 'clean events' }, notes.map((a) => announcementRow(a, false)))] : null,
+      mine.length || notes.length ? h('div', { class: 'evlist' }, mine.map((e) => eventItem(e, false)), notes.map((a) => announcementItem(a, false)))
+        : h('p', { class: 'muted small' }, 'No upcoming results, dividend or corporate-action dates were found for this stock.'),
       splits.length ? h('p', { class: 'small' }, h('b', null, 'Recent splits: '), splits.map((x) => `${x.ratio} on ${x.date}`).join(', ')) : null,
       h('p', { class: 'muted small', style: 'margin-bottom:0' }, 'Dates come from Yahoo Finance, from headlines of prominent news outlets, or are estimated from past payments, and can change. The exchanges\' own corporate-action lists cannot be read for free, so check the exchange notice before acting on any date.')];
   }
@@ -1130,32 +1226,61 @@
   }
 
   function viewEvents() {
-    const all = ((S.data.events || {}).items || []).filter((e) => daysUntil(e.until || e.date) >= 0);
-    const announcements = (S.data.events || {}).announcements || [];
+    const data = S.data.events || {};
+    const dated = (data.items || []).filter((e) => daysUntil(e.until || e.date) >= 0);
+    const notes = data.announcements || [];
     const f = S.ev;
-    const select = (label, value, options, onChange) => h('label', { class: 'field' }, h('span', null, label),
-      h('select', { onchange: (ev) => { onChange(ev.target.value); draw(); } }, options.map(([v, text]) => h('option', { value: v, selected: v === value }, text))));
-    const results = h('div');
+    const root = h('div', null);
+
+    const passes = (e) => (f.market === 'ALL' || e.market === f.market) && (!f.mine || S.watch.has(e.symbol))
+      && (!f.q || `${e.name} ${e.symbol}`.toLowerCase().includes(f.q.toLowerCase()));
+
     function draw() {
-      const rows = all.filter((e) => (f.market === 'ALL' || e.market === f.market) && (f.type === 'ALL' || e.type === f.type || (f.type === 'actions' && ['split', 'bonus', 'corporate_action'].includes(e.type))) && (!f.mine || S.watch.has(e.symbol)));
-      const nodes = rows.length ? EVENT_GROUPS.map(([title, from, to]) => {
-        const group = rows.filter((e) => { const n = Math.max(0, daysUntil(e.date)); return n >= from && n <= to; });
-        return group.length ? [h('h3', null, `${title} (${group.length})`), h('ul', { class: 'clean events card' }, group.map((e) => eventRow(e, true)))] : null;
-      }) : [h('div', { class: 'empty' }, f.mine ? 'None of the stocks on your watchlist has an upcoming event in the data. Turn off "My watchlist only" to see all.' : 'No upcoming events match these filters.')];
-      const notes = announcements.filter((a) => (f.market === 'ALL' || a.market === f.market) && (f.type === 'ALL' || a.type === f.type || (f.type === 'actions' && ['split', 'bonus', 'corporate_action'].includes(a.type))) && (!f.mine || S.watch.has(a.symbol)));
-      if (notes.length) nodes.push([h('h3', null, `Announced in the news, date not stated (${notes.length})`), h('ul', { class: 'clean events card' }, notes.map((a) => announcementRow(a, true)))]);
-      results.replaceChildren(...nodes.flat(Infinity).filter(Boolean));
-      decorateHelp(results);
+      const rows = (cat) => (cat.id === 'announced' ? notes : dated.filter((e) => cat.types.includes(e.type))).filter(passes);
+      const counts = Object.fromEntries(EVENT_CATEGORIES.map((c) => [c.id, rows(c).length]));
+      const total = EVENT_CATEGORIES.reduce((sum, c) => sum + counts[c.id], 0);
+
+      const chips = h('div', { class: 'catchips', role: 'group', 'aria-label': 'Event categories' },
+        [{ id: 'ALL', title: 'All events' }, ...EVENT_CATEGORIES].map((c) => h('button', {
+          type: 'button', class: `chip catchip cat-${c.id}`, 'aria-pressed': String(f.category === c.id),
+          onclick: () => { f.category = c.id; draw(); } }, c.title, ' ', h('span', { class: 'n' }, String(c.id === 'ALL' ? total : counts[c.id])))));
+
+      const cards = EVENT_CATEGORIES.filter((c) => f.category === 'ALL' || f.category === c.id).map((c) => {
+        const list = rows(c);
+        if (!list.length) return f.category === c.id ? h('div', { class: 'empty' }, 'Nothing in this category matches the filters.') : null;
+        const open = f.all[c.id];
+        const shown = open ? list : list.slice(0, CARD_LIMIT);
+        const first = list[0];
+        const groups = [];
+        shown.forEach((e) => {
+          const key = c.id === 'announced' ? 'Reported recently' : e.date;
+          const last = groups[groups.length - 1];
+          if (last && last.key === key) last.items.push(e); else groups.push({ key, items: [e] });
+        });
+        return h('section', { class: `card evcard cat-${c.id}`, 'aria-label': c.title },
+          h('header', { class: 'evhead' }, h('h3', null, c.title), h('span', { class: 'count' }, String(list.length)), h('span', { class: 'muted small' }, c.blurb),
+            c.id !== 'announced' && first ? h('div', { class: 'muted small evnext' }, `Next: ${first.name} · ${dayLabel(first.date)}`) : null),
+          groups.map((g) => [h('div', { class: 'evgroup' }, c.id === 'announced' ? g.key : dayLabel(g.key)),
+            g.items.map((e) => (c.id === 'announced' ? announcementItem(e, true) : eventItem(e, true)))]),
+          list.length > CARD_LIMIT ? h('button', { type: 'button', class: 'btn ghost evmore', onclick: () => { f.all[c.id] = !open; draw(); } }, open ? 'Show fewer' : `Show all ${list.length}`) : null);
+      });
+
+      const empty = !total ? h('div', { class: 'empty' }, f.mine ? 'None of the stocks on your watchlist has an upcoming event in the data. Turn off "My watchlist only" to see all.' : 'No upcoming events match these filters.') : null;
+      const controls = h('div', { class: 'filterbar' }, h('div', { class: 'row' },
+        h('label', { class: 'field' }, h('span', null, 'Search'), h('input', { type: 'search', placeholder: 'Name or symbol', value: f.q, 'aria-label': 'Search events',
+          oninput: (ev) => { f.q = ev.target.value; clearTimeout(draw.timer); draw.timer = setTimeout(() => { draw(); const box = root.querySelector('input[type=search]'); if (box) { box.focus(); box.setSelectionRange(f.q.length, f.q.length); } }, 250); } })),
+        h('label', { class: 'field' }, h('span', null, 'Market'), h('select', { onchange: (ev) => { f.market = ev.target.value; draw(); } },
+          [['ALL', 'All markets'], ['IN', 'India'], ['US', 'United States']].map(([v, text]) => h('option', { value: v, selected: v === f.market }, text)))),
+        h('label', { class: 'field' }, h('span', null, 'My watchlist only'), h('input', { type: 'checkbox', checked: f.mine, onchange: (ev) => { f.mine = ev.target.checked; draw(); } })),
+        null));
+
+      root.replaceChildren(...[h('h2', null, 'Upcoming events'), controls, chips, empty, h('div', { class: 'evcards' }, cards), estimateNote(),
+        h('p', { class: 'muted small' }, 'Results, ex-dividend and payment dates for the stocks in this app, from Yahoo Finance and from headlines of prominent news outlets (CNBC TV18, Economic Times, Mint and similar), plus dividend dates estimated from each company\'s own payment pattern. Tap an event for its sources. Every date shows whether two agree, and news items show their headline. Dates can change, so check the exchange notice before acting. The NSE and BSE do not allow free scripted access to their own corporate-action lists, so splits and bonus issues appear only when a prominent outlet has reported them.')]
+        .flat(Infinity).filter(Boolean));
+      decorateHelp(root);
     }
     draw();
-    return h('div', null, h('h2', null, 'Upcoming events'),
-      h('div', { class: 'filterbar' }, h('div', { class: 'row' },
-        select('Market', f.market, [['ALL', 'All markets'], ['IN', 'India'], ['US', 'United States']], (v) => { f.market = v; }),
-        select('Type', f.type, [['ALL', 'All events'], ['earnings', 'Results'], ['ex_dividend', 'Ex-dividend'], ['dividend_payment', 'Dividend payment'], ['actions', 'Splits, bonus and other actions']], (v) => { f.type = v; }),
-        h('label', { class: 'field' }, h('span', null, 'My watchlist only'), h('input', { type: 'checkbox', checked: f.mine, onchange: (ev) => { f.mine = ev.target.checked; draw(); } })))),
-      results,
-      estimateNote(),
-      h('p', { class: 'muted small' }, 'Results, ex-dividend and payment dates for the stocks in this app, from Yahoo Finance and from headlines of prominent news outlets (CNBC TV18, Economic Times, Mint and similar), plus dividend dates estimated from each company\'s own payment pattern. Every date shows its sources and whether two agree, and news items show their headline. Dates can change, so check the exchange notice before acting. The NSE and BSE do not allow free scripted access to their own corporate-action lists, so splits and bonus issues appear only when a prominent outlet has reported them.'));
+    return root;
   }
 
   /* ---------- market tab ---------- */
@@ -1361,7 +1486,7 @@
 
   /* ---------- shell ---------- */
   function render() {
-    for (const b of document.querySelectorAll('.tabs button')) {
+    for (const b of document.querySelectorAll('.tabs button, .bottomnav button')) {
       if (b.dataset.tab === S.tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
     }
     const view = $('#view');
@@ -1386,7 +1511,7 @@
   }
 
   function init() {
-    for (const b of document.querySelectorAll('.tabs button')) b.addEventListener('click', () => { S.tab = b.dataset.tab; render(); $('#view').focus({ preventScroll: true }); });
+    for (const b of document.querySelectorAll('.tabs button, .bottomnav button')) b.addEventListener('click', () => { S.tab = b.dataset.tab; render(); $('#view').focus({ preventScroll: true }); });
     $('#refresh').addEventListener('click', () => load(true));
     const dlg = $('#detail');
     dlg.addEventListener('click', (e) => { if (e.target === dlg) closeDetail(); });
