@@ -201,6 +201,7 @@
     [/^Breadth and sectors$/, 'Breadth shows how many stocks are taking part in a move, not just the index. Sectors show which industries are leading or lagging. Both are counted over the stocks in this app\'s list, not the whole exchange.'],
     [/ breadth$/, 'Advancers rose today and decliners fell. The percentages show how many stocks are above their 20, 50 and 200-day averages. When most stocks are above their averages the move is broad. New 20-day highs and lows count stocks closing above or below the last 20 days\' range.'],
     [/ sectors$/, 'The average move of the stocks in each sector over 1, 5 and 20 trading days, every stock counted the same. The last column is how many stocks are in the sector in this app\'s list.'],
+    [/^Price accuracy$/, 'Yahoo is the main price source, so its closing prices on the last few completed sessions are compared with an independent source: the official NSE end-of-day file for India, and the Cboe delayed-quote history for the US. "Match" means within 0.5%. A stock that differs by more than 2% is flagged and gets no new alerts until the sources agree. This checks completed sessions only. The live price during the session has no free independent source.'],
     [/^Recent alerts$/, 'The latest alerts the app has raised: a change in a stock\'s reading, a fresh headline about the stock, or a price reaching its reference or risk level. Use "View analysis" to open the stock.'],
     [/^World and market news/, 'Headlines about markets, interest rates, oil, geopolitics and the economy, from outside news sources. They are not checked by this app.'],
     [/^India IPOs, dates and grey-market premium/, 'Open and upcoming India IPOs with their dates, price band, lot size and subscription. Grey-market premium (GMP) is an unofficial rumour of where the shares may list, and it can be wrong. The listing price and profit or loss are illustrations only.'],
@@ -703,7 +704,7 @@
       h('div', { class: 'dhead' },
         h('div', null, h('h2', { style: 'margin:0' }, s.name), h('div', { class: 'muted small' }, `${s.symbol} · ${s.exchange || ''} · ${s.sector}`),
           h('div', { style: 'font-size:22px;font-weight:700' }, money(s.price, s.currency), ' ', h('span', { class: `small ${isNum(s.change_pct) && s.change_pct >= 0 ? 'up' : 'down'}` }, signed(s.change_pct))),
-          h('div', { class: 'muted small' }, `Last price date ${s.as_of}`, s.stale ? ' · price looks stale, the stock may be halted' : '')),
+          h('div', { class: 'muted small' }, `Last price date ${s.as_of}`, s.stale ? ' · price looks stale, the stock may be halted' : ''), qualityLine(s)),
         jumpBar(),
         h('button', { type: 'button', class: 'btn ghost', onclick: closeDetail }, 'Close')),
       h('div', { class: 'dbody' },
@@ -1113,6 +1114,30 @@
       h('p', { class: 'muted small', style: 'padding:0 12px 8px;margin:6px 0 0' }, 'Average move of the stocks in each sector, every stock counted the same.'));
   }
 
+  function accuracyCard(accuracy) {
+    const rows = ['IN', 'US'].map((k) => (accuracy || {})[k]).filter(Boolean);
+    if (!rows.length) return null;
+    const pct = (v, d = 3) => (isNum(v) ? `${v.toFixed(d)}%` : '–');
+    return h('div', null, h('h2', null, 'Price accuracy ', src('DERIVED')),
+      h('div', { class: 'grid' }, rows.map((s) => h('div', { class: 'card' },
+        h('h3', { style: 'margin:0 0 4px' }, `${s.market === 'IN' ? 'India' : 'United States'}: ${s.source}`),
+        h('div', { class: `regime ${s.mismatch ? 'down' : 'up'}` }, isNum(s.agreement_pct) ? `${s.agreement_pct.toFixed(1)}% match` : 'Not checked'),
+        kv([['Stocks checked', `${s.verified} of ${s.stocks}`], ['Match within 0.5%', String(s.match)], ['Differ 0.5% to 2%', String(s.minor)],
+          ['Differ more than 2%', String(s.mismatch)], ['Median difference', pct(s.median_diff_pct)], ['Largest difference', pct(s.max_diff_pct, 2)],
+          ['Latest session compared', s.as_of || '–'], ['Not covered', String(s.unverified)]]),
+        s.worst && s.worst.length ? h('p', { class: 'muted small', style: 'margin-bottom:0' }, 'Largest differences: ', s.worst.map((w) => `${w.symbol} ${w.max_diff_pct}%`).join(', ')) : null))),
+      h('p', { class: 'muted small' }, 'The Yahoo closing prices on the last completed sessions are compared with the source named above. Live prices during the session are Yahoo only: no free independent source exists.'));
+  }
+
+  function qualityLine(s) {
+    const q = s.quality;
+    if (!q) return h('div', { class: 'muted small' }, 'Prices not cross-checked: no second source covers this stock.');
+    const detail = `largest difference ${q.max_diff_pct}% over ${q.n} session${q.n === 1 ? '' : 's'}`;
+    if (q.status === 'match') return h('div', { class: 'muted small' }, h('span', { class: 'tag buy' }, 'Cross-checked'), ` against ${q.source}: ${detail}`);
+    if (q.status === 'minor') return h('div', { class: 'muted small' }, h('span', { class: 'tag' }, 'Small difference'), ` against ${q.source}: ${detail}`);
+    return h('div', { class: 'muted small' }, h('span', { class: 'tag warn' }, 'Prices disagree'), ` with ${q.source}: ${detail}. New alerts for this stock are paused.`);
+  }
+
   function statusCard(status) {
     if (!status || !status.checks) return null;
     const word = { ok: 'OK', warn: 'Check', info: 'Info' };
@@ -1147,6 +1172,7 @@
           h('div', { class: 'muted small' }, ago(Math.max(0, Math.round((Date.now() / 1000 - a.ts) / 60))), ' ',
             a.symbol && S.data.stocks.some((s) => s.symbol === a.symbol) ? h('button', { type: 'button', class: 'chip', onclick: (e) => openDetail(a.symbol, e.currentTarget) }, 'View analysis') : null)))))] : null,
       h('h2', null, 'World and market news ', src('EXTERNAL')), h('div', { class: 'card' }, newsList(m.news, true)),
+      accuracyCard(S.data.accuracy),
       statusCard(S.data.status),
       h('p', { class: 'muted small' }, (S.data.exchange_data || {}).note || ''));
   }

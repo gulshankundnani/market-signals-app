@@ -13,6 +13,22 @@ BUY, SELL = 20, -20
 STRONG = 50
 
 
+# Components change smoothly with the price, never in hard steps: a stock sitting on its 200-day average must score
+# close to zero, not flip between two readings 70 points apart every time the price ticks across the line.
+TREND_LONG_SCALE = 0.05    # 5% above or below the 200-day average (or 50 vs 200) counts as the full +1 or -1
+TREND_SHORT_SCALE = 0.02   # 2% for the 20-day average and for 20 vs 50
+MACD_SCALE = 0.004         # a MACD histogram of 0.4% of the price counts as the full +-1
+LEVEL_BAND = 0.005         # within 0.5% of an average the wording says "about level with"
+
+
+def _side(gap):
+    return "about level with" if abs(gap) < LEVEL_BAND else "above" if gap > 0 else "below"
+
+
+def _relation(subject, gap, other):
+    return f"{subject} {_side(gap)} {other}"
+
+
 def clamp(x, lo=-1.0, hi=1.0):
     return max(lo, min(hi, x))
 
@@ -97,31 +113,30 @@ def short_score(ind, i):
 
     sma20, sma50 = ind["sma20"][i], ind["sma50"][i]
     if sma20 is not None and sma50 is not None:
-        value = (0.5 if close[i] > sma20 else -0.5) + (0.5 if sma20 > sma50 else -0.5)
-        parts = []
-        parts.append("price above 20-day average" if close[i] > sma20 else "price below 20-day average")
-        parts.append("20-day above 50-day" if sma20 > sma50 else "20-day below 50-day")
+        gap_price, gap_average = close[i] / sma20 - 1, sma20 / sma50 - 1
+        value = 0.5 * clamp(gap_price / TREND_SHORT_SCALE) + 0.5 * clamp(gap_average / TREND_SHORT_SCALE)
+        parts = [_relation("price", gap_price, "20-day average"), _relation("20-day", gap_average, "50-day")]
         c["trend"] = (value, "Trend: " + ", ".join(parts))
 
     hist, prev_hist = ind["macd_hist"][i], ind["macd_hist"][i - 1] if i > 0 else None
     if hist is not None and prev_hist is not None:
         rising = hist > prev_hist
+        value = clamp(hist / (MACD_SCALE * close[i]) + (0.25 if rising else -0.25))
         if hist > 0:
-            value = 1.0 if rising else 0.5
             text = "MACD positive and " + ("rising" if rising else "fading")
         else:
-            value = -0.5 if rising else -1.0
             text = "MACD negative and " + ("recovering" if rising else "falling")
         c["macd"] = (value, "Momentum: " + text)
 
     rsi = ind["rsi"][i]
     if rsi is not None:
         if rsi >= 70:
-            value, text = -0.5, f"RSI {rsi:.0f} is overbought, pullback risk"
+            value, text = 0.5 - (rsi - 70) / 20, f"RSI {rsi:.0f} is overbought, pullback risk"
         elif rsi <= 30:
-            value, text = 0.5, f"RSI {rsi:.0f} is oversold, bounce possible"
+            value, text = -0.5 + (30 - rsi) / 20, f"RSI {rsi:.0f} is oversold, bounce possible"
         else:
             value, text = (rsi - 50) / 40, f"RSI {rsi:.0f} is in the normal range"
+        value = clamp(value)
         c["rsi"] = (value, text)
 
     avg_volume = ind["avg_volume20"][i]
@@ -148,11 +163,12 @@ def long_score(ind, i):
 
     sma50, sma200 = ind["sma50"][i], ind["sma200"][i]
     if sma200 is not None:
-        above = close[i] > sma200
-        c["trend200"] = (1.0 if above else -1.0, "Price is " + ("above" if above else "below") + " the 200-day average")
+        gap = close[i] / sma200 - 1
+        c["trend200"] = (clamp(gap / TREND_LONG_SCALE), "Price is " + _side(gap) + " the 200-day average")
         if sma50 is not None:
-            golden = sma50 > sma200
-            c["cross"] = (1.0 if golden else -1.0, "50-day is " + ("above" if golden else "below") + " the 200-day (" + ("golden" if golden else "death") + " cross zone)")
+            spread = sma50 / sma200 - 1
+            zone = "" if abs(spread) < LEVEL_BAND else " (" + ("golden" if spread > 0 else "death") + " cross zone)"
+            c["cross"] = (clamp(spread / TREND_LONG_SCALE), "50-day is " + _side(spread) + " the 200-day" + zone)
 
     mom = ind["momentum126"][i]
     if mom is not None:
@@ -165,8 +181,7 @@ def long_score(ind, i):
 
     vol = ind["vol30"][i]
     if vol is not None:
-        value = 0.5 if vol <= 0.20 else 0.0 if vol <= 0.40 else -0.5
-        c["volatility"] = (value, f"Volatility {vol * 100:.0f}% a year")
+        c["volatility"] = (0.5 * clamp((0.30 - vol) / 0.20), f"Volatility {vol * 100:.0f}% a year")
 
     return _combine(c, LONG_WEIGHTS)
 

@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from . import digest, market as market_view
+from . import digest, market as market_view, verify
 from . import alerts, backtest, discover, dividends, exchange, fetch, fundamentals, ipo, ipo_gmp, ledger, news, patterns, risk, signals, tracking
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -260,7 +260,7 @@ def send_formatted(token, chat, text, reply_to=None):
     return ok, message_id
 
 
-def status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat):
+def status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy=None):
     """Plain checks of how healthy this run was, for the status panel: [{"name", "state": ok|warn|info, "detail"}]."""
     checks = []
 
@@ -287,6 +287,19 @@ def status_block(config, records, errors, carried, overview, conditions, ipos, d
     add("Market conditions", "warn" if missing else "ok",
         "Worked out for " + ", ".join(sorted(conditions or {})) if not missing else "Not available for " + ", ".join(sorted(missing)))
     latest = max(delivery) if delivery else None
+    if not accuracy:
+        add("Price cross-check", "info", "No second price source could be reached this run")
+    else:
+        parts, healthy = [], True
+        for market in ("IN", "US"):
+            s = (accuracy or {}).get(market)
+            if not s:
+                continue
+            name = "India" if market == "IN" else "US"
+            parts.append(f"{name}: {s['match']} of {s['verified']} match {s['source']} within 0.5% (median difference {s['median_diff_pct']:.3f}%)"
+                         + (f", {s['mismatch']} disagree" if s["mismatch"] else "") + (f", {s['unverified']} not covered" if s["unverified"] else ""))
+            healthy = healthy and s["mismatch"] == 0 and (s["agreement_pct"] or 0) >= 95
+        add("Price cross-check", "ok" if healthy else "warn", "; ".join(parts))
     add("NSE delivery data", "ok" if latest else "info", f"Latest day {latest}" if latest else "Not loaded")
     add("India IPOs", "ok" if (ipos or {}).get("india_ok") else "warn",
         "Fresh from the source" if (ipos or {}).get("india_ok") else "Source unavailable, showing older data")
@@ -485,6 +498,12 @@ def run(args):
 
     fund_cache = fill_fundamentals(records, state, ctx["now_ts"], fetch.YahooSession)
     news.keep_stock_specific(records)
+    india_bases = [x["symbol"][:-3] for x in records if x["symbol"].endswith(".NS")]
+    closes = exchange.sync_closes(state.get("eod_close"), today, india_bases)
+    us_cache = verify.sync_us(state.get("us_close"), today.isoformat(), [x["symbol"] for x in records if x.get("market") == "US"])
+    quality, accuracy = verify.cross_check(records, ctx["bars"], closes, (us_cache or {}).get("closes", {}))
+    for rec in records:
+        rec["quality"] = quality.get(rec["symbol"])
     add_lists(records)
     raw_index = {}
     overview = market_overview(config, now, raw_index)
@@ -498,6 +517,7 @@ def run(args):
 
     first_run = not prev_data
     watch = alerts.watched_symbols(alert_cfg.get("symbols", []), {x["symbol"] for x in records})
+    watch = verify.trusted(watch, quality)     # no alerts on prices the official source disputes
     news_on = bool(alert_cfg.get("news", True))     # headlines in the alerts; no tone is ever worked out from them
     sides = {s: dict(v) for s, v in state.get("alert_sides", {}).items() if isinstance(v, dict)}
     items = []
@@ -527,15 +547,15 @@ def run(args):
     track_record, pending, queue, notified, outcome_lines = track(args, state, prev_data, calls, ctx, now_ts, token, chat, link_for_symbol)
     if outcome_lines:
         alert_log, _ = alerts.update_log(alert_log, [text for _, text in outcome_lines], now_ts, [sym for sym, _ in outcome_lines])
-    status = status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat)
+    status = status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy)
     data = {"version": 1, "generated_at": now.isoformat(timespec="seconds"), "market": overview, "conditions": conditions,
-            "status": status, "ipos": ipos,
+            "status": status, "accuracy": accuracy, "ipos": ipos,
             "stocks": records, "errors": [{"symbol": e["symbol"], "error": e["error"]} for e in errors],
             "alerts": alert_log, "track_record": track_record,
             "exchange_data": {"delivery_dates": sorted(delivery)[-3:], "note": "NSE delivery data and bulk/block deals. The exchange order book (bid/ask depth) is not published for free."}}
     new_state = {"seen_alerts": seen, "delivery": delivery, "us_symbols": us_list, "new_listings": registry,
                  "fundamentals": fund_cache, "ipo_gmp": ipo_cache, "alert_log": alert_log,
-                 "alert_sides": sides, "ledger_pending": pending, "reply_queue": queue, "notified_outcomes": notified}
+                 "alert_sides": sides, "eod_close": closes, "us_close": us_cache, "ledger_pending": pending, "reply_queue": queue, "notified_outcomes": notified}
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

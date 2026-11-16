@@ -45,6 +45,7 @@ def parse_bhavcopy(text):
         if pct is None or not 0 <= pct <= 100:
             continue
         out[row["SYMBOL"]] = {
+            "close": _number(row.get("CLOSE_PRICE", "")),
             "deliv_pct": pct,
             "trades": _number(row.get("NO_OF_TRADES", "")),
             "volume": _number(row.get("TTL_TRD_QNTY", "")),
@@ -81,6 +82,26 @@ def sync_delivery(history, today, symbols, fetcher=fetch_bhavcopy):
                 history[iso] = {s: [r["deliv_pct"], r["trades"]] for s, r in rows.items() if s in wanted}
         day -= timedelta(days=1)
     for old in sorted(history)[:-KEEP_DATES]:
+        del history[old]
+    return history
+
+
+def sync_closes(history, today, symbols, fetcher=fetch_bhavcopy, want=6):
+    """Official closing prices {iso_date: {symbol: close}} for the latest sessions, from the NSE end-of-day file.
+
+    Fetches only days not held yet (at most `want` days are kept up to date) and trims to the symbols we track."""
+    wanted = set(symbols)
+    history = {d: dict(v) for d, v in (history or {}).items() if isinstance(v, dict)}
+    day, looked = today, 0
+    while len([d for d in history if d <= today.strftime("%Y-%m-%d")]) < want and looked < 14:
+        looked += 1
+        if day.weekday() < 5 and day.strftime("%Y-%m-%d") not in history:
+            fetched = fetcher(day)
+            if fetched:
+                iso, rows = fetched
+                history[iso] = {s: r["close"] for s, r in rows.items() if s in wanted and r.get("close")}
+        day -= timedelta(days=1)
+    for old in sorted(history)[:-10]:
         del history[old]
     return history
 

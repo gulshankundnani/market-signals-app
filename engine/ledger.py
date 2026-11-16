@@ -19,7 +19,7 @@ from statistics import median
 
 from . import signals
 
-MODEL = "v1"
+MODEL = "v2"          # v2: score components change smoothly with the price instead of in hard steps
 EXPIRY_DAYS = {"short": 20, "long": 120}      # trading days before a call counts as expired
 MIN_SAMPLE = 30                               # below this, percentages are shown as unreliable
 MIN_GROUP = 10                                # smallest group compared in the component insights

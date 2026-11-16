@@ -156,12 +156,14 @@ class AnalyseTests(unittest.TestCase):
 
 class StatusTests(unittest.TestCase):
     CONFIG = {"market_watch": [1, 2, 3]}
+    ACCURACY = {"IN": {"source": "NSE end-of-day file", "verified": 100, "match": 99, "mismatch": 0, "unverified": 2, "agreement_pct": 99.0, "median_diff_pct": 0.0},
+                "US": {"source": "Cboe delayed-quote history", "verified": 40, "match": 40, "mismatch": 0, "unverified": 0, "agreement_pct": 100.0, "median_diff_pct": 0.001}}
 
     def status(self, **over):
         args = dict(config=self.CONFIG, records=[{"news": {}}, {"news": {}}], errors=[], carried=[],
                     overview={"watch": [1, 2, 3]}, conditions={"IN": {"regime": {"score": 1}}, "US": {"regime": {"score": 0}}},
                     ipos={"india_ok": True}, delivery={"2026-11-13": {}}, track_record={"calls_total": 4}, pending=[],
-                    token="T", chat="C")
+                    token="T", chat="C", accuracy=self.ACCURACY)
         args.update(over)
         return build.status_block(**args)
 
@@ -202,6 +204,20 @@ class StatusTests(unittest.TestCase):
         prices = next(c for c in real["checks"] if c["name"] == "Stock prices")
         self.assertEqual(prices["state"], "warn")
         self.assertIn("1 failed to load", prices["detail"])
+
+    def test_the_price_cross_check_reports_agreement_and_warns_on_disagreement(self):
+        out = self.status()
+        check = next(c for c in out["checks"] if c["name"] == "Price cross-check")
+        self.assertEqual(check["state"], "ok")
+        self.assertIn("India: 99 of 100 match NSE end-of-day file within 0.5%", check["detail"])
+        self.assertIn("2 not covered", check["detail"])
+        self.assertIn("US: 40 of 40 match Cboe delayed-quote history", check["detail"])
+        bad = {**self.ACCURACY, "IN": {**self.ACCURACY["IN"], "mismatch": 3, "match": 90, "agreement_pct": 90.0}}
+        check = next(c for c in self.status(accuracy=bad)["checks"] if c["name"] == "Price cross-check")
+        self.assertEqual(check["state"], "warn")
+        self.assertIn("3 disagree", check["detail"])
+        none = next(c for c in self.status(accuracy=None)["checks"] if c["name"] == "Price cross-check")
+        self.assertEqual(none["state"], "info")
 
     def test_optional_pieces_are_info_not_warnings(self):
         out = self.status(track_record=None, token=None, chat=None, delivery={})

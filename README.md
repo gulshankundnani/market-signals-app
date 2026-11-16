@@ -10,7 +10,7 @@ It is not investment advice. Signals come from fixed rules on free, delayed data
 
 | Feature | Source | Notes |
 |---|---|---|
-| Prices, signals, patterns, risk, backtest | Yahoo Finance (free) | Prices can be up to 15 minutes late |
+| Prices, signals, patterns, risk, backtest | Yahoo Finance (free), cross-checked against the NSE end-of-day file (India) and Cboe delayed-quote history (US) | Prices can be up to 15 minutes late. The cross-check covers completed sessions; see Price accuracy below |
 | News | Google News | Shown as published, with source and age. No good-or-bad tone is worked out from the words. The stock comes first: a headline is attached to a stock only if it is clearly about the company: the full name, a ticker that is not an ordinary word, or a single name word together with business wording (shares, results, Q2, dividend). Stories about people or sports that share a name, rating headlines that name a bank only as the one giving the rating, lists and roundups, and headlines about more than one listed company are ignored. A headline is "fresh", and can be sent as an alert, for 6 hours |
 | Buying / selling pressure | Volume (Chaikin Money Flow, up-volume share) | A proxy. The exchange order book is not published for free |
 | NSE delivery % and bulk/block deals | NSE end-of-day files | India only, updated after each trading day |
@@ -170,6 +170,21 @@ signal components were stronger on winners, and suggested improvements.
   If the ledger cannot be saved, calls wait in the site's state and are saved on the next run.
 * The data branch is public if the repository is public.
 
+## Price accuracy
+
+Yahoo is the main price source, so the build checks it against an independent one on every run: the **NSE's official
+end-of-day file** for Indian stocks (the exchange's own closing price) and **Cboe's public delayed-quote history** for US
+stocks. The closing prices of the last completed sessions are compared date by date. Within 0.5% is a match, 0.5% to 2% a
+small difference, and more than 2% a disagreement. A stock whose prices disagree gets a warning on its page and **no new
+alerts** until the sources agree again. The Market tab shows the result for each source: stocks checked, how many match,
+median and largest difference, and the latest session compared.
+
+* This verifies completed sessions. The live price during the session comes from Yahoo alone: the NSE blocks scripted
+  access to live prices, and no other free source offers them.
+* Cboe's robots.txt cannot be read by this project, so its feed is used gently: one request at a time with a pause, a
+  dozen stocks per run, once per day per stock, stopping at the first "slow down" answer. Stocks it does not cover are
+  shown as not covered, never as matching.
+
 ## Market tab and data status
 
 The Market tab shows market conditions for India and the United States (seven plain checks on the main index: price against
@@ -203,6 +218,9 @@ Then open http://127.0.0.1:8765/. Python 3.10+ and Node 18+ are the only require
 ## How the signals work
 
 * **Short-term (weeks):** trend (20/50-day averages), MACD, RSI, volume and volume pressure. News is not part of it.
+* **Smooth scoring:** every part of a score changes gradually with the price (for example 5% above or below the 200-day
+  average counts as the full +1 or -1). A stock sitting on an average therefore scores near zero and its reading cannot flip
+  between two extremes when the price ticks across the line.
 * **Long-term (months to years):** price against the 200-day average, golden/death cross, 6-month return, 52-week position and volatility.
 * Each score runs from -100 to +100: +20 or more is Buy, -20 or less is Sell, and +/-50 is Strong.
 * **Backtest:** the same fixed rules are run on up to 5 years of each stock, trading at the next open with a 0.1% cost per trade, and compared with buy-and-hold. The most recent 40% is reported separately. In strong bull markets the rules often lag buy-and-hold, and the app says so.
