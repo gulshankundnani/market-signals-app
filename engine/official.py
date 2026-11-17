@@ -11,6 +11,7 @@ import json
 import re
 from datetime import datetime, timedelta
 
+from . import backoff
 from .fetch import FetchError, http_get
 
 ACTIONS_URL = "https://www.nseindia.com/api/corporates-corporateActions?index=equities&from_date={start}&to_date={end}"
@@ -105,7 +106,7 @@ def fetch_official(now, symbols, previous=None, log=print, getter=http_get):
     base = {"ok": False, "fetched_at": stamp, "checked_at": now.isoformat(timespec="seconds"), "error": None, "blocked_until": None,
             "actions": previous.get("actions") or {}, "meetings": previous.get("meetings") or {}, "source": "NSE corporate-actions and board-meetings feeds"}
     if held_until and held_until > now:
-        base.update(error="HTTP 403: the NSE refuses automated requests (not asked again until the pause ends)", blocked_until=held)
+        base.update(error="HTTP 403: the NSE refuses automated requests (not asked again until the pause ends)", blocked_until=held, failures=previous.get("failures", 1))
         log(f"NSE official events: skipped, refused earlier; next attempt after {held}")
         return base
     span = {"start": now.strftime("%d-%m-%Y"), "end": (now + timedelta(days=WINDOW_DAYS)).strftime("%d-%m-%Y")}
@@ -117,7 +118,7 @@ def fetch_official(now, symbols, previous=None, log=print, getter=http_get):
         refused = "403" in text or "401" in text
         base["error"] = "HTTP 403: the NSE refuses automated requests" if refused else (text[:140] or "request failed")
         if refused:
-            base["blocked_until"] = (now + timedelta(hours=BLOCK_BACKOFF_HOURS)).isoformat(timespec="seconds")
+            base["blocked_until"], base["failures"] = backoff.refusal_state(now, previous)
         log(f"NSE official events failed: {base['error']}")
         return base
     base.update(ok=True, fetched_at=now.isoformat(timespec="seconds"), actions=actions, meetings=meetings)

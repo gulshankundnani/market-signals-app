@@ -84,7 +84,7 @@ class FetchTests(unittest.TestCase):
         out = official.fetch_official(NOW.replace(hour=15), {"AAA"}, good, getter=refused, log=logs.append)
         self.assertFalse(out["ok"])
         self.assertIn("403", out["error"])
-        self.assertEqual(out["blocked_until"], "2026-11-16T21:00:00+00:00")
+        self.assertEqual(out["blocked_until"], "2026-11-16T15:30:00+00:00")
         self.assertEqual(out["fetched_at"], "2026-11-16T12:00:00+00:00", "the time of the last SUCCESSFUL check is kept")
         self.assertEqual(len(calls2), 1)
         self.assertTrue(any("failed" in line for line in logs))

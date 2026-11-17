@@ -11,6 +11,7 @@ logged and the NSE is left alone for BLOCK_BACKOFF_HOURS; nothing is worked arou
 import json
 from datetime import datetime, timedelta, timezone
 
+from . import backoff
 from .fetch import FetchError, http_get
 
 URL = "https://www.nseindia.com/api/block-deal"
@@ -63,7 +64,7 @@ def fetch_block_deals(now, previous=None, log=print, getter=http_get):
     except (TypeError, ValueError):
         held_until = None
     if held_until and held_until > now:
-        out.update(error="HTTP 403: the NSE refuses automated requests (not asked again until the pause ends)", blocked_until=held)
+        out.update(error="HTTP 403: the NSE refuses automated requests (not asked again until the pause ends)", blocked_until=held, failures=previous.get("failures", 1))
         log(f"NSE live block deals: skipped, refused earlier; next attempt after {held}")
         return out
     try:
@@ -73,7 +74,7 @@ def fetch_block_deals(now, previous=None, log=print, getter=http_get):
         refused = "403" in text or "401" in text
         out["error"] = "HTTP 403: the NSE refuses automated requests" if refused else (text[:140] or "request failed")
         if refused:
-            out["blocked_until"] = (now + timedelta(hours=BLOCK_BACKOFF_HOURS)).isoformat(timespec="seconds")
+            out["blocked_until"], out["failures"] = backoff.refusal_state(now, previous)
         log(f"NSE live block deals failed: {out['error']}")
         return out
     out.update(ok=True, deals=deals, fetched_at=now.isoformat(timespec="seconds"))

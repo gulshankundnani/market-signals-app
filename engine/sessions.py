@@ -8,6 +8,7 @@ refusal. A brief is sent once per session, and only inside its time window.
 import json
 from datetime import datetime, timedelta, timezone
 
+from . import backoff
 from .fetch import FetchError, http_get
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -52,10 +53,10 @@ class Source:
             refused = "403" in text or "401" in text
             state["error"] = "HTTP 403: the NSE refuses automated requests" if refused else (text[:120] or "request failed")
             if refused:
-                state["blocked_until"] = (now + timedelta(hours=BLOCK_BACKOFF_HOURS)).isoformat(timespec="seconds")
+                state["blocked_until"], state["failures"] = backoff.refusal_state(now, state)
             log(f"{self.name} failed: {state['error']}")
             return None, state
-        return payload, {"ok": True, "fetched_at": now.isoformat(timespec="seconds"), "error": None, "blocked_until": None}
+        return payload, {"ok": True, "fetched_at": now.isoformat(timespec="seconds"), "error": None, "blocked_until": None, "failures": 0}
 
 
 def _num(value):

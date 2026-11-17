@@ -200,12 +200,12 @@ class LiveFeedTests(unittest.TestCase):
         get, calls = self.getter(FetchError("x: HTTP Error 403: Forbidden"))
         out = deals_live.fetch_block_deals(self.NOWDT, getter=get, log=logs.append)
         self.assertFalse(out["ok"])
-        self.assertEqual(out["blocked_until"], "2026-11-17T10:00:00+00:00")
+        self.assertEqual(out["blocked_until"], "2026-11-17T04:30:00+00:00")
         self.assertTrue(any("failed" in l and "403" in l for l in logs))
         get2, calls2 = self.getter(AssertionError("must not be asked"))
-        again = deals_live.fetch_block_deals(self.NOWDT.replace(hour=5), out, getter=get2, log=lambda s: None)
+        again = deals_live.fetch_block_deals(self.NOWDT.replace(minute=10), out, getter=get2, log=lambda s: None)
         self.assertEqual(calls2, [])
-        self.assertEqual(again["blocked_until"], "2026-11-17T10:00:00+00:00")
+        self.assertEqual(again["blocked_until"], "2026-11-17T04:30:00+00:00")
 
     def test_other_failures_do_not_start_a_pause(self):
         get, _ = self.getter(FetchError("x: timed out"))

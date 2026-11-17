@@ -329,8 +329,8 @@ class BriefTests(unittest.TestCase):
 
         payload, state = source.fetch(NOW_IN_MORNING, None, lambda s: None, refuse)
         self.assertIsNone(payload)
-        self.assertEqual(state["blocked_until"], "2026-11-17T09:45:00+00:00")
-        source.fetch(NOW_IN_MORNING.replace(hour=5), state, lambda s: None, refuse)
+        self.assertEqual(state["blocked_until"], "2026-11-17T04:15:00+00:00")
+        source.fetch(NOW_IN_MORNING.replace(minute=50), state, lambda s: None, refuse)
         self.assertEqual(len(calls), 1)
         ok, good = source.fetch(NOW_IN_MORNING.replace(hour=10), state, lambda s: None, lambda url, **kw: json.dumps({"a": 1}).encode())
         self.assertEqual((ok, good["ok"]), ({"a": 1}, True))
