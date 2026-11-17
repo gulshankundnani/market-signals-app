@@ -105,7 +105,7 @@ def fetch_official(now, symbols, previous=None, log=print, getter=http_get):
         held_until = None
     base = {"ok": False, "fetched_at": stamp, "checked_at": now.isoformat(timespec="seconds"), "error": None, "blocked_until": None,
             "actions": previous.get("actions") or {}, "meetings": previous.get("meetings") or {}, "source": "NSE corporate-actions and board-meetings feeds"}
-    if held_until and held_until > now and previous.get("failures"):      # a pause saved by the older fixed 6-hour rule has no count and is not honoured
+    if backoff.still_paused(now, held_until, previous.get("failures")):
         base.update(error="HTTP 403: the NSE refuses automated requests (not asked again until the pause ends)", blocked_until=held, failures=previous.get("failures", 1))
         log(f"NSE official events: skipped, refused earlier; next attempt after {held}")
         return base

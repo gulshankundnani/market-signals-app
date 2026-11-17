@@ -19,6 +19,26 @@ class BackoffTests(unittest.TestCase):
         self.assertEqual(backoff.refusal_state(now, {"failures": "junk-free", "x": 1} if False else {"failures": None})[1], 1)
 
 
+class StillPausedTests(unittest.TestCase):
+    NOW = datetime(2026, 11, 17, 5, 30, tzinfo=timezone.utc)
+
+    def test_only_pauses_that_fit_the_policy_are_honoured(self):
+        at = lambda minutes: self.NOW + timedelta(minutes=minutes)
+        self.assertTrue(backoff.still_paused(self.NOW, at(20), 1))
+        self.assertTrue(backoff.still_paused(self.NOW, at(30), 1))
+        self.assertFalse(backoff.still_paused(self.NOW, at(31), 1), "more time left than one refusal earns: left by the old six-hour rule")
+        self.assertTrue(backoff.still_paused(self.NOW, at(240), 4))
+        self.assertFalse(backoff.still_paused(self.NOW, at(-1), 1), "already over")
+        self.assertFalse(backoff.still_paused(self.NOW, at(10), 0))
+        self.assertFalse(backoff.still_paused(self.NOW, None, 1))
+
+    def test_an_old_pause_that_was_stamped_with_a_count_of_one_is_not_honoured_either(self):
+        from engine import deals_live
+        stuck = {"blocked_until": "2026-11-17T11:00:00+00:00", "failures": 1}
+        out = deals_live.fetch_block_deals(self.NOW, stuck, log=lambda s: None, getter=lambda url, **kw: b'{"data": []}')
+        self.assertTrue(out["ok"])
+
+
 class OldPauseTests(unittest.TestCase):
     """A pause saved by the earlier fixed six-hour rule carries no failure count; the new policy does not honour it, so the feed is tried again at once."""
     NOW = datetime(2026, 11, 17, 5, 30, tzinfo=timezone.utc)

@@ -91,7 +91,7 @@ class FetchTests(unittest.TestCase):
 
     def test_during_the_pause_the_nse_is_not_asked(self):
         get, calls = self.getter([AssertionError("must not be asked")])
-        out = official.fetch_official(NOW, {"AAA"}, {"blocked_until": "2026-11-16T18:00:00+00:00", "failures": 1}, getter=get, log=lambda s: None)
+        out = official.fetch_official(NOW, {"AAA"}, {"blocked_until": "2026-11-16T18:00:00+00:00", "failures": 5}, getter=get, log=lambda s: None)
         self.assertEqual(calls, [])
         self.assertFalse(out["ok"])
         self.assertEqual(out["blocked_until"], "2026-11-16T18:00:00+00:00")

@@ -20,3 +20,9 @@ def refusal_state(now, previous):
     """(blocked_until ISO text, failures) after one more refusal."""
     failures = int((previous or {}).get("failures") or 0) + 1
     return (now + pause(failures)).isoformat(timespec="seconds"), failures
+
+
+def still_paused(now, held_until, failures):
+    """Whether a saved pause should still be honoured. A pause written by this policy never has more time left than pause(failures); one
+    with more (left by the earlier fixed six-hour rule, or with no failure count) is not honoured, so the source is tried again at once."""
+    return bool(held_until and failures and held_until > now and held_until - now <= pause(int(failures)))
