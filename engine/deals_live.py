@@ -63,7 +63,7 @@ def fetch_block_deals(now, previous=None, log=print, getter=http_get):
         held_until = datetime.fromisoformat(held) if held else None
     except (TypeError, ValueError):
         held_until = None
-    if held_until and held_until > now:
+    if held_until and held_until > now and previous.get("failures"):      # a pause saved by the older fixed 6-hour rule has no count and is not honoured
         out.update(error="HTTP 403: the NSE refuses automated requests (not asked again until the pause ends)", blocked_until=held, failures=previous.get("failures", 1))
         log(f"NSE live block deals: skipped, refused earlier; next attempt after {held}")
         return out

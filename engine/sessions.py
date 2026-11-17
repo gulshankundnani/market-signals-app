@@ -43,7 +43,7 @@ class Source:
             held_until = datetime.fromisoformat(held) if held else None
         except (TypeError, ValueError):
             held_until = None
-        if held_until and held_until > now:
+        if held_until and held_until > now and state.get("failures"):      # a pause saved by the older fixed 6-hour rule has no count and is not honoured
             log(f"{self.name}: skipped, refused earlier; next attempt after {held}")
             return None, state
         try:
