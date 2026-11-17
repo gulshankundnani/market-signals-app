@@ -15,7 +15,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from . import digest, event_news, events, market as market_view, verify
-from . import alerts, backtest, costs, discover, membership as index_membership, official, dividends, exchange, fetch, fundamentals, ipo, ipo_gmp, ledger, news, patterns, risk, signals, tracking
+from . import alerts, backtest, costs, deals_live, sessions, wide, discover, membership as index_membership, official, dividends, exchange, fetch, fundamentals, ipo, ipo_gmp, ledger, news, patterns, risk, signals, tracking
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKERS = 6
@@ -303,7 +303,7 @@ def send_formatted(token, chat, text, reply_to=None):
     return ok, message_id
 
 
-def status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy=None, official_events=None):
+def status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy=None, official_events=None, live_deals=None):
     """Plain checks of how healthy this run was, for the status panel: [{"name", "state": ok|warn|info, "detail"}]."""
     checks = []
 
@@ -349,6 +349,10 @@ def status_block(config, records, errors, carried, overview, conditions, ipos, d
     if us:
         add("US IPO calendar", "ok" if us["state"] == "current" else "warn",
             "Loaded this run" if us["state"] == "current" else f"{us['state'].capitalize()}: {us.get('error') or 'no answer'}; last success {us.get('last_success') or 'never'}")
+    if live_deals is not None:
+        add("NSE live block deals", "ok" if live_deals.get("ok") else "warn",
+            f"{len(live_deals.get('deals', []))} today, read {live_deals.get('fetched_at')}" if live_deals.get("ok")
+            else f"{live_deals.get('error') or 'no answer'}; last success {live_deals.get('fetched_at') or 'never'}")
     if official_events is not None:
         if official_events.get("ok"):
             add("NSE official events", "ok", f"Read {official_events.get('fetched_at')}" + (" (reused, under an hour old)" if official_events.get("reused") else ""))
@@ -613,6 +617,7 @@ def run(args):
     event_cache = event_news.sync(records, state.get("event_news"), now, breaker=Breaker(NEWS_FAILURE_LIMIT))
     official_events = official.fetch_official(now, {r["symbol"][:-3] for r in records if r["symbol"].endswith(".NS")}, state.get("official"))
     news_events = {s: v.get("events", []) for s, v in event_cache["stocks"].items()}
+    events_data = events.build(records, today.isoformat(), news_events, official_events)
     add_lists(records)
     raw_index = {}
     overview = market_overview(config, now, raw_index)
@@ -631,11 +636,77 @@ def run(args):
     sides = {s: dict(v) for s, v in state.get("alert_sides", {}).items() if isinstance(v, dict)}
     items = []
     now_ts = int(now.timestamp())
-    lines, seen = alerts.build_messages(previous, {x["symbol"]: x for x in records}, watch,
-                                        state.get("seen_alerts", []), first_run, news_on, sides, items)
+    news_history = {s: list(v) for s, v in (state.get("news_alert_history") or {}).items() if isinstance(v, list)}
+    # Every listed stock: the wide universe, live quotes in batches, factual mover events, and each stock's own headlines in a rotating slice.
+    curated = {x["symbol"] for x in records}
+    wide_list, wide_cache = wide.load_universe(state.get("wide_universe"), now, curated)
+    market_of = {x["symbol"]: x["market"] for x in records}
+    market_of.update({s["symbol"]: s["market"] for s in wide_list})
+    quote_session = fetch.YahooSession()
+    quotes = wide.fetch_quotes(quote_session, sorted(market_of)) if quote_session.start() else {}
+    open_now = wide.open_markets(quotes, market_of)
+    mover_events = wide.mover_events(quotes, market_of, open_now)
+    wide_batch, wide_cursor = wide.pick_news_batch(wide_list, state.get("wide_cursor", 0), [e["symbol"] for e in mover_events])
+    wide_found = wide.wide_news(wide_batch, now, ctx["news_breaker"])
+    print(f"Wide coverage: {len(market_of)} stocks, {len(quotes)} quotes, {len(mover_events)} mover events, news looked up for {len(wide_batch)} ({len(wide_found)} with fresh headlines)")
+    current_all = {x["symbol"]: x for x in records}
+    current_all.update(wide_found)
+    lines, seen = alerts.build_messages(previous, current_all, list(watch) + sorted(wide_found),
+                                        state.get("seen_alerts", []), first_run, news_on, sides, items, news_history, now_ts)
+    # Block deals come from the NSE's live feed and cover every NSE stock, tracked or not.
+    live_deals = deals_live.fetch_block_deals(now, state.get("live_deals"))
+    names = {s[0]: s[1] for s in config["stocks"]}
+    names.update({e["symbol"]: e["name"] for e in registry})
+    names.update({x["symbol"]: x["name"] for x in records})
+    if any(d["symbol"] + ".NS" not in names for d in live_deals["deals"]):
+        try:                                   # a deal in a stock the app does not track: look its name up once, from the NSE's own list
+            names.update(discover.nse_company_names(fetch.http_get(discover.NSE_LIST_URL).decode("utf-8", "replace")))
+        except fetch.FetchError:
+            pass
+    deal_lines, deal_items, deal_seen = alerts.deal_alerts(live_deals["deals"], state.get("deal_seen"), names, now_ts, deals_live.today_ist(now))
+    lines, items = alerts.merge_deals(lines, items, deal_lines, deal_items)
+    wide_names = {s["symbol"]: s["name"] for s in wide_list}
+    mover_lines, mover_items, mover_seen = alerts.mover_alerts(mover_events, {**wide_names, **names}, state.get("mover_seen"), now_ts, wide.MOVERS_PER_RUN)
+    lines, items = alerts.insert_after(lines, items, ("signal", "deal"), mover_lines, mover_items)
+    # Index alerts and the scheduled briefs (pre-open, post-close, flows, US close)
+    nse = dict(state.get("nse_sources") or {})
+    indices_payload, nse["indices"] = sessions.Source("NSE all indices", sessions.ALL_INDICES).fetch(now, nse.get("indices"))
+    indices = sessions.parse_indices(indices_payload)
+    index_lines, index_items, index_seen = sessions.index_alerts(sessions.index_events(indices, (overview or {}).get("watch"), "IN" in open_now), state.get("index_seen"), now_ts)
+    lines, items = alerts.insert_after(lines, items, ("brief",), index_lines, index_items)
+    briefs_sent = dict(state.get("briefs_sent") or {})
+    today_ist = now.astimezone(sessions.IST).strftime("%Y-%m-%d")
+    today_label = now.astimezone(sessions.IST).strftime("%d-%b-%Y")
+    todays = [f"{e['name']} ({e['type'].replace('_', ' ')})" for e in events_data["items"] if e["date"] == today_ist and e["market"] == "IN" and e.get("verification") == "CONFIRMED"]
+    cues = [(w["name"], w["change_pct"]) for w in (overview or {}).get("watch", []) if w.get("symbol") in ("^GSPC", "^IXIC", "^DJI", "^VIX") and w.get("change_pct") is not None]
+    brief_lines, brief_items = [], []
+    for window in sessions.due_windows(now, briefs_sent):
+        flows = {}
+        if window in ("in_preopen", "in_postclose", "in_flows"):
+            payload, nse["flows"] = sessions.Source("NSE institutional flows", sessions.FII_DII).fetch(now, nse.get("flows"))
+            flows = sessions.parse_flows(payload)
+        body = []
+        if window == "in_preopen":
+            payload, nse["preopen"] = sessions.Source("NSE pre-open", sessions.PREOPEN).fetch(now, nse.get("preopen"))
+            body = sessions.preopen_brief(sessions.parse_preopen(payload) if payload else None, cues, flows, todays)
+        elif window == "in_postclose" and "IN" not in open_now:
+            up, down, extremes = wide.top_moves(quotes, market_of, "IN")
+            payload, nse["deals"] = sessions.Source("NSE large deals", sessions.LARGE_DEALS).fetch(now, nse.get("deals"))
+            body = sessions.postclose_brief(indices, up, down, extremes, flows, today_label, sessions.parse_deals(payload, today_label), todays) if indices else []
+        elif window == "in_flows" and flows.get("date") == today_label:
+            body = [f"Net flows today: FII/FPI {flows.get('FII/FPI', 0):+,.0f} cr, DII {flows.get('DII', 0):+,.0f} cr"]
+        elif window == "us_close" and "US" not in open_now:
+            up, down, extremes = wide.top_moves(quotes, market_of, "US")
+            body = sessions.us_close_brief((overview or {}).get("watch"), up, down, extremes)
+        if body:
+            item = sessions.brief_item(window, body, now_ts)
+            brief_items.append(item)
+            brief_lines.append(f"{item['name']}: " + " | ".join(body)[:300])
+            briefs_sent[window] = today_ist
+    lines, items = alerts.insert_after(lines, items, (), brief_lines, brief_items)
     by_symbol = {x["symbol"]: x for x in records}
     alert_log, added = alerts.update_log(alerts.drop_irrelevant(state.get("alert_log", []), by_symbol), lines, now_ts, [i["symbol"] for i in items])
-    print(f"Alerts: {len(added)} new, {len(watch)} stocks watched")
+    print(f"Alerts: {len(added)} new ({len(deal_lines)} block deals), {len(watch)} stocks watched")
     token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
     site_url = args.prev if args.prev.startswith("http") else ""
 
@@ -644,7 +715,7 @@ def run(args):
 
     calls = tracking.make_calls(items, {x["symbol"]: x for x in records}, now_ts)
     if lines and token and chat:
-        links = [link_for_symbol(i["symbol"], "news" if i["kind"] == "news" else "signals") for i in items]
+        links = [link_for_symbol(i["symbol"], "news" if i["kind"] == "news" else "signals") if i["symbol"] in by_symbol else None for i in items]
         for message, start, end in digest.render(items, links, now_ts):
             ok, message_id = send_formatted(token, chat, message)
             print(f"Telegram alert {'sent' if ok else 'failed'} ({end - start} alerts)")
@@ -656,15 +727,17 @@ def run(args):
     track_record, pending, queue, notified, outcome_lines = track(args, state, prev_data, calls, ctx, now_ts, token, chat, link_for_symbol)
     if outcome_lines:
         alert_log, _ = alerts.update_log(alert_log, [text for _, text in outcome_lines], now_ts, [sym for sym, _ in outcome_lines])
-    status = status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy, official_events)
+    status = status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy, official_events, live_deals)
     data = {"version": 1, "generated_at": now.isoformat(timespec="seconds"), "market": overview, "conditions": conditions,
-            "status": status, "accuracy": accuracy, "backtest_method": {"costs": costs.describe(cost_overrides), "notes": BACKTEST_NOTES}, "events": events.build(records, today.isoformat(), news_events, official_events), "ipos": ipos,
+            "status": status, "accuracy": accuracy, "backtest_method": {"costs": costs.describe(cost_overrides), "notes": BACKTEST_NOTES}, "events": events_data, "ipos": ipos,
             "stocks": records, "errors": [{"symbol": e["symbol"], "error": e["error"]} for e in errors],
             "alerts": alert_log, "track_record": track_record,
             "exchange_data": {"delivery_dates": sorted(delivery)[-3:], "note": "NSE delivery data and bulk/block deals. The exchange order book (bid/ask depth) is not published for free."}}
     new_state = {"seen_alerts": seen, "delivery": delivery, "us_symbols": us_list, "new_listings": registry,
                  "fundamentals": fund_cache, "ipo_gmp": ipo_cache, "alert_log": alert_log,
-                 "alert_sides": sides, "eod_close": closes, "us_close": us_cache, "event_news": event_cache, "official": official_events, "ledger_pending": pending, "reply_queue": queue, "notified_outcomes": notified}
+                 "alert_sides": sides, "wide_universe": wide_cache, "wide_cursor": wide_cursor, "mover_seen": mover_seen, "index_seen": index_seen,
+                 "briefs_sent": {k: v for k, v in briefs_sent.items() if v == today_ist}, "nse_sources": nse, "news_alert_history": {s: v for s, v in news_history.items() if v}, "deal_seen": deal_seen,
+                 "live_deals": {k: v for k, v in live_deals.items() if k != "deals"}, "eod_close": closes, "us_close": us_cache, "event_news": event_cache, "official": official_events, "ledger_pending": pending, "reply_queue": queue, "notified_outcomes": notified}
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

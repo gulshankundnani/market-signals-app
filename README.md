@@ -225,6 +225,29 @@ repeated.
 * **Track record** counts only calls made under the current rule version (now v3). Older calls stay in the ledger unchanged and
   keep being resolved, but are not mixed into the success rate.
 
+## Every-stock coverage, briefs and index alerts
+
+* **Full analysis (readings, backtests):** the 200 Nifty 200 stocks (plus Groww) and 41 US stocks in `config/universe.json`. Refresh the list with
+  `python tools/update_universe.py`; existing entries are never changed.
+* **Every other listed stock:** all ~2,170 other NSE equity-series stocks and the rest of the S&P 500 (`engine/wide.py`) get live quotes in
+  batches of 100, factual **mover** alerts (a move of 8% India / 6% US or more, a volume surge of 3x average on a 2%+ move, a new 52-week high
+  or low; liquid stocks). **Penny and small stocks are included** with higher bars (12% India / 10% US, or 5x volume on a 5%+ move, no 52-week alerts), an
+  average-turnover floor so a handful of trades cannot raise an alert, a "small stock" label, and at most 3 of a run's mover alerts; their own headlines looked up **stock by stock** in a rotating slice of 50 per run (stocks that just moved
+  first), so the list is covered every few hours. Deals and official event dates cover every NSE stock.
+* **Index alerts:** moves past 1, 2 and 3 percent, 52-week highs and lows, and volatility indexes past a level, for the main NSE indexes (while
+  the market is open) and the global ones (once per session).
+* **Briefs:** India pre-open (09:08 to 09:40 IST), post-close (16:00 to 19:30) and institutional flows (18:30 to 22:00), and the US close
+  (02:45 to 06:00 IST), each sent once per day from the exchange's own figures. Not sent when the data is not there.
+* **Short alert wording:** indicator lines are abbreviated (P>20D, 50D<200D, RSI 61 normal) with a key; the site keeps the full wording.
+* **Survivorship bias:** still not resolved and never claimed to be. Free data has no delisted prices or point-in-time index membership. If
+  you have such files, `tools/survivorship_probe.py` tests them with the same rules, apart from the published figures.
+
+## Alerts: fairness and block deals
+
+See `docs/alerts-audit-2026-11-17.md`. A stock gets at most 2 headline alerts a day, repeated stories are skipped, and the stocks alerted
+least go first, so heavily covered names cannot fill the channel. Block deals are announced from the NSE's live feed for any NSE stock,
+tracked or not, as soon as they appear. Only the 122 tracked stocks (plus new listings) get readings and headlines.
+
 ## Verification tools and follow-up audit
 
 Details and evidence: `docs/audit-followup-2026-11-16.md`.

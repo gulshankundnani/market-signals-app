@@ -20,9 +20,15 @@ is a claim of accuracy beyond what the numbers show.
 * 16 Nov: Reliance 7,653,026 against 13.8 to 19.7 million on the previous four sessions. Yahoo's daily bar and its
   `regularMarketVolume` agree; the 5-minute bars to 15:25 IST sum to 7,498,682 with one empty bar, so the difference to the daily
   figure is the last bar. This was measured about 30 minutes after the close.
-* **Not yet explained.** The NSE final volume for 16 Nov was not published when checked (`--volume` shows UNVERIFIED). Until it is,
-  the discrepancy is either real low volume or a volume that was still incomplete 30 minutes after the close. Re-run the tool
-  after the NSE file appears. **The volume calculation was not changed.** Missing volume stays missing and a real zero stays zero.
+* **Resolved on 17 Nov (04:09 UTC), when the NSE file for 16 Nov was published.** The NSE final volume for Reliance was 7,653,528.
+  Yahoo had shown 7,653,026 half an hour after the close, 502 shares (0.0066%) short, and now equals the NSE figure exactly. So the
+  low reading was **genuine low volume**, not an incomplete count, an adjustment or a different data source. For all 10 NSE stocks
+  the volume Yahoo showed 30 minutes after the close was within 0.054% of the NSE final (largest: LT, 615 shares); every later Yahoo
+  figure equals the NSE final exactly. The small late additions are consistent with trades reported after the close.
+  **The volume calculation was not changed.** Missing volume stays missing and a real zero stays zero.
+* Provisional readings were observed live on 17 Nov at 04:09 UTC with the Indian market open: 119 Indian stocks flagged provisional,
+  `confirmed_as_of` 2026-11-16, a separate provisional reading with volume left out and "reduced" confidence, and the "Market open"
+  chip and note on the stock page. No US stock was provisional (that market was closed).
 
 ## 3. Survivorship bias: what free data can and cannot do
 

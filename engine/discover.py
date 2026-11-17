@@ -42,6 +42,16 @@ def india_new_listings(text, today, days=INDIA_WINDOW_DAYS):
     return found[: MAX_NEW_PER_RUN["IN"]]
 
 
+def nse_company_names(text):
+    """{"SYMBOL.NS": company name} for every equity-series stock in the NSE equity list."""
+    out = {}
+    for row in csv.DictReader(io.StringIO(text)):
+        row = {(k or "").strip(): (v or "").strip() for k, v in row.items()}
+        if row.get("SERIES") == "EQ" and re.match(r"^[A-Z0-9&-]{1,20}$", row.get("SYMBOL", "")) and row.get("NAME OF COMPANY"):
+            out[row["SYMBOL"] + ".NS"] = row["NAME OF COMPANY"]
+    return out
+
+
 def parse_us_directory(text, symbol_col, test_col, etf_col):
     """Common-stock-like symbols from a Nasdaq Trader pipe file. Returns {symbol: name}."""
     out = {}

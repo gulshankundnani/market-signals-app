@@ -11,7 +11,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import news, signals
 
@@ -29,6 +29,9 @@ NOTE = "Levels are indicative, from fixed chart rules. Not advice."
 ENTER = 25
 LEAVE = 10
 NEWS_PER_RUN = 6      # at most this many headlines go into one run's alerts; the rest stay on the site
+NEWS_PER_STOCK_DAY = 2   # at most this many headline alerts for one stock in 24 hours, so a very talked-about stock cannot fill the channel
+STORY_SIMILARITY = 0.6   # a headline this similar to one already sent for the stock in 24 hours is the same story from another outlet
+HISTORY_SECONDS = 86400
 
 
 
@@ -170,7 +173,20 @@ def format_signal_alert(record, symbol, horizon, announced, new_side, signal):
     return "\n".join(lines)
 
 
-def build_messages(previous, current, watch, seen, first_run, news_on=True, sides=None, items=None):
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _words(title):
+    return {w for w in _WORD.findall((title or "").lower()) if len(w) > 2}
+
+
+def same_story(a, b):
+    """Two headlines that share most of their words are one story reported by two outlets."""
+    x, y = _words(a), _words(b)
+    return bool(x and y) and len(x & y) / len(x | y) >= STORY_SIMILARITY
+
+
+def build_messages(previous, current, watch, seen, first_run, news_on=True, sides=None, items=None, news_history=None, now_ts=None):
     """previous/current: {symbol: record}. Returns (lines, updated_seen_list).
 
     sides remembers, for each stock and horizon, the side (buy, hold or sell) last announced. It is updated in
@@ -186,7 +202,14 @@ def build_messages(previous, current, watch, seen, first_run, news_on=True, side
     On the first run nothing is reported, the current headlines are only recorded as seen. On every other run the
     newest headline of each stock is considered and the NEWS_PER_RUN newest overall are reported. The others are
     recorded as seen and stay on the site.
+
+    Fairness: a stock gets at most NEWS_PER_STOCK_DAY headline alerts in 24 hours, a headline that repeats a story already
+    sent for that stock is skipped, and when more stocks have news than fit in a run the ones alerted LEAST in the last 24
+    hours go first (newest first among equals), so heavily covered stocks cannot crowd out the rest. news_history
+    ({symbol: [{"ts", "title"}]}) records what was sent; it is updated in place and kept by the caller between runs.
     """
+    history = {} if news_history is None else news_history
+    clock = now_ts if now_ts is not None else int(datetime.now(timezone.utc).timestamp())
     sides = {} if sides is None else sides
     seen_set, seen_list = set(seen), list(seen)
     readings, candidates = [], []
@@ -218,6 +241,8 @@ def build_messages(previous, current, watch, seen, first_run, news_on=True, side
                         "levels": level_details(record, new_side, horizon) if new_side in ("buy", "sell") else None,
                         "reasons": reason_texts(signal, announced, new_side)}))
         reported_for_stock = False
+        recent = [h for h in history.get(symbol, []) if clock - h.get("ts", 0) <= HISTORY_SECONDS]
+        history[symbol] = recent
         for item in (record.get("news") or {}).get("fresh", []):
             key = news_key(item)
             if key in seen_set:
@@ -226,17 +251,128 @@ def build_messages(previous, current, watch, seen, first_run, news_on=True, side
             seen_list.append(key)
             if first_run or not news_on or reported_for_stock:
                 continue
+            if len(recent) >= NEWS_PER_STOCK_DAY or any(same_story(item["title"], h.get("title")) for h in recent):
+                continue
             reported_for_stock = True
-            candidates.append((item["age_min"], (f"News, {record['name']} ({symbol}): {item['title']} ({item['source']}, {news.age_text(item['age_min'])})", {
+            age = item["age_min"]
+            candidates.append(((len(recent), age is None, age or 0), (f"News, {record['name']} ({symbol}): {item['title']} ({item['source']}, {news.age_text(age)})", {
                 "symbol": symbol, "kind": "news", "name": record["name"], "title": item["title"], "source": item["source"],
-                "link": item.get("link") or "", "age_min": item["age_min"]})))
-    headlines = [pair for _, pair in sorted(candidates, key=lambda c: (c[0] is None, c[0] or 0))[:NEWS_PER_RUN]]
+                "link": item.get("link") or "", "age_min": age})))
+    headlines = [pair for _, pair in sorted(candidates, key=lambda c: c[0])[:NEWS_PER_RUN]]
+    for _, detail in headlines:
+        history.setdefault(detail["symbol"], []).append({"ts": clock, "title": detail["title"]})
     lines = []
     items = [] if items is None else items
     for text, detail in readings + headlines:
         lines.append(text)
         items.append(detail)
     return lines, seen_list[-SEEN_LIMIT:]
+
+
+_OPS = {"above": ">", "below": "<", "about level with": "\u2248"}
+_COMPACT = [
+    (r"price (above|below|about level with) 20-day average, 20-day (above|below|about level with) 50-day", lambda m: f"P{_OPS[m[1]]}20D, 20D{_OPS[m[2]]}50D"),
+    (r"Price is (above|below|about level with) the 200-day average", lambda m: f"P{_OPS[m[1]]}200D"),
+    (r"50-day is (above|below|about level with) the 200-day \((bullish|bearish) alignment, no recent crossover\)", lambda m: f"50D{_OPS[m[1]]}200D ({m[2]} alignment)"),
+    (r"50-day is about level with the 200-day", lambda m: "50D\u2248200D"),
+    (r"50-day crossed (above|below) the 200-day (.*?) \((golden|death) cross\)", lambda m: f"50D crossed {m[1]} 200D {m[2]} ({m[3]} cross)"),
+    (r"MACD positive and (rising|fading)", lambda m: f"MACD + {m[1]}"),
+    (r"MACD negative and (recovering|falling)", lambda m: f"MACD \u2212 {m[1]}"),
+    (r"RSI (\d+) is in the normal range", lambda m: f"RSI {m[1]} normal"),
+    (r"RSI (\d+) is overbought, pullback risk", lambda m: f"RSI {m[1]} overbought"),
+    (r"RSI (\d+) is oversold, bounce possible", lambda m: f"RSI {m[1]} oversold"),
+    (r"Volume spike on a (rising|falling) day", lambda m: f"Vol spike, {'up' if m[1] == 'rising' else 'down'} day"),
+    (r"Volume is normal", lambda m: "Vol normal"),
+    (r"Volume pressure: (buying pressure|selling pressure|balanced) over 20 days", lambda m: f"Vol pressure: {m[1].split()[0]} (20D)"),
+    (r"6-month return is ([+\-\u2212]?[\d.]+%)", lambda m: f"6M return {m[1]}"),
+    (r"Trading at (\d+)% of its 52-week range", lambda m: f"52W range: {m[1]}%"),
+    (r"Volatility (\d+)% a year", lambda m: f"Volatility {m[1]}%/yr"),
+]
+LEGEND = "D=day, W=week, M=month, P=price, MA=moving average, Vol=volume, \u2248 about level with"
+
+
+def compact(text):
+    """A shorter form of an indicator line for the Telegram cards, for example 'Trend: price above 20-day average, 20-day above 50-day'
+    becomes 'Trend: P>20D, 20D>50D'. Wording that matches no rule is left as it is. The site keeps the full wording."""
+    out = text or ""
+    for pattern, replace in _COMPACT:
+        out = re.sub(pattern, replace, out)
+    return out
+
+
+def mover_alerts(events, names, seen, now_ts, limit=8, small_limit=3):
+    """One alert per stock whose size of move, volume or 52-week position was not announced today. Fairness: strongest first, at most
+    `limit` per run, and each kind of event is announced once per stock per day. seen: {key: ts}. Returns (lines, items, seen)."""
+    day = datetime.fromtimestamp(now_ts, timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d")
+    seen = {k: v for k, v in (seen or {}).items() if now_ts - v <= 36 * 3600}
+    lines, items = [], []
+    small_sent = 0
+    for event in events:
+        if event.get("small") and small_sent >= small_limit:
+            continue                                   # small stocks never take more than their share of a run's alerts
+        kinds = {("move" if "%" in tag and "volume" not in tag else "volume" if "volume" in tag else "52w") for tag in event["tags"]}
+        keys = {f"{event['symbol']}|{k}|{day}" for k in kinds}
+        if keys <= set(seen):
+            continue
+        if len(lines) >= limit:
+            break
+        seen.update({k: now_ts for k in keys})
+        small_sent += 1 if event.get("small") else 0
+        symbol = event["symbol"]
+        name = names.get(symbol) or symbol
+        name = re.sub(r"\s+(Limited|Ltd\.?|Inc\.?|Incorporated|Corporation|Corp\.?)$", "", name).strip() or name
+        currency = "INR" if symbol.endswith(".NS") else "USD"
+        label = "Small-stock mover" if event.get("small") else "Mover"
+        lines.append(f"{label}, {name} ({symbol}): {', '.join(event['tags'])}; price {money_text(event['price'], currency)}")
+        items.append({"symbol": symbol, "kind": "mover", "name": name, "tags": event["tags"], "price": event["price"], "currency": currency, "move": event["move"],
+                      "small": bool(event.get("small"))})
+    return lines, items, seen
+
+
+def insert_after(lines, items, kinds, new_lines, new_items):
+    """Place new alerts right after the last item whose kind is in `kinds` (or first if there is none)."""
+    cut = max((i + 1 for i, item in enumerate(items) if item["kind"] in kinds), default=0)
+    return lines[:cut] + new_lines + lines[cut:], items[:cut] + new_items + items[cut:]
+
+
+def money_crore(value):
+    """A rupee value in crore (1 crore = 10 million), for the size of a block deal."""
+    return f"\u20b9{value / 1e7:,.0f} crore" if value >= 1e7 else f"\u20b9{value:,.0f}"
+
+
+def deal_alerts(deals, seen_keys, names, now_ts, today_iso, limit=10):
+    """One alert per block deal not announced before, for ANY NSE stock, not only the tracked ones.
+
+    deals: parse_live output. seen_keys: keys already announced. names: {symbol with .NS: company name}. Only deals dated today
+    are announced, so a feed that still shows yesterday's deals never repeats them. Returns (lines, items, updated seen keys).
+    Quantity, price and value are as the NSE publishes them; nothing is judged from them."""
+    from . import deals_live
+    seen = list(seen_keys or [])
+    seen_set = set(seen)
+    fresh = []
+    for deal in sorted(deals, key=lambda d: -d["value"]):
+        key = deals_live.deal_key(deal)
+        if key in seen_set:
+            continue
+        seen_set.add(key)
+        seen.append(key)
+        if deal["date"] == today_iso:
+            fresh.append(deal)
+    lines, items = [], []
+    for deal in fresh[:limit]:
+        symbol = deal["symbol"] + ".NS"
+        name = names.get(symbol) or deal["symbol"]
+        window = deals_live.WINDOWS.get(deal["session"], deal["session"] or "block window")
+        move = f", {deal['pchange']:+.2f}% against the previous close" if isinstance(deal.get("pchange"), (int, float)) else ""
+        lines.append(f"Block deal, {name} ({symbol}): {deal['qty']:,} shares at {money_text(deal['price'], 'INR')} ({money_crore(deal['value'])}), {window}{move}")
+        items.append({"symbol": symbol, "kind": "deal", "name": name, "qty": deal["qty"], "price": deal["price"], "value": deal["value"], "window": window,
+                      "time": deal.get("time"), "pchange": deal.get("pchange"), "previous_close": deal.get("previous_close"), "official_url": deals_live.PAGE_URL})
+    return lines, items, seen[-deals_live.SEEN_LIMIT:]
+
+
+def merge_deals(lines, items, deal_lines, deal_items):
+    """Readings first, then block deals, then movers, then headlines (the order the digest lays them out in)."""
+    return insert_after(lines, items, ("signal",), deal_lines, deal_items)
 
 
 ADVISORY = "Educational information only, not investment advice. We are not a SEBI-registered adviser or research analyst."
