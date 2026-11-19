@@ -229,11 +229,25 @@ repeated.
 
 * **Full analysis (readings, backtests):** the 200 Nifty 200 stocks (plus Groww) and 41 US stocks in `config/universe.json`. Refresh the list with
   `python tools/update_universe.py`; existing entries are never changed.
+  **The list also updates itself:** once a day from 10:00 IST (`engine/universe_sync.py`) the app reads the NSE's Nifty 200 list and adds any
+  stock it does not yet analyse (no cap), kept in the saved state, so `config/universe.json` is not rewritten. Nothing is ever removed.
+  A failed or refused download is retried after an hour, never worked around.
 * **Every other listed stock:** all ~2,170 other NSE equity-series stocks and the rest of the S&P 500 (`engine/wide.py`) get live quotes in
   batches of 100, factual **mover** alerts (a move of 8% India / 6% US or more, a volume surge of 3x average on a 2%+ move, a new 52-week high
   or low; liquid stocks). **Penny and small stocks are included** with higher bars (12% India / 10% US, or 5x volume on a 5%+ move, no 52-week alerts), an
   average-turnover floor so a handful of trades cannot raise an alert, a "small stock" label, and at most 3 of a run's mover alerts; their own headlines looked up **stock by stock** in a rotating slice of 50 per run (stocks that just moved
   first), so the list is covered every few hours. Deals and official event dates cover every NSE stock.
+* **Every listed stock is in the table** (`engine/catalog.py`). The dashboard loads only `data.json` (the curated list) and a small `index.json`
+  (one row per other stock: price, move, size, 52-week range and, once analysed, the two readings), and shows 150 rows at a time (sorting and
+  filters cover every stock). A stock's full analysis is a separate file in `detail/NN.json` (64 shards), fetched only when the stock is opened.
+  Each run analyses up to 60 stocks (never analysed first, most traded first, then the stalest), so the whole list is covered within hours of
+  the first run and each stock is refreshed about once a day, which is how often completed daily candles change. Until a stock is analysed its
+  row says "quote only" and opening it shows the quote. The previous shards are read back from the published site on every run.
+  Nothing is left half-done for these stocks: the table says while the full list is loading, when it could not load (with a "Try again" button) and how
+  many stocks are analysed so far; the Reading filter says how many rows it hides because they have no reading yet; an empty result offers "Clear
+  filters"; a quote-only stock can be starred and opened on the NSE or Yahoo pages; "Near 52-week high/low" include every stock from its quote alone, and
+  analysed stocks also join the other screens (Oversold, Low debt and so on); alert cards in Telegram link to the analysis of any listed stock. The NSE
+  publishes no sector, so these stocks have no sector chip or peer group.
 * **52-week lows** are their own alert category ("52-WEEK LOWS" in Telegram, at most 5 per run), separate from movers.
 * **IPO watch:** every stock listed within the last 90 days has its listing-day high and low taken from its first daily candle. While its market is
   open, a price above that high sends an "IPO breakout" alert and a price below that low an "IPO breakdown" alert (once per stock per day, at most 5
@@ -373,6 +387,7 @@ Then open http://127.0.0.1:8765/. Python 3.10+ and Node 18+ are the only require
   average counts as the full +1 or -1). A stock sitting on an average therefore scores near zero and its reading cannot flip
   between two extremes when the price ticks across the line.
 * **Long-term (months to years):** price against the 200-day average, golden/death cross, 6-month return, 52-week position and volatility.
+* **Sorting:** click any table header on the Signals page to sort by that column (numbers largest first, text A to Z); click again to reverse. Rows with no value always go last.
 * **Chart patterns** (shown on the stock page, not part of the score): fixed rules on the latest completed candles. Candle shapes: doji, hammer,
   shooting star, bullish/bearish engulfing, morning/evening star, three white soldiers/black crows, bullish/bearish harami, inside day.
   Price structure: golden/death cross (last 10 days), MACD cross (last 3 days), 20-day breakout/breakdown, within 3% of the 52-week high or low,

@@ -16,8 +16,9 @@ US_URLS = ("https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt",
            "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt")
 INDIA_WINDOW_DAYS = 90
 KEEP_DAYS = 180
-MAX_NEW_PER_RUN = {"IN": 40, "US": 20}
-MAX_REGISTRY = 80
+# No cap on the list: every NSE listing of the last INDIA_WINDOW_DAYS and every new US symbol is followed. (A cap of 40 once dropped Steamhouse.)
+# One guard only: a US directory that suddenly shows this many "new" symbols is a broken download, not listings, so the run records nothing.
+US_GLITCH_LIMIT = 200
 
 _US_SYMBOL = re.compile(r"^[A-Z]{1,5}$")
 _US_SKIP = re.compile(r"\b(warrants?|units?|rights?|acquisition (corp|co)|spac|preferred|notes?|trust|depositary shares)\b", re.I)
@@ -39,7 +40,7 @@ def india_new_listings(text, today, days=INDIA_WINDOW_DAYS):
             found.append({"symbol": row["SYMBOL"] + ".NS", "name": row.get("NAME OF COMPANY", row["SYMBOL"]),
                           "market": "IN", "listed": listed.isoformat()})
     found.sort(key=lambda s: s["listed"], reverse=True)
-    return found[: MAX_NEW_PER_RUN["IN"]]
+    return found
 
 
 def nse_company_names(text):
@@ -85,7 +86,9 @@ def us_new_listings(current, previous_symbols, today):
     if not previous_symbols:
         return []
     previous = set(previous_symbols)
-    fresh = sorted(s for s in current if s not in previous)[: MAX_NEW_PER_RUN["US"]]
+    fresh = sorted(s for s in current if s not in previous)
+    if len(fresh) > US_GLITCH_LIMIT:
+        return []
     return [{"symbol": s, "name": current[s], "market": "US", "listed": today.isoformat()} for s in fresh]
 
 
@@ -95,7 +98,7 @@ def merge_registry(registry, found, today):
     merged = {e["symbol"]: e for e in registry if e.get("listed", "") >= cutoff}
     for entry in found:
         merged.setdefault(entry["symbol"], entry)
-    return sorted(merged.values(), key=lambda e: e["listed"], reverse=True)[:MAX_REGISTRY]
+    return sorted(merged.values(), key=lambda e: e["listed"], reverse=True)
 
 
 def discover(state, today, fetch=http_get):

@@ -80,6 +80,7 @@
     data: null,
     error: null,
     tab: 'signals',
+    others: [], shards: new Map(), shown: {}, catalog: 'loading', catalogInfo: null, sig: '',
     filters: Object.assign({ market: 'ALL', horizon: 'short', signal: 'ALL', list: 'ALL', sector: 'ALL', sort: 'score', view: 'overview' }, store.get('filters', {})),
     q: '',
     watch: new Set(store.get('watch', [])),
@@ -147,6 +148,42 @@
     updateHeader();
     render();
     openFromHash();
+    loadCatalog();
+  }
+
+  /* Every other listed stock: one small row each (index.json), loaded after the dashboard so it never delays it. A stock's full analysis
+     is a separate file, fetched only when the stock is opened. */
+  const slimStock = (r) => ({ ...r, lists: r.lists || [], tags: [], news: { fresh: [] }, slim: true,
+    short: r.short || { label: null, score: null }, long: r.long || { label: null, score: null },
+    fundamentals: { market_cap: r.cap }, indicators: { hi252: r.high52, lo252: r.low52 } });
+  async function loadCatalog() {
+    S.catalog = 'loading';
+    if ($('#chips')) updateSignals();
+    try {
+      const response = await fetch('index.json', { cache: 'no-store' });
+      if (!response.ok) throw new Error('index.json ' + response.status);
+      const payload = await response.json();
+      const known = new Set(S.data.stocks.map((s) => s.symbol));
+      S.others = (payload.stocks || []).filter((r) => !known.has(r.symbol)).map(slimStock);
+      S.catalogInfo = { count: S.others.length, analysed: S.others.filter((r) => r.analysed).length };
+      S.catalog = 'ready';
+      S.catalogLoaded = true;
+      openFromHash();
+    } catch (err) {
+      S.catalog = 'failed';        // the dashboard keeps working with the curated list
+    }
+    if ($('#chips')) updateSignals();
+  }
+  async function loadRecord(row) {
+    let shard = S.shards.get(row.shard);
+    if (!shard) {
+      try {
+        const response = await fetch(`detail/${row.shard}.json`, { cache: 'no-cache' });
+        shard = response.ok ? await response.json() : null;
+      } catch (err) { shard = null; }
+      if (shard) S.shards.set(row.shard, shard);
+    }
+    return (shard && shard[row.symbol]) || null;
   }
 
   function updateHeader() {
@@ -269,11 +306,32 @@
   }
 
   /* ---------- signals tab ---------- */
+  // Table headers sort the rows: a click sorts by that column (numbers largest first, text A to Z), a second click reverses it.
   function sortValue(s) {
     const f = S.filters;
+    if (f.sort === 'name') return s.name;
+    if (f.sort === 'price') return s.price;
     if (f.sort === 'change') return s.change_pct;
     if (f.sort === 'dividend') return s.dividend_yield;
+    if (typeof f.sort === 'string' && f.sort.startsWith('col:')) {
+      const column = extraColumns(f.view).find((c) => 'col:' + c.label === f.sort);
+      if (column && column.val) return column.val(s);
+    }
     return s[f.horizon].score;
+  }
+  const defaultDir = (key) => (key === 'name' || key === 'col:Pays' || key === 'col:Last payment' || key === 'col:Pattern' || key === 'col:Pressure' ? 'asc' : 'desc');
+  const currentDir = () => S.filters.dir || defaultDir(S.filters.sort);
+  function sortBy(key) {
+    const f = S.filters;
+    f.dir = f.sort === key ? (currentDir() === 'asc' ? 'desc' : 'asc') : defaultDir(key);
+    f.sort = key;
+    saveFilters(); updateSignals();
+  }
+  function sortHead(key, label, cls) {
+    const f = S.filters, on = f.sort === key || (key === 'score' && !['name', 'price', 'change', 'dividend'].includes(f.sort) && !String(f.sort).startsWith('col:'));
+    const dir = on ? currentDir() : null;
+    return h('th', { class: cls || '', 'aria-sort': on ? (dir === 'asc' ? 'ascending' : 'descending') : 'none' },
+      h('button', { type: 'button', class: 'sorth' + (on ? ' on' : ''), title: `Sort by ${label}`, onclick: () => sortBy(key) }, label, on ? h('span', { class: 'arrow', 'aria-hidden': 'true' }, dir === 'asc' ? ' ▲' : ' ▼') : null));
   }
 
   // A list (screen, watchlist, own list) and a sector can be combined: a stock must be in both.
@@ -285,26 +343,29 @@
   }
   const inSector = (s, sector) => !sector || sector === 'ALL' || s.lists.includes(sector);
 
-  function visibleStocks() {
+  function visibleStocks(skipSignal) {
     const f = S.filters;
     const q = S.q.trim().toLowerCase();
-    const rows = S.data.stocks.filter((s) => {
+    const rows = S.data.stocks.concat(S.others).filter((s) => {
       if (f.market !== 'ALL' && s.market !== f.market) return false;
       if (!inList(s, f.list) || !inSector(s, f.sector)) return false;
       const label = s[f.horizon].label;
-      if (f.signal === 'BUY' && side(label) !== 'buy') return false;
-      if (f.signal === 'HOLD' && label !== 'Hold') return false;
-      if (f.signal === 'SELL' && side(label) !== 'sell') return false;
+      if (skipSignal) { /* counted separately */ }
+      else if (f.signal === 'BUY' && side(label) !== 'buy') return false;
+      else if (f.signal === 'HOLD' && label !== 'Hold') return false;
+      else if (f.signal === 'SELL' && side(label) !== 'sell') return false;
       if (q && !(s.name.toLowerCase().includes(q) || s.symbol.toLowerCase().includes(q))) return false;
       return true;
     });
+    const asc = currentDir() === 'asc';
+    const present = (v) => isNum(v) || (typeof v === 'string' && v !== '');
     rows.sort((a, b) => {
-      if (f.sort === 'name') return a.name.localeCompare(b.name);
       const av = sortValue(a), bv = sortValue(b);
-      if (!isNum(av) && !isNum(bv)) return 0;
-      if (!isNum(av)) return 1;
-      if (!isNum(bv)) return -1;
-      return bv - av;
+      if (!present(av) && !present(bv)) return 0;
+      if (!present(av)) return 1;                       // rows without a value always go last
+      if (!present(bv)) return -1;
+      const order = typeof av === 'string' || typeof bv === 'string' ? String(av).localeCompare(String(bv)) : av - bv;
+      return asc ? order : -order;
     });
     return rows;
   }
@@ -339,7 +400,7 @@
 
   function listChips() {
     const f = S.filters;
-    const pool = S.data.stocks.filter((s) => f.market === 'ALL' || s.market === f.market);
+    const pool = S.data.stocks.concat(S.others).filter((s) => f.market === 'ALL' || s.market === f.market);
     const inSectorPool = pool.filter((s) => inSector(s, f.sector));      // list counts follow the chosen sector
     const inListPool = pool.filter((s) => inList(s, f.list));            // sector counts follow the chosen list
     const names = new Set();
@@ -419,7 +480,21 @@
         { label: 'Rule vs hold', render: (s) => { const b = (s.backtest || {}).short; return b ? (b.beats_buy_hold_oos ? 'Beat' : 'Lagged') : DASH; }, hideMd: true },
       ],
     };
-    return sets[view] || sets.overview;
+    const values = {
+      Pressure: (s) => (s.pressure ? (s.pressure.label.startsWith('Buying') ? 1 : s.pressure.label.startsWith('Selling') ? -1 : 0) : null),
+      Dividend: (s) => s.dividend_yield, News: (s) => s.news.fresh.length,
+      'Mkt cap': (s) => fund(s).market_cap, 'P/E': (s) => fund(s).pe, 'P/B': (s) => fund(s).pb, ROE: (s) => fund(s).roe,
+      'Revenue growth': (s) => fund(s).revenue_growth, 'Debt/Equity': (s) => fund(s).debt_to_equity,
+      'Yield (12m)': (s) => s.dividend_yield, 'Recurring yield': (s) => (s.dividend ? s.dividend.forward_yield : null),
+      Pays: (s) => (s.dividend ? s.dividend.frequency : null), 'Last payment': (s) => (s.dividend ? s.dividend.last_date : null),
+      Change: (s) => (s.dividend ? s.dividend.growth : null), Payout: (s) => fund(s).payout_ratio,
+      RSI: (s) => ind(s).rsi, 'vs 200-day': (s) => (isNum(ind(s).sma200) ? s.price / ind(s).sma200 - 1 : null), '6-month': (s) => ind(s).momentum126,
+      '52-week range': (s) => (isNum(ind(s).hi252) && ind(s).hi252 > ind(s).lo252 ? (s.price - ind(s).lo252) / (ind(s).hi252 - ind(s).lo252) : null),
+      Pattern: (s) => ((s.patterns || [])[0] ? s.patterns[0].name : null),
+      Volatility: (s) => risk(s).annual_vol, '1-day VaR': (s) => risk(s).var95, 'Worst fall': (s) => risk(s).max_drawdown, Beta: (s) => risk(s).beta,
+      'Volatility risk level': (s) => (s.stop ? s.stop.pct : null), 'Rule vs hold': (s) => { const b = (s.backtest || {}).short; return b ? (b.beats_buy_hold_oos ? 1 : 0) : null; },
+    };
+    return (sets[view] || sets.overview).map((c) => ({ ...c, val: values[c.label] }));
   }
   const columnClass = (column) => `${column.num ? 'num ' : ''}hide-sm${column.hideMd ? ' hide-md' : ''}`;
 
@@ -432,7 +507,7 @@
     }, S.watch.has(s.symbol) ? '★' : '☆');
     const row = h('tr', { class: 'stock', tabindex: '0', 'aria-label': `${s.name} details` },
       h('td', null, star),
-      h('td', { class: 'name' }, h('b', null, s.name), h('span', null, s.symbol, s.new ? ' · new listing' : '', s.stale ? ' · stale price' : '')),
+      h('td', { class: 'name' }, h('b', null, s.name), h('span', null, s.symbol, s.new ? ' · new listing' : '', s.stale ? ' · stale price' : '', s.slim && !s.analysed ? ' · quote only' : '')),
       h('td', { class: 'num' }, money(s.price, s.currency)),
       h('td', { class: `num ${isNum(s.change_pct) ? (s.change_pct >= 0 ? 'up' : 'down') : ''}` }, signed(s.change_pct)),
       h('td', null, badge(s[f.horizon])),
@@ -442,6 +517,7 @@
     return row;
   }
 
+  const PAGE = 150;                       // rows drawn at a time; the sort and filters always cover every stock
   const MARKET_NAMES = { IN: 'India (NSE)', US: 'United States' };
   const MARKET_INDEX = { IN: '^NSEI', US: '^GSPC' };
 
@@ -449,7 +525,7 @@
   function marketPanel(code, rows) {
     const horizon = S.filters.horizon;
     const count = { buy: 0, hold: 0, sell: 0 };
-    for (const s of rows) count[side(s[horizon].label)] += 1;
+    for (const s of rows) if (s[horizon].label) count[side(s[horizon].label)] += 1;
     const index = ((S.data.market || {}).watch || []).find((w) => w.symbol === MARKET_INDEX[code]);
     const head = h('div', { class: 'panelhead' },
       h('h2', null, MARKET_NAMES[code]),
@@ -461,9 +537,11 @@
       h('div', { class: 'leanlegend' }, h('span', { class: 'up' }, `${count.buy} bullish`), h('span', { class: 'muted' }, `${count.hold} mixed`), h('span', { class: 'down' }, `${count.sell} bearish`))) : null;
     const body = rows.length
       ? h('div', { class: 'tablewrap' }, h('table', null,
-        h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Stock'), h('th', { class: 'num' }, 'Price'), h('th', { class: 'num' }, 'Day'),
-          h('th', null, 'Signal'), extraColumns(S.filters.view).map((column) => h('th', { class: columnClass(column) }, column.label)))),
-        h('tbody', null, rows.map(stockRow))))
+        h('thead', null, h('tr', null, h('th', null, ''), sortHead('name', 'Stock'), sortHead('price', 'Price', 'num'), sortHead('change', 'Day', 'num'),
+          sortHead('score', 'Signal'), extraColumns(S.filters.view).map((column) => (column.val ? sortHead('col:' + column.label, column.label, columnClass(column)) : h('th', { class: columnClass(column) }, column.label))))),
+        h('tbody', null, rows.slice(0, S.shown[code] || PAGE).map(stockRow))),
+        rows.length > (S.shown[code] || PAGE) ? h('button', { type: 'button', class: 'btn ghost more', onclick: () => { S.shown[code] = (S.shown[code] || PAGE) + PAGE; updateSignals(); } },
+          `Show ${Math.min(PAGE, rows.length - (S.shown[code] || PAGE))} more (${rows.length - (S.shown[code] || PAGE)} not shown)`) : null)
       : h('div', { class: 'empty' }, 'No stocks match these filters.');
     return h('section', { class: 'card panel', 'aria-label': MARKET_NAMES[code] }, head, bar, body);
   }
@@ -476,18 +554,31 @@
       strips.sectors.length ? h('div', { class: 'chips', role: 'group', 'aria-label': 'Sectors' }, strips.sectors) : null);
     const rows = visibleStocks();
     const f = S.filters;
+    const signature = [f.market, f.list, f.sector, f.signal, S.q].join('|');
+    if (signature !== S.sig) { S.sig = signature; S.shown = {}; }        // a new search or filter starts again at the first page
+    const hidden = f.signal === 'ALL' ? 0 : visibleStocks(true).filter((s) => !s[f.horizon].label).length;
+    const info = S.catalogInfo;
+    const status = S.catalog === 'loading' ? h('p', { class: 'muted small notice' }, 'Loading every other listed stock… the table shows the main list for now.')
+      : S.catalog === 'failed' ? h('p', { class: 'small notice warnline' }, 'The full list of listed stocks could not be loaded, so only the main list is shown. ',
+        h('button', { type: 'button', class: 'chip', onclick: loadCatalog }, 'Try again'))
+        : info && info.analysed < info.count * 0.98 ? h('p', { class: 'muted small notice' }, `${info.analysed.toLocaleString()} of ${info.count.toLocaleString()} other listed stocks are analysed so far. The rest show their quote only and fill in over the next few hours.`) : null;
     const head = h('div', { class: 'row small muted', style: 'justify-content:space-between;margin-bottom:6px' },
-      h('span', null, `${rows.length} stock${rows.length === 1 ? '' : 's'} · ${f.horizon === 'short' ? 'weeks view' : 'months-to-years view'} reading`),
+      h('span', null, `${rows.length} stock${rows.length === 1 ? '' : 's'} · ${f.horizon === 'short' ? 'weeks view' : 'months-to-years view'} reading`,
+        hidden ? ` · ${hidden.toLocaleString()} without a reading yet hidden by the Reading filter` : ''),
       f.list.startsWith('C:') ? h('button', { type: 'button', class: 'chip', onclick: () => {
         if (!confirm(`Delete the list "${f.list.slice(2)}"? The stocks are not deleted.`)) return;
         delete S.lists[f.list.slice(2)]; store.set('lists', S.lists); f.list = 'ALL'; saveFilters(); updateSignals();
       } }, 'Delete this list') : null);
     if (!rows.length) {
-      results.replaceChildren(head, h('div', { class: 'empty' }, f.list === 'WATCH' ? 'Your watchlist is empty. Tap the star next to a stock to add it.' : 'No stocks match these filters.'));
+      const clear = () => { f.market = 'ALL'; f.list = 'ALL'; f.sector = 'ALL'; f.signal = 'ALL'; S.q = ''; saveFilters(); render(); };
+      results.replaceChildren(status, head, h('div', { class: 'empty' },
+        f.list === 'WATCH' && !S.q ? 'Your watchlist is empty. Tap the star next to a stock to add it.'
+          : S.catalog === 'loading' && S.q ? 'Nothing found in the main list yet. Every other listed stock is still loading.' : 'No stocks match these filters. ',
+        f.list === 'WATCH' && !S.q ? null : h('button', { type: 'button', class: 'chip', onclick: clear }, 'Clear filters')));
       return;
     }
     const codes = f.market === 'ALL' ? ['IN', 'US'] : [f.market];
-    results.replaceChildren(head, h('div', { class: 'cols' + (codes.length > 1 ? ' two' : '') + (f.view !== 'overview' ? ' wide-view' : '') }, codes.map((code) => marketPanel(code, rows.filter((s) => s.market === code)))));
+    results.replaceChildren(status, head, h('div', { class: 'cols' + (codes.length > 1 ? ' two' : '') + (f.view !== 'overview' ? ' wide-view' : '') }, codes.map((code) => marketPanel(code, rows.filter((s) => s.market === code)))));
     decorateHelp(results);
   }
 
@@ -503,7 +594,7 @@
       h('label', { class: 'field' }, 'Search', search),
       select('Market', f.market, [['ALL', 'All markets'], ['IN', 'India'], ['US', 'United States']], (v) => { f.market = v; f.list = 'ALL'; f.sector = 'ALL'; saveFilters(); updateSignals(); }),
       select('Reading', f.signal, [['ALL', 'Any'], ['BUY', 'Aligned bullish'], ['HOLD', 'Mixed'], ['SELL', 'Aligned bearish']], (v) => { f.signal = v; saveFilters(); updateSignals(); }),
-      select('Sort by', f.sort, [['score', 'Indicator alignment'], ['change', 'Day change'], ['dividend', 'Dividend yield'], ['name', 'Name']], (v) => { f.sort = v; saveFilters(); updateSignals(); }),
+      select('Sort by', f.sort, [['score', 'Indicator alignment'], ['change', 'Day change'], ['dividend', 'Dividend yield'], ['name', 'Name']].concat(['score', 'change', 'dividend', 'name'].includes(f.sort) ? [] : [[f.sort, 'Table column']]), (v) => { f.sort = v; f.dir = defaultDir(v); saveFilters(); updateSignals(); }),
       h('div', { class: 'field' }, 'Horizon', h('div', { class: 'row', style: 'gap:6px' },
         ['short', 'long'].map((hz) => h('button', { type: 'button', class: 'chip' + (f.horizon === hz ? ' on' : ''), 'aria-pressed': f.horizon === hz ? 'true' : 'false',
           onclick: () => { f.horizon = hz; saveFilters(); render(); } }, hz === 'short' ? 'Short-term' : 'Long-term')))),
@@ -516,10 +607,45 @@
 
   /* ---------- detail dialog ---------- */
   let lastFocus = null;
-  function openDetail(symbol, opener, tab) {
+  function quoteView(row, note) {
+    const range = isNum(row.high52) && isNum(row.low52) && row.high52 > row.low52 ? percent((row.price - row.low52) / (row.high52 - row.low52), 0) : DASH;
+    return h('div', { class: 'detailview' },
+      h('div', { class: 'row', style: 'justify-content:space-between;gap:8px;padding:12px' },
+        h('div', null, h('h2', { style: 'margin:0' }, row.name), h('span', { class: 'muted small' }, row.symbol)),
+        h('div', { class: 'row', style: 'gap:6px' },
+          h('button', { type: 'button', class: 'chip' + (S.watch.has(row.symbol) ? ' on' : ''), 'aria-pressed': S.watch.has(row.symbol) ? 'true' : 'false',
+            onclick: (e) => { S.watch.has(row.symbol) ? S.watch.delete(row.symbol) : S.watch.add(row.symbol); saveWatch(); e.currentTarget.classList.toggle('on', S.watch.has(row.symbol));
+              e.currentTarget.textContent = S.watch.has(row.symbol) ? '★ In watchlist' : '☆ Add to watchlist'; e.currentTarget.setAttribute('aria-pressed', String(S.watch.has(row.symbol))); updateSignals(); } },
+          S.watch.has(row.symbol) ? '★ In watchlist' : '☆ Add to watchlist'),
+          h('button', { type: 'button', class: 'dclose', 'aria-label': 'Close', onclick: closeDetail }, '✕'))),
+      h('div', { class: 'kv', style: 'padding:0 12px' }, [['Price', money(row.price, row.currency)], ['Day', signed(row.change_pct)], ['Market cap', big(row.cap, row.currency)],
+        ['Position in 52-week range', range], ['Volume vs average', isNum(row.volume) && row.avg_volume ? `${(row.volume / row.avg_volume).toFixed(1)}x` : DASH]]
+        .map(([k, v]) => h('div', null, h('span', null, k), h('b', null, naOr(v))))),
+      h('p', { class: 'muted small', style: 'padding:8px 12px' }, note),
+      h('p', { class: 'small', style: 'padding:0 12px 12px' }, 'Official pages: ',
+        row.symbol.endsWith('.NS') ? [h('a', { href: `https://www.nseindia.com/get-quotes/equity?symbol=${encodeURIComponent(row.symbol.slice(0, -3))}`, target: '_blank', rel: 'noopener' }, 'NSE quote'), ' · '] : null,
+        h('a', { href: `https://finance.yahoo.com/quote/${encodeURIComponent(row.symbol)}`, target: '_blank', rel: 'noopener' }, 'Yahoo Finance')));
+  }
+
+  async function openDetail(symbol, opener, tab) {
     const s = S.data.stocks.find((x) => x.symbol === symbol);
-    if (!s) return;
+    if (!s) {
+      const row = S.others.find((x) => x.symbol === symbol);
+      if (!row) return;
+      lastFocus = opener || document.activeElement;
+      const dlg = $('#detail');
+      dlg.replaceChildren(quoteView(row, 'Loading the analysis…'));
+      if (!dlg.open) dlg.showModal();
+      const record = row.analysed ? await loadRecord(row) : null;
+      if (!dlg.open) return;
+      if (record) showDetail(record, tab);
+      else dlg.replaceChildren(quoteView(row, row.analysed ? 'The analysis could not be loaded. Try again in a moment.' : 'This stock has not been analysed yet. Every listed stock is analysed in turn and refreshed about once a day. Until then only its quote is shown.'));
+      return;
+    }
     lastFocus = opener || document.activeElement;
+    showDetail(s, tab);
+  }
+  function showDetail(s, tab) {
     const dlg = $('#detail');
     dlg.replaceChildren(detailView(s));
     decorateHelp(dlg);
@@ -541,7 +667,8 @@
     handledHash = location.hash;
     let symbol;
     try { symbol = decodeURIComponent(match[1]); } catch (e) { clearHash(); return; }
-    if (!S.data.stocks.some((s) => s.symbol === symbol)) {
+    if (!S.data.stocks.some((s) => s.symbol === symbol) && !S.others.some((s) => s.symbol === symbol)) {
+      if (!S.catalogLoaded) { handledHash = ''; return; }
       toast(`${symbol} is not on the list right now.`);
       clearHash();
       return;
@@ -710,6 +837,7 @@
   }
 
   function peersBlock(s) {
+    if (s.sector === 'Other') return h('p', { class: 'muted small' }, 'The exchange does not publish a sector for this stock, so there is no peer group to compare.');
     const peers = S.data.stocks.filter((p) => p.sector === s.sector && p.market === s.market && p.symbol !== s.symbol)
       .sort((a, b) => ((b.fundamentals || {}).market_cap || 0) - ((a.fundamentals || {}).market_cap || 0)).slice(0, 5);
     if (!peers.length) return h('p', { class: 'muted small' }, 'No peers in the same sector.');
@@ -847,7 +975,9 @@
       news: [
         s.news.fresh.length ? h('section', { class: 'card wide', id: 'd-latest-headlines' }, h('h3', null, 'Latest headlines'), newsList(s.news.fresh)) : null,
         wide(section('Upcoming events', stockEvents(s))),
-        section('News', newsList(s.news.items))],
+        section('News', s.news.error && !s.news.items.length
+          ? h('p', { class: 'muted small' }, 'Headlines are not looked up for this stock on every run. When one is published it appears in the alerts, and in Telegram if the stock is covered there.')
+          : newsList(s.news.items))],
       backtest: [
         wide(section('How have these rules worked on this stock?', h('div', { class: 'grid' }, backtestBlock(bt.short, 'Short-term rule'), backtestBlock(bt.long, 'Long-term rule')),
           h('p', { class: 'muted small' }, 'Fixed rules tested on up to 5 years of this stock, trading at the next open with assumed costs. Past results do not guarantee future results.'))),
@@ -1495,7 +1625,7 @@
       (S.data.alerts || []).length ? [h('h2', null, 'Recent alerts'), h('div', { class: 'card' }, h('ul', { class: 'clean' },
         [...S.data.alerts].reverse().map((a) => h('li', null, h('span', { style: 'white-space:pre-line' }, a.text),
           h('div', { class: 'muted small' }, ago(Math.max(0, Math.round((Date.now() / 1000 - a.ts) / 60))), ' ',
-            a.symbol && S.data.stocks.some((s) => s.symbol === a.symbol) ? h('button', { type: 'button', class: 'chip', onclick: (e) => openDetail(a.symbol, e.currentTarget) }, 'View analysis') : null)))))] : null,
+            a.symbol && (S.data.stocks.some((s) => s.symbol === a.symbol) || S.others.some((s) => s.symbol === a.symbol)) ? h('button', { type: 'button', class: 'chip', onclick: (e) => openDetail(a.symbol, e.currentTarget) }, 'View analysis') : null)))))] : null,
       h('h2', null, 'World and market news ', src('EXTERNAL')), h('div', { class: 'card' }, newsList(m.news, true)),
       accuracyCard(S.data.accuracy),
       statusCard(S.data.status),

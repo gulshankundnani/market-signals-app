@@ -15,7 +15,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from . import digest, event_news, events, market as market_view, verify
-from . import alerts, backtest, costs, deals_live, sessions, wide, discover, membership as index_membership, official, dividends, exchange, fetch, fundamentals, ipo, ipo_gmp, ledger, news, patterns, risk, signals, tracking
+from . import catalog, universe_sync, alerts, backtest, costs, deals_live, sessions, wide, discover, membership as index_membership, official, dividends, exchange, fetch, fundamentals, ipo, ipo_gmp, ledger, news, patterns, risk, signals, tracking
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKERS = 6
@@ -568,6 +568,7 @@ def run(args):
     prev_data = load_previous(args.prev, "data.json")
     state = load_previous(args.prev, "state.json")
 
+    config["stocks"], sync_state, synced = universe_sync.sync(now, state.get("universe_sync"), config["stocks"])
     registry, us_list = discover.discover(state, today)
     universe = build_universe(config, registry, args.limit)
     print(f"{len(universe)} stocks ({sum(1 for s in universe if s.get('new'))} new listings)")
@@ -723,7 +724,7 @@ def run(args):
 
     calls = tracking.make_calls(items, {x["symbol"]: x for x in records}, now_ts)
     if lines and token and chat:
-        links = [link_for_symbol(i["symbol"], "news" if i["kind"] == "news" else "signals") if i["symbol"] in by_symbol else None for i in items]
+        links = [link_for_symbol(i["symbol"], "news" if i["kind"] == "news" and i["symbol"] in by_symbol else "signals") if i["symbol"] in market_of else None for i in items]
         for message, start, end in digest.render(items, links, now_ts):
             ok, message_id = send_formatted(token, chat, message)
             print(f"Telegram alert {'sent' if ok else 'failed'} ({end - start} alerts)")
@@ -735,6 +736,7 @@ def run(args):
     track_record, pending, queue, notified, outcome_lines = track(args, state, prev_data, calls, ctx, now_ts, token, chat, link_for_symbol)
     if outcome_lines:
         alert_log, _ = alerts.update_log(alert_log, [text for _, text in outcome_lines], now_ts, [sym for sym, _ in outcome_lines])
+    analysis_index = catalog.update(now, state.get("analysis_index"), wide_list, quotes, analyse, ctx, args.prev, load_previous, Path(args.out), lists_fn=add_lists)
     status = status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy, official_events, live_deals)
     data = {"version": 1, "generated_at": now.isoformat(timespec="seconds"), "market": overview, "conditions": conditions,
             "status": status, "accuracy": accuracy, "backtest_method": {"costs": costs.describe(cost_overrides), "notes": BACKTEST_NOTES}, "events": events_data, "ipos": ipos,
@@ -743,7 +745,7 @@ def run(args):
             "exchange_data": {"delivery_dates": sorted(delivery)[-3:], "note": "NSE delivery data and bulk/block deals. The exchange order book (bid/ask depth) is not published for free."}}
     new_state = {"seen_alerts": seen, "delivery": delivery, "us_symbols": us_list, "new_listings": registry,
                  "fundamentals": fund_cache, "ipo_gmp": ipo_cache, "alert_log": alert_log,
-                 "alert_sides": sides, "wide_universe": wide_cache, "wide_cursor": wide_cursor, "mover_seen": mover_seen, "index_seen": index_seen,
+                 "alert_sides": sides, "universe_sync": sync_state, "analysis_index": analysis_index, "wide_universe": wide_cache, "wide_cursor": wide_cursor, "mover_seen": mover_seen, "index_seen": index_seen,
                  "briefs_sent": {k: v for k, v in briefs_sent.items() if v == today_ist}, "nse_sources": nse, "news_alert_history": {s: v for s, v in news_history.items() if v}, "deal_seen": deal_seen,
                  "live_deals": {k: v for k, v in live_deals.items() if k != "deals"}, "eod_close": closes, "us_close": us_cache, "event_news": event_cache, "official": official_events, "ledger_pending": pending, "reply_queue": queue, "notified_outcomes": notified}
 

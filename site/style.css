@@ -60,9 +60,13 @@ input[type=number] { width: 110px; }
 a.chip { display: inline-block; text-decoration: none; font-weight: 600; }
 a.chip:hover { border-color: var(--accent); }
 .chip[aria-pressed="true"], .chip.on { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.sorth { background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit; cursor: pointer; white-space: nowrap; min-height: 0; }
+.sorth:hover, .sorth.on { color: var(--text, inherit); text-decoration: underline; }
+.sorth .arrow { font-size: 9px; }
 .chips { display: flex; gap: 5px; overflow-x: auto; padding: 2px 0 8px; scrollbar-width: thin; }
 .btn { border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); border-radius: 8px; padding: 5px 12px; font-weight: 600; min-height: 32px; }
 .btn.ghost { background: var(--card); color: var(--accent); }
+.more { display: block; margin: 8px auto; }
 
 /* filter bar: one compact line */
 .filterbar { padding: 6px 10px; margin-bottom: 8px; }
@@ -358,3 +362,4 @@ dl.terms { margin: 0; font-size: 13px; } dl.terms dd { margin: 0 0 6px; color: v
 .na { color: var(--muted); font-weight: 500; font-style: italic; }
 
 .verifyline { margin: 4px 0; } .verifyline a { font-weight: 700; }
+.notice { margin: 0 0 6px; }
