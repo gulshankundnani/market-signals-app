@@ -778,3 +778,52 @@ class NewsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MorePatternTests(unittest.TestCase):
+    def names(self, o, h, l, c):
+        bars = {"t": [], "d": [], "o": o, "h": h, "l": l, "c": c, "v": [1000.0] * len(c)}
+        return {p["name"] for p in patterns.detect_patterns(bars, signals.build_indicators(bars))}
+
+    def base(self, n=40):
+        return [100.0] * n, [101.0] * n, [99.0] * n, [100.0] * n
+
+    def test_morning_star(self):
+        o, h, l, c = self.base()
+        o[-3], c[-3], h[-3], l[-3] = 104.0, 100.0, 104.2, 99.8      # big red
+        o[-2], c[-2], h[-2], l[-2] = 98.8, 99.0, 99.3, 98.5         # small, below the first close
+        o[-1], c[-1], h[-1], l[-1] = 99.2, 103.0, 103.2, 99.0       # green back above the middle (102)
+        self.assertIn("Morning star", self.names(o, h, l, c))
+
+    def test_three_white_soldiers(self):
+        o, h, l, c = self.base()
+        for k, (op, cl) in zip((-3, -2, -1), ((100.0, 102.0), (101.0, 104.0), (103.0, 106.0))):
+            o[k], c[k], h[k], l[k] = op, cl, cl + 0.1, op - 0.1
+        self.assertIn("Three white soldiers", self.names(o, h, l, c))
+
+    def test_gap_up_and_down(self):
+        o, h, l, c = self.base()
+        o[-1], h[-1], l[-1], c[-1] = 103.0, 104.0, 102.5, 103.5
+        self.assertIn("Gap up", self.names(o, h, l, c))
+        o, h, l, c = self.base()
+        o[-1], h[-1], l[-1], c[-1] = 97.0, 97.5, 96.0, 96.5
+        self.assertIn("Gap down", self.names(o, h, l, c))
+
+    def test_tight_range_and_rising_lows(self):
+        o, h, l, c = self.base()
+        self.assertIn("Tight range", self.names(o, h, l, c))
+        o, h, l, c = self.base()
+        for step, k in enumerate((-4, -3, -2, -1), 1):
+            h[k], l[k], c[k], o[k] = 101.0 + step, 99.0 + step, 100.5 + step, 100.0 + step
+        self.assertIn("Higher highs and lows", self.names(o, h, l, c))
+
+    def test_volume_surge_needs_volume_and_a_move(self):
+        o, h, l, c = self.base()
+        v = [1000.0] * 40
+        v[-1], c[-1], h[-1] = 3000.0, 103.0, 103.2
+        bars = {"t": [], "d": [], "o": o, "h": h, "l": l, "c": c, "v": v}
+        found = {p["name"] for p in patterns.detect_patterns(bars, signals.build_indicators(bars))}
+        self.assertIn("Volume surge", found)
+        v[-1] = None
+        bars["v"] = v
+        self.assertNotIn("Volume surge", {p["name"] for p in patterns.detect_patterns(bars, signals.build_indicators(bars))})

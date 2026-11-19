@@ -373,6 +373,12 @@ Then open http://127.0.0.1:8765/. Python 3.10+ and Node 18+ are the only require
   average counts as the full +1 or -1). A stock sitting on an average therefore scores near zero and its reading cannot flip
   between two extremes when the price ticks across the line.
 * **Long-term (months to years):** price against the 200-day average, golden/death cross, 6-month return, 52-week position and volatility.
+* **Chart patterns** (shown on the stock page, not part of the score): fixed rules on the latest completed candles. Candle shapes: doji, hammer,
+  shooting star, bullish/bearish engulfing, morning/evening star, three white soldiers/black crows, bullish/bearish harami, inside day.
+  Price structure: golden/death cross (last 10 days), MACD cross (last 3 days), 20-day breakout/breakdown, within 3% of the 52-week high or low,
+  gap up/down (opened 1% or more past the previous day's range), tight range (20 days inside a range under 6% wide), four days of higher or lower
+  highs and lows. Volume: a surge of 2x the 20-day average on a 2%+ move (skipped when volume is not reported). Each is a description of what the
+  candles did, tagged bullish, bearish or neutral by its rule, not a forecast. Many stocks have no pattern on a given day, and the page says so.
 * Each score runs from -100 to +100: +20 or more is Buy, -20 or less is Sell, and +/-50 is Strong.
 * **Backtest:** the same fixed rules are run on up to 5 years of each stock, trading at the next open with a 0.1% cost per trade, and compared with buy-and-hold. The most recent 40% is reported separately. In strong bull markets the rules often lag buy-and-hold, and the app says so.
 * **Volatility risk level:** 2 x the 14-day average true range below the price. Prices can gap past it.

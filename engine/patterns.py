@@ -79,7 +79,71 @@ def _breakouts(bars, ind):
     return found
 
 
+GAP_PCT = 0.01             # an opening gap past the previous day's range of at least 1%
+TIGHT_RANGE = 0.06         # the 20-day high-to-low range is under 6% of the price
+SURGE_RATIO = 2.0          # volume at least twice the 20-day average
+SURGE_MOVE = 0.02          # on a move of at least 2%
+
+
+def _three_candles(bars):
+    """Morning/evening star, three white soldiers/black crows, harami, inside day: shapes over the last 2 or 3 candles."""
+    o, h, l, c = bars["o"], bars["h"], bars["l"], bars["c"]
+    i = len(c) - 1
+    found = []
+    if i < 3:
+        return found
+    body = lambda k: abs(c[k] - o[k])
+    rng = lambda k: h[k] - l[k]
+    up, down = (lambda k: c[k] > o[k]), (lambda k: c[k] < o[k])
+    mid = lambda k: (o[k] + c[k]) / 2
+    big = lambda k: rng(k) > 0 and body(k) >= 0.5 * rng(k)
+    small = lambda k: rng(k) > 0 and body(k) <= 0.3 * rng(k)
+    a, b, d = i - 2, i - 1, i
+    if down(a) and big(a) and small(b) and max(o[b], c[b]) < c[a] and up(d) and c[d] > mid(a):
+        found.append(_pattern("Morning star", "bullish", "Big red candle, a small one, then a green candle back above the middle of the first"))
+    if up(a) and big(a) and small(b) and min(o[b], c[b]) > c[a] and down(d) and c[d] < mid(a):
+        found.append(_pattern("Evening star", "bearish", "Big green candle, a small one, then a red candle back below the middle of the first"))
+    if all(up(k) and big(k) for k in (a, b, d)) and c[a] < c[b] < c[d] and o[b] > o[a] and o[d] > o[b]:
+        found.append(_pattern("Three white soldiers", "bullish", "Three green candles in a row, each closing higher"))
+    if all(down(k) and big(k) for k in (a, b, d)) and c[a] > c[b] > c[d] and o[b] < o[a] and o[d] < o[b]:
+        found.append(_pattern("Three black crows", "bearish", "Three red candles in a row, each closing lower"))
+    inside = h[d] < h[b] and l[d] > l[b]
+    if inside and down(b) and big(b) and up(d):
+        found.append(_pattern("Bullish harami", "bullish", "A small green candle inside the previous big red one"))
+    elif inside and up(b) and big(b) and down(d):
+        found.append(_pattern("Bearish harami", "bearish", "A small red candle inside the previous big green one"))
+    elif inside:
+        found.append(_pattern("Inside day", "neutral", "The day stayed within the previous day's high and low"))
+    return found
+
+
+def _structure(bars, ind):
+    """Gaps, a tight range, a run of higher or lower highs and lows, and a volume surge."""
+    o, h, l, c, v = bars["o"], bars["h"], bars["l"], bars["c"], bars["v"]
+    i = len(c) - 1
+    found = []
+    if i < 21:
+        return found
+    if l[i] > h[i - 1] and o[i] >= h[i - 1] * (1 + GAP_PCT):
+        found.append(_pattern("Gap up", "bullish", "Opened above the previous day's high by at least 1%"))
+    elif h[i] < l[i - 1] and o[i] <= l[i - 1] * (1 - GAP_PCT):
+        found.append(_pattern("Gap down", "bearish", "Opened below the previous day's low by at least 1%"))
+    top, bottom = max(h[i - 19:i + 1]), min(l[i - 19:i + 1])
+    if c[i] > 0 and (top - bottom) / c[i] <= TIGHT_RANGE:
+        found.append(_pattern("Tight range", "neutral", "The last 20 days stayed inside a range under 6% wide"))
+    last = range(i - 3, i + 1)
+    if all(h[k] > h[k - 1] and l[k] > l[k - 1] for k in last):
+        found.append(_pattern("Higher highs and lows", "bullish", "Each of the last 4 days made a higher high and a higher low"))
+    elif all(h[k] < h[k - 1] and l[k] < l[k - 1] for k in last):
+        found.append(_pattern("Lower highs and lows", "bearish", "Each of the last 4 days made a lower high and a lower low"))
+    avg = ind["avg_volume20"][i]
+    if avg and v[i] is not None and v[i] >= SURGE_RATIO * avg and c[i - 1] > 0 and abs(c[i] / c[i - 1] - 1) >= SURGE_MOVE:
+        up = c[i] > c[i - 1]
+        found.append(_pattern("Volume surge", "bullish" if up else "bearish", f"Volume {v[i] / avg:.1f}x the 20-day average on a {'rise' if up else 'fall'} of {abs(c[i] / c[i - 1] - 1) * 100:.1f}%"))
+    return found
+
+
 def detect_patterns(bars, ind):
     if len(bars["c"]) < 30:
         return []
-    return _candles(bars, ind) + _crosses(ind, len(bars["c"]) - 1) + _breakouts(bars, ind)
+    return (_candles(bars, ind) + _three_candles(bars) + _crosses(ind, len(bars["c"]) - 1) + _breakouts(bars, ind) + _structure(bars, ind))
