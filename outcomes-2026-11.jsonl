@@ -7,3 +7,4 @@
 {"days_held":1,"excess_pct":11.7,"exit_price":343.2064,"id":"2dfe7892da1d","max_gain_pct":13.79,"max_loss_pct":0.0,"outcome":"target","resolved_date":"2026-11-18","return_pct":11.93,"type":"outcome"}
 {"days_held":3,"excess_pct":-5.13,"exit_price":183.81,"id":"c52b2cb26bc0","max_gain_pct":0.0,"max_loss_pct":-5.54,"outcome":"stop","resolved_date":"2026-11-19","return_pct":-5.54,"type":"outcome"}
 {"days_held":1,"excess_pct":-6.2,"exit_price":515.0,"id":"423fab832a7b","max_gain_pct":0.0,"max_loss_pct":-6.36,"outcome":"stop","resolved_date":"2026-11-19","return_pct":-6.36,"type":"outcome"}
+{"days_held":1,"excess_pct":-3.52,"exit_price":4890.9876,"id":"6c1474b6d632","max_gain_pct":0.0,"max_loss_pct":-4.89,"outcome":"stop","resolved_date":"2026-11-19","return_pct":-4.66,"type":"outcome"}
