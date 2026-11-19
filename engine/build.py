@@ -251,6 +251,8 @@ def add_lists(records):
             lists.append("Oversold")
         if ind.get("hi252") and rec["price"] >= 0.95 * ind["hi252"]:
             lists.append("Near 52-week high")
+        if ind.get("lo252") and rec["price"] <= 1.05 * ind["lo252"]:
+            lists.append("Near 52-week low")
         if (rec["long"]["score"] or 0) >= 50:
             lists.append("Strong long-term trend")
         if (rec.get("delivery") or {}).get("tone") == "pos":

@@ -5,7 +5,7 @@
   const CURRENCY = { INR: '₹', USD: '$' };
   const FREQ_CODE = { Monthly: 'M', Quarterly: 'Q', 'Half-yearly': 'H', Yearly: 'Y' };
   const FIXED_LISTS = ['Government-backed', 'High dividend', 'Low debt', 'Low volatility', 'Momentum leaders',
-    'Strong long-term trend', 'Strong delivery buying', 'Oversold', 'Near 52-week high', 'New listings', 'US mega cap'];
+    'Strong long-term trend', 'Strong delivery buying', 'Oversold', 'Near 52-week high', 'Near 52-week low', 'New listings', 'US mega cap'];
 
   /* ---------- helpers ---------- */
   const $ = (sel, el = document) => el.querySelector(sel);
@@ -339,11 +339,12 @@
     for (const name of Object.keys(S.lists)) chips.push(['C:' + name, name, pool.filter((s) => S.lists[name].includes(s.symbol)).length]);
     for (const name of FIXED_LISTS) if (counts.has(name)) chips.push([name, name, counts.get(name)]);
     const sectors = [...counts.keys()].filter((n) => !FIXED_LISTS.includes(n) && !['Other'].includes(n)).sort();
-    for (const name of sectors) chips.push([name, name, counts.get(name)]);
-    const buttons = chips.map(([key, label, count]) => h('button', {
+    const sectorChips = sectors.map((name) => [name, name, counts.get(name)]);
+    const make = ([key, label, count]) => h('button', {
       type: 'button', class: 'chip' + (f.list === key ? ' on' : ''), 'aria-pressed': f.list === key ? 'true' : 'false',
       onclick: () => { f.list = key; saveFilters(); updateSignals(); },
-    }, `${label} (${count})`));
+    }, `${label} (${count})`);
+    const buttons = chips.map(make);
     buttons.push(h('button', { type: 'button', class: 'chip', onclick: () => {
       const name = (prompt('Name for the new list (for example "Retirement")') || '').trim().slice(0, 30);
       if (!name) return;
@@ -351,7 +352,7 @@
       S.lists[name] = []; store.set('lists', S.lists); f.list = 'C:' + name; saveFilters(); updateSignals();
       toast('List created. Open a stock to add it to this list.');
     } }, '+ New list'));
-    return buttons;
+    return { lists: buttons, sectors: sectorChips.map(make) };
   }
 
   const VIEWS = [['overview', 'Overview'], ['valuation', 'Valuation'], ['dividend', 'Dividends'], ['technical', 'Technical'], ['risk', 'Risk']];
@@ -460,7 +461,9 @@
   function updateSignals() {
     const chips = $('#chips'), results = $('#results');
     if (!chips || !results) return;
-    chips.replaceChildren(...listChips());
+    const strips = listChips();
+    chips.replaceChildren(h('div', { class: 'chips', role: 'group', 'aria-label': 'Lists and technical screens' }, strips.lists),
+      strips.sectors.length ? h('div', { class: 'chips', role: 'group', 'aria-label': 'Sectors' }, strips.sectors) : null);
     const rows = visibleStocks();
     const f = S.filters;
     const head = h('div', { class: 'row small muted', style: 'justify-content:space-between;margin-bottom:6px' },
@@ -496,7 +499,7 @@
           onclick: () => { f.horizon = hz; saveFilters(); render(); } }, hz === 'short' ? 'Short-term' : 'Long-term')))),
       select('Columns', f.view, VIEWS, (v) => { f.view = v; saveFilters(); updateSignals(); }),
       h('button', { type: 'button', class: 'chip', title: 'Download the stocks shown as a spreadsheet file', onclick: exportCsv }, 'Export CSV')));
-    const root = h('div', null, bar, h('div', { class: 'chips', id: 'chips', role: 'group', 'aria-label': 'Lists' }), h('div', { id: 'results' }));
+    const root = h('div', null, bar, h('div', { id: 'chips' }), h('div', { id: 'results' }));
     queueMicrotask(updateSignals);
     return root;
   }

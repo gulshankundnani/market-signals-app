@@ -22,7 +22,7 @@ It is not investment advice. Signals come from fixed rules on free, delayed data
 | GMP cross-check | Google News headlines that name the IPO and quote a premium | Flags "news agrees" or "news differs". GMP is an unofficial rumour and can be wrong |
 | US IPO calendar | Nasdaq | Date, price range, size |
 | Market conditions, breadth, sectors | Computed from the index (Nifty 50, S&P 500), its volatility index and the stocks in this app's list | Seven simple checks worth +1, 0 or -1 each, advancers and decliners, share of stocks above their 20/50/200-day averages, sector moves over 1, 5 and 20 days. Breadth and sectors cover this app's list, not the whole exchange |
-| Lists | Computed daily | Government-backed, high dividend, low debt, low volatility, momentum, oversold, near 52-week high, delivery buying, sectors |
+| Lists | Computed daily | Government-backed, high dividend, low debt, low volatility, momentum, oversold, near 52-week high, near 52-week low, delivery buying, sectors |
 
 ## What is not automatic
 

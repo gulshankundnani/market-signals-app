@@ -441,3 +441,16 @@ class StaleAndGroupNewsTests(unittest.TestCase):
         self.assertFalse(news.is_relevant("NTPC Green Energy shares jump 5% on order win", "NTPC", "NTPC"))
         self.assertTrue(news.is_relevant("NTPC shares rise after quarterly profit beats estimates", "NTPC", "NTPC"))
         self.assertTrue(news.is_relevant("Acme IPO GMP today: premium at Rs 40", "Acme", ipo_pages=True))
+
+
+class NearLowListTests(unittest.TestCase):
+    def test_near_52_week_low_list(self):
+        from engine import build
+        def rec(price):
+            return {"sector": "IT", "tags": [], "market": "IN", "price": price, "indicators": {"hi252": 200.0, "lo252": 100.0},
+                    "short": {"score": 0}, "long": {"score": 0}}
+        records = [rec(104.0), rec(106.0), rec(150.0)]
+        build.add_lists(records)
+        self.assertIn("Near 52-week low", records[0]["lists"])
+        self.assertNotIn("Near 52-week low", records[1]["lists"])
+        self.assertNotIn("Near 52-week low", records[2]["lists"])
