@@ -35,6 +35,20 @@ class _NoNews:
         pass
 
 
+def lite(record):
+    """The part of a curated stock's record that the dashboard needs (table, screens, peers, alerts), without what only its own page shows:
+    the older headlines, the provisional reading, the price series for charts and the backtest detail. The full record is in its detail
+    shard and the page loads it when the stock is opened. This keeps data.json, which every visit downloads, small."""
+    news = record.get("news") or {}
+    dividend = record.get("dividend")
+    return {**{k: v for k, v in record.items() if k not in ("spark_sma50", "live", "levels")},
+            "dividend": {k: v for k, v in dividend.items() if k != "history"} if isinstance(dividend, dict) else dividend,
+            "spark": (record.get("spark") or [])[-2:],
+            "news": {"fresh": news.get("fresh", []), "items": [], "error": news.get("error")},
+            "backtest": {k: {"beats_buy_hold_oos": v.get("beats_buy_hold_oos")} for k, v in (record.get("backtest") or {}).items() if isinstance(v, dict)},
+            "lite": True, "shard": shard_of(record["symbol"])}
+
+
 def shard_of(symbol):
     return "%02d" % (zlib.crc32(symbol.encode("utf-8")) % SHARDS)
 
@@ -106,11 +120,12 @@ def index_row(stock, q, entry, record):
             "lists": list(dict.fromkeys(quote_lists(q) + [n for n in (record or {}).get("lists", []) if n != "Other"]))}
 
 
-def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, log=print, lists_fn=None):
+def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, log=print, lists_fn=None, curated_records=()):
     """Analyse this run's slice, rewrite the shards and the index. Returns the analysis index to keep in the saved state.
 
     analyse(entry, ctx) is the same function the curated list uses. One bad stock never stops the run."""
     wide_symbols = {s["symbol"] for s in wide_list}
+    kept_symbols = wide_symbols | {r["symbol"] for r in curated_records}
     index = {s: e for s, e in (index or {}).items() if s in wide_symbols}
     shards = load_shards(prev, loader)
     for symbol in list(index):                           # an index entry whose record is gone (a shard that failed to load) is analysed again
@@ -143,8 +158,11 @@ def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, l
         shards[shard_of(symbol)][symbol] = record
         index[symbol] = {"at": stamp, "ok": True}
         done += 1
+    for record in curated_records:                       # the curated stocks' full records, loaded when one is opened (a carried-over or already slim record never replaces them)
+        if not record.get("carried") and not record.get("lite"):
+            shards[shard_of(record["symbol"])][record["symbol"]] = record
     for records in shards.values():                      # drop records of stocks that left the list
-        for symbol in [s for s in records if s not in wide_symbols]:
+        for symbol in [s for s in records if s not in kept_symbols]:
             del records[symbol]
     out = Path(out_dir)
     (out / "detail").mkdir(parents=True, exist_ok=True)

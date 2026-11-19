@@ -243,6 +243,10 @@ repeated.
   Each run analyses up to 60 stocks (never analysed first, most traded first, then the stalest), so the whole list is covered within hours of
   the first run and each stock is refreshed about once a day, which is how often completed daily candles change. Until a stock is analysed its
   row says "quote only" and opening it shows the quote. The previous shards are read back from the published site on every run.
+  **Fast start:** `data.json` holds only a slim record for each main-list stock (readings, key figures, table columns); its older headlines, backtest
+  detail, provisional reading and levels are in `detail/NN.json` with the rest and load when the stock is opened. That cut the first download from
+  about 980 KB to about 230 KB compressed. The two files are requested at the same time. If a stock's full record cannot be loaded, its page shows the
+  quote and says so.
   Nothing is left half-done for these stocks: the table says while the full list is loading, when it could not load (with a "Try again" button) and how
   many stocks are analysed so far; the Reading filter says how many rows it hides because they have no reading yet; an empty result offers "Clear
   filters"; a quote-only stock can be starred and opened on the NSE or Yahoo pages; "Near 52-week high/low" include every stock from its quote alone, and

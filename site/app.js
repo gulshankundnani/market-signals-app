@@ -129,14 +129,21 @@
 
   /* ---------- data loading ---------- */
   async function load(manual) {
+    // The start-up load, a "page became visible" event and the timer can fire together. Only one download runs at a time, and an automatic
+    // reload is skipped if the data is under a minute old, so the same 2 MB is never fetched twice in a row.
+    if (S.loading || (!manual && S.data && Date.now() - (S.loadedAt || 0) < 60000)) return;
+    S.loading = true;
     const button = $('#refresh');
     button.disabled = true;
+    const listPromise = fetch('index.json', { cache: 'no-store' }).catch(() => null);      // the other stocks, downloaded at the same time
     try {
       const response = await fetch('data.json', { cache: 'no-store' });
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const data = await response.json();
       if (!data || !Array.isArray(data.stocks)) throw new Error('unexpected data');
       S.data = data;
+      S.loadedAt = Date.now();
+      S.shards.clear();                 // full records are per run, so none from an earlier run is reused
       S.error = null;
       checkChanges();
       if (manual) toast('Data refreshed');
@@ -144,11 +151,12 @@
       S.error = S.data ? 'Could not refresh. Showing the data already loaded.' : 'Could not load data. Check your connection and try again.';
     } finally {
       button.disabled = false;
+      S.loading = false;
     }
     updateHeader();
     render();
     openFromHash();
-    loadCatalog();
+    loadCatalog(listPromise);
   }
 
   /* Every other listed stock: one small row each (index.json), loaded after the dashboard so it never delays it. A stock's full analysis
@@ -156,12 +164,12 @@
   const slimStock = (r) => ({ ...r, lists: r.lists || [], tags: [], news: { fresh: [] }, slim: true,
     short: r.short || { label: null, score: null }, long: r.long || { label: null, score: null },
     fundamentals: { market_cap: r.cap }, indicators: { hi252: r.high52, lo252: r.low52 } });
-  async function loadCatalog() {
+  async function loadCatalog(prefetched) {
     S.catalog = 'loading';
     if ($('#chips')) updateSignals();
     try {
-      const response = await fetch('index.json', { cache: 'no-store' });
-      if (!response.ok) throw new Error('index.json ' + response.status);
+      const response = await (prefetched || fetch('index.json', { cache: 'no-store' }));
+      if (!response || !response.ok) throw new Error('index.json');
       const payload = await response.json();
       const known = new Set(S.data.stocks.map((s) => s.symbol));
       S.others = (payload.stocks || []).filter((r) => !known.has(r.symbol)).map(slimStock);
@@ -560,7 +568,7 @@
     const info = S.catalogInfo;
     const status = S.catalog === 'loading' ? h('p', { class: 'muted small notice' }, 'Loading every other listed stock… the table shows the main list for now.')
       : S.catalog === 'failed' ? h('p', { class: 'small notice warnline' }, 'The full list of listed stocks could not be loaded, so only the main list is shown. ',
-        h('button', { type: 'button', class: 'chip', onclick: loadCatalog }, 'Try again'))
+        h('button', { type: 'button', class: 'chip', onclick: () => loadCatalog() }, 'Try again'))
         : info && info.analysed < info.count * 0.98 ? h('p', { class: 'muted small notice' }, `${info.analysed.toLocaleString()} of ${info.count.toLocaleString()} other listed stocks are analysed so far. The rest show their quote only and fill in over the next few hours.`) : null;
     const head = h('div', { class: 'row small muted', style: 'justify-content:space-between;margin-bottom:6px' },
       h('span', null, `${rows.length} stock${rows.length === 1 ? '' : 's'} · ${f.horizon === 'short' ? 'weeks view' : 'months-to-years view'} reading`,
@@ -643,6 +651,22 @@
       return;
     }
     lastFocus = opener || document.activeElement;
+    if (s.lite) {
+      const dlg = $('#detail');
+      dlg.replaceChildren(h('div', { class: 'detailview' }, h('div', { class: 'row', style: 'justify-content:space-between;gap:8px;padding:12px' },
+        h('div', null, h('h2', { style: 'margin:0' }, s.name), h('span', { class: 'muted small' }, s.symbol)),
+        h('button', { type: 'button', class: 'dclose', 'aria-label': 'Close', onclick: closeDetail }, '✕')), h('p', { class: 'muted small', style: 'padding:0 12px 16px' }, 'Loading the analysis…')));
+      if (!dlg.open) dlg.showModal();
+      const full = await loadRecord(s);
+      if (!dlg.open) return;
+      if (!full) {                      // the summary record cannot draw the whole page, so show the quote and say so
+        const f = s.fundamentals || {}, i = s.indicators || {};
+        dlg.replaceChildren(quoteView({ ...s, cap: f.market_cap, high52: i.hi252, low52: i.lo252 }, 'The full analysis could not be loaded. Close this and try again in a moment.'));
+        return;
+      }
+      showDetail(full, tab);
+      return;
+    }
     showDetail(s, tab);
   }
   function showDetail(s, tab) {
@@ -832,7 +856,7 @@
       d.overdue ? h('p', { class: 'tag warn' }, 'A payment looks overdue. The usual schedule says one should have been paid by now, so the dividend may have been cut or paused.') : null,
       d.special_count ? h('p', { class: 'tag' }, `${d.special_count} one-off special dividend${plural(d.special_count)} in the last 12 months, left out of the recurring figure`) : null,
       h('table', null, h('thead', null, h('tr', null, h('th', null, 'Paid on'), h('th', { class: 'num' }, 'Per share'), h('th', null, 'Type'))),
-        h('tbody', null, d.history.map((p) => h('tr', null, h('td', null, p.date), h('td', { class: 'num' }, money(p.amount, s.currency)), h('td', null, p.special ? 'Special (one-off)' : 'Regular'))))),
+        h('tbody', null, (d.history || []).map((p) => h('tr', null, h('td', null, p.date), h('td', { class: 'num' }, money(p.amount, s.currency)), h('td', null, p.special ? 'Special (one-off)' : 'Regular'))))),
       h('p', { class: 'muted small' }, 'Worked out from payments actually made: amount per payment times the number of payments, divided by the current price. The yield moves with the share price, and a past dividend can be cut.'));
   }
 

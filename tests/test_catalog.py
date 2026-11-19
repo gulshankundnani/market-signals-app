@@ -85,3 +85,37 @@ class CatalogListTests(unittest.TestCase):
         catalog.update(NOW, {}, WIDE[:1], QUOTES, fake_analyse, {"bars": {}}, "prev", lambda prev, name: {}, out, log=lambda *_: None, lists_fn=with_lists)
         row = json.loads((Path(out) / "index.json").read_text())["stocks"][0]
         self.assertEqual(row["lists"], ["Oversold"])              # the sector placeholder "Other" is not a list
+
+
+class LiteRecordTests(unittest.TestCase):
+    FULL = {"symbol": "A.NS", "name": "A", "price": 10.0, "spark": [1, 2, 3, 4], "spark_sma50": [1, 2], "live": {"short": {}}, "levels": {"zones": []},
+            "news": {"items": [{"title": "x"}] * 6, "fresh": [{"title": "x"}], "error": False},
+            "dividend": {"frequency": "Yearly", "history": [1, 2, 3], "forward_yield": 0.02},
+            "backtest": {"short": {"beats_buy_hold_oos": True, "trades": [1] * 50}, "long": {"beats_buy_hold_oos": False}, "note": "x"},
+            "short": {"label": "Buy", "score": 30}}
+
+    def test_lite_keeps_what_the_dashboard_needs_and_drops_the_rest(self):
+        lite = catalog.lite(self.FULL)
+        self.assertEqual(lite["spark"], [3, 4])
+        self.assertNotIn("live", lite)
+        self.assertNotIn("levels", lite)
+        self.assertEqual(lite["news"], {"fresh": [{"title": "x"}], "items": [], "error": False})
+        self.assertEqual(lite["backtest"], {"short": {"beats_buy_hold_oos": True}, "long": {"beats_buy_hold_oos": False}})
+        self.assertNotIn("history", lite["dividend"])
+        self.assertEqual(lite["dividend"]["forward_yield"], 0.02)
+        self.assertEqual((lite["short"], lite["shard"], lite["lite"]), (self.FULL["short"], catalog.shard_of("A.NS"), True))
+        self.assertEqual(len(json.dumps(lite)) < len(json.dumps(self.FULL)), True)
+
+    def test_full_records_of_curated_stocks_are_stored_for_the_page_but_slim_ones_never_replace_them(self):
+        out = tempfile.mkdtemp()
+        full = {"symbol": "KEEP.NS", "name": "Keep", "price": 1.0, "short": {"label": "Buy", "score": 1}, "long": {}}
+        catalog.update(NOW, {}, [], {}, fake_analyse, {"bars": {}}, "prev", lambda prev, name: {}, out, log=lambda *_: None, curated_records=[full])
+        shard = json.loads((Path(out) / "detail" / f"{catalog.shard_of('KEEP.NS')}.json").read_text())
+        self.assertIn("KEEP.NS", shard)
+        out2 = tempfile.mkdtemp()
+        previous = {"KEEP.NS": full}
+        shard_name = f"detail/{catalog.shard_of('KEEP.NS')}.json"
+        catalog.update(NOW, {}, [], {}, fake_analyse, {"bars": {}}, "prev", lambda prev, name: previous if name == shard_name else {}, out2, log=lambda *_: None,
+                       curated_records=[{**catalog.lite(full), "carried": True}])
+        kept = json.loads((Path(out2) / "detail" / f"{catalog.shard_of('KEEP.NS')}.json").read_text())
+        self.assertNotIn("lite", kept["KEEP.NS"])
