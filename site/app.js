@@ -80,7 +80,7 @@
     data: null,
     error: null,
     tab: 'signals',
-    filters: Object.assign({ market: 'ALL', horizon: 'short', signal: 'ALL', list: 'ALL', sort: 'score', view: 'overview' }, store.get('filters', {})),
+    filters: Object.assign({ market: 'ALL', horizon: 'short', signal: 'ALL', list: 'ALL', sector: 'ALL', sort: 'score', view: 'overview' }, store.get('filters', {})),
     q: '',
     watch: new Set(store.get('watch', [])),
     lists: store.get('lists', {}),
@@ -276,14 +276,21 @@
     return s[f.horizon].score;
   }
 
+  // A list (screen, watchlist, own list) and a sector can be combined: a stock must be in both.
+  function inList(s, key) {
+    if (!key || key === 'ALL') return true;
+    if (key === 'WATCH') return S.watch.has(s.symbol);
+    if (key.startsWith('C:')) return (S.lists[key.slice(2)] || []).includes(s.symbol);
+    return s.lists.includes(key);
+  }
+  const inSector = (s, sector) => !sector || sector === 'ALL' || s.lists.includes(sector);
+
   function visibleStocks() {
     const f = S.filters;
     const q = S.q.trim().toLowerCase();
     const rows = S.data.stocks.filter((s) => {
       if (f.market !== 'ALL' && s.market !== f.market) return false;
-      if (f.list === 'WATCH') { if (!S.watch.has(s.symbol)) return false; }
-      else if (f.list.startsWith('C:')) { if (!(S.lists[f.list.slice(2)] || []).includes(s.symbol)) return false; }
-      else if (f.list !== 'ALL' && !s.lists.includes(f.list)) return false;
+      if (!inList(s, f.list) || !inSector(s, f.sector)) return false;
       const label = s[f.horizon].label;
       if (f.signal === 'BUY' && side(label) !== 'buy') return false;
       if (f.signal === 'HOLD' && label !== 'Hold') return false;
@@ -333,18 +340,21 @@
   function listChips() {
     const f = S.filters;
     const pool = S.data.stocks.filter((s) => f.market === 'ALL' || s.market === f.market);
-    const counts = new Map();
-    for (const s of pool) for (const name of s.lists) counts.set(name, (counts.get(name) || 0) + 1);
-    const chips = [['ALL', 'All', pool.length], ['WATCH', 'My watchlist', pool.filter((s) => S.watch.has(s.symbol)).length]];
-    for (const name of Object.keys(S.lists)) chips.push(['C:' + name, name, pool.filter((s) => S.lists[name].includes(s.symbol)).length]);
-    for (const name of FIXED_LISTS) if (counts.has(name)) chips.push([name, name, counts.get(name)]);
-    const sectors = [...counts.keys()].filter((n) => !FIXED_LISTS.includes(n) && !['Other'].includes(n)).sort();
-    const sectorChips = sectors.map((name) => [name, name, counts.get(name)]);
-    const make = ([key, label, count]) => h('button', {
-      type: 'button', class: 'chip' + (f.list === key ? ' on' : ''), 'aria-pressed': f.list === key ? 'true' : 'false',
-      onclick: () => { f.list = key; saveFilters(); updateSignals(); },
+    const inSectorPool = pool.filter((s) => inSector(s, f.sector));      // list counts follow the chosen sector
+    const inListPool = pool.filter((s) => inList(s, f.list));            // sector counts follow the chosen list
+    const names = new Set();
+    for (const s of pool) for (const name of s.lists) names.add(name);
+    const countList = (key) => inSectorPool.filter((s) => inList(s, key)).length;
+    const chips = [['ALL', 'All', countList('ALL')], ['WATCH', 'My watchlist', countList('WATCH')]];
+    for (const name of Object.keys(S.lists)) chips.push(['C:' + name, name, countList('C:' + name)]);
+    for (const name of FIXED_LISTS) if (names.has(name)) chips.push([name, name, countList(name)]);
+    const sectors = [...names].filter((n) => !FIXED_LISTS.includes(n) && n !== 'Other').sort();
+    const sectorChips = [['ALL', 'All sectors', inListPool.length], ...sectors.map((name) => [name, name, inListPool.filter((s) => inSector(s, name)).length])];
+    const make = (field) => ([key, label, count]) => h('button', {
+      type: 'button', class: 'chip' + (f[field] === key ? ' on' : ''), 'aria-pressed': f[field] === key ? 'true' : 'false',
+      onclick: () => { f[field] = key; saveFilters(); updateSignals(); },
     }, `${label} (${count})`);
-    const buttons = chips.map(make);
+    const buttons = chips.map(make('list'));
     buttons.push(h('button', { type: 'button', class: 'chip', onclick: () => {
       const name = (prompt('Name for the new list (for example "Retirement")') || '').trim().slice(0, 30);
       if (!name) return;
@@ -352,7 +362,7 @@
       S.lists[name] = []; store.set('lists', S.lists); f.list = 'C:' + name; saveFilters(); updateSignals();
       toast('List created. Open a stock to add it to this list.');
     } }, '+ New list'));
-    return { lists: buttons, sectors: sectorChips.map(make) };
+    return { lists: buttons, sectors: sectors.length ? sectorChips.map(make('sector')) : [] };
   }
 
   const VIEWS = [['overview', 'Overview'], ['valuation', 'Valuation'], ['dividend', 'Dividends'], ['technical', 'Technical'], ['risk', 'Risk']];
@@ -491,7 +501,7 @@
     const search = h('input', { type: 'search', placeholder: 'Name or symbol', value: S.q, 'aria-label': 'Search stocks', oninput: (e) => { S.q = e.target.value; updateSignals(); } });
     const bar = h('div', { class: 'card filterbar' }, h('div', { class: 'row' },
       h('label', { class: 'field' }, 'Search', search),
-      select('Market', f.market, [['ALL', 'All markets'], ['IN', 'India'], ['US', 'United States']], (v) => { f.market = v; f.list = 'ALL'; saveFilters(); updateSignals(); }),
+      select('Market', f.market, [['ALL', 'All markets'], ['IN', 'India'], ['US', 'United States']], (v) => { f.market = v; f.list = 'ALL'; f.sector = 'ALL'; saveFilters(); updateSignals(); }),
       select('Reading', f.signal, [['ALL', 'Any'], ['BUY', 'Aligned bullish'], ['HOLD', 'Mixed'], ['SELL', 'Aligned bearish']], (v) => { f.signal = v; saveFilters(); updateSignals(); }),
       select('Sort by', f.sort, [['score', 'Indicator alignment'], ['change', 'Day change'], ['dividend', 'Dividend yield'], ['name', 'Name']], (v) => { f.sort = v; saveFilters(); updateSignals(); }),
       h('div', { class: 'field' }, 'Horizon', h('div', { class: 'row', style: 'gap:6px' },
