@@ -224,7 +224,7 @@ def enrich_with_news(rows, now, fetch_news):
         except FetchError:
             continue
         for item in items:
-            if item["age_min"] is None or item["age_min"] > NEWS_MAX_AGE_HOURS * 60 or not news.is_relevant(item["title"], row["name"]):
+            if item["age_min"] is None or item["age_min"] > NEWS_MAX_AGE_HOURS * 60 or not news.is_relevant(item["title"], row["name"], ipo_pages=True):
                 continue
             found = extract_gmp(item["title"])
             if found:

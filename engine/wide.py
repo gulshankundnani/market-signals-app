@@ -185,6 +185,59 @@ def mover_events(quotes, market_of, open_markets):
     return sorted(events, key=lambda e: -e["magnitude"])
 
 
+IPO_WATCH_DAYS = 90
+IPO_MIN_SESSIONS = 1
+
+
+def ipo_levels(bars, listed, today, days=IPO_WATCH_DAYS):
+    """{"high", "low", "first_close"} of the listing-day candle for a stock listed within `days` days, or None. Needs the listing-day bar
+    itself (the first bar dated on or after the listing date), so a stock whose history started later is left out rather than guessed."""
+    try:
+        age = (today - datetime.fromisoformat(listed).date()).days
+    except (TypeError, ValueError):
+        return None
+    dates = (bars or {}).get("d") or []
+    if age < 0 or age > days or not dates:
+        return None
+    try:
+        gap = (datetime.fromisoformat(dates[0]).date() - datetime.fromisoformat(listed).date()).days
+    except ValueError:
+        return None
+    if gap < 0 or gap > 4:                               # the first bar must be the listing session (allowing a weekend or holiday)
+        return None
+    return {"high": bars["h"][0], "low": bars["l"][0], "first_close": bars["c"][0], "sessions": len(bars["c"])}
+
+
+def ipo_events(levels, quotes, market_of, open_markets):
+    """Factual events for recently listed stocks: the price is above the listing-day high or below the listing-day low.
+    levels: {symbol: ipo_levels output}. Returns [{"symbol", "tags", "move", "price", "ipo": True, "magnitude"}]."""
+    out = []
+    for symbol, lv in levels.items():
+        q = quotes.get(symbol)
+        if not q or market_of.get(symbol) not in open_markets or q.get("state") not in (None, "REGULAR") or lv["sessions"] < IPO_MIN_SESSIONS + 1:
+            continue
+        price = q["price"]
+        if price > lv["high"]:
+            tag = f"IPO breakout: above listing-day high {lv['high']:,.2f}"
+        elif price < lv["low"]:
+            tag = f"IPO breakdown: below listing-day low {lv['low']:,.2f}"
+        else:
+            continue
+        out.append({"symbol": symbol, "tags": [tag], "move": q.get("change_pct"), "price": price, "ipo": True, "small": False,
+                    "magnitude": abs(q.get("change_pct") or 0)})
+    return sorted(out, key=lambda e: -e["magnitude"])
+
+
+def stock_watch(levels, quotes):
+    """Lines for the pre-open brief: each recently listed stock's last price and its listing-day range (the levels to watch)."""
+    rows = []
+    for symbol, lv in sorted(levels.items(), key=lambda kv: -kv[1]["sessions"]):
+        q = quotes.get(symbol)
+        if q:
+            rows.append(f"{symbol.replace('.NS', '')} last {q['price']:,.2f}, listing-day range {lv['low']:,.2f}-{lv['high']:,.2f}")
+    return rows
+
+
 def open_markets(quotes, market_of):
     """Markets that have at least a few quotes in a running regular session."""
     count = {}

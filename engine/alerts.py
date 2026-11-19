@@ -300,33 +300,54 @@ def compact(text):
     return out
 
 
+LOW_LIMIT = 5
+IPO_LIMIT = 5
+KIND_LABEL = {"mover": "Mover", "low52": "52-week low", "ipo": "IPO watch"}
+
+
 def mover_alerts(events, names, seen, now_ts, limit=8, small_limit=3):
-    """One alert per stock whose size of move, volume or 52-week position was not announced today. Fairness: strongest first, at most
-    `limit` per run, and each kind of event is announced once per stock per day. seen: {key: ts}. Returns (lines, items, seen)."""
+    """One alert per stock whose size of move, volume, 52-week position or IPO range was not announced today. Fairness: strongest first,
+    at most `limit` movers, LOW_LIMIT 52-week lows and IPO_LIMIT IPO events per run, each kind announced once per stock per day.
+    A stock at a 52-week low is its own category ("low52"); an IPO breakout or breakdown is "ipo". Returns (lines, items, seen)."""
     day = datetime.fromtimestamp(now_ts, timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d")
     seen = {k: v for k, v in (seen or {}).items() if now_ts - v <= 36 * 3600}
-    lines, items = [], []
+    buckets = {"mover": [], "low52": [], "ipo": []}
+    caps = {"mover": limit, "low52": LOW_LIMIT, "ipo": IPO_LIMIT}
     small_sent = 0
     for event in events:
         if event.get("small") and small_sent >= small_limit:
             continue                                   # small stocks never take more than their share of a run's alerts
-        kinds = {("move" if "%" in tag and "volume" not in tag else "volume" if "volume" in tag else "52w") for tag in event["tags"]}
-        keys = {f"{event['symbol']}|{k}|{day}" for k in kinds}
-        if keys <= set(seen):
-            continue
-        if len(lines) >= limit:
-            break
-        seen.update({k: now_ts for k in keys})
-        small_sent += 1 if event.get("small") else 0
-        symbol = event["symbol"]
-        name = names.get(symbol) or symbol
-        name = re.sub(r"\s+(Limited|Ltd\.?|Inc\.?|Incorporated|Corporation|Corp\.?)$", "", name).strip() or name
-        currency = "INR" if symbol.endswith(".NS") else "USD"
-        label = "Small-stock mover" if event.get("small") else "Mover"
-        lines.append(f"{label}, {name} ({symbol}): {', '.join(event['tags'])}; price {money_text(event['price'], currency)}")
-        items.append({"symbol": symbol, "kind": "mover", "name": name, "tags": event["tags"], "price": event["price"], "currency": currency, "move": event["move"],
-                      "small": bool(event.get("small"))})
-    return lines, items, seen
+        tags = event["tags"]
+        if event.get("ipo"):
+            parts = [("ipo", tags)]
+        else:
+            low = [t for t in tags if "52-week low" in t]
+            rest = [t for t in tags if t not in low]
+            parts = ([("low52", low)] if low else []) + ([("mover", rest)] if rest else [])
+        for kind, shown in parts:
+            if len(buckets[kind]) >= caps[kind]:
+                continue
+            if kind == "ipo":
+                sub = {"ipo-up" if "breakout" in shown[0] else "ipo-down"}
+            elif kind == "low52":
+                sub = {"52w-low"}
+            else:
+                sub = {("move" if "%" in t and "volume" not in t else "volume" if "volume" in t else "52w") for t in shown}
+            keys = {f"{event['symbol']}|{k}|{day}" for k in sub}
+            if keys <= set(seen):
+                continue
+            seen.update({k: now_ts for k in keys})
+            small_sent += 1 if event.get("small") and kind == "mover" else 0
+            symbol = event["symbol"]
+            name = names.get(symbol) or symbol
+            name = re.sub(r"\s+(Limited|Ltd\.?|Inc\.?|Incorporated|Corporation|Corp\.?)$", "", name).strip() or name
+            currency = "INR" if symbol.endswith(".NS") else "USD"
+            label = "Small-stock mover" if event.get("small") and kind == "mover" else KIND_LABEL[kind]
+            buckets[kind].append((f"{label}, {name} ({symbol}): {', '.join(shown)}; price {money_text(event['price'], currency)}",
+                                  {"symbol": symbol, "kind": kind, "name": name, "tags": shown, "price": event["price"], "currency": currency,
+                                   "move": event["move"], "small": bool(event.get("small")) and kind == "mover"}))
+    ordered = buckets["ipo"] + buckets["mover"] + buckets["low52"]
+    return [l for l, _ in ordered], [i for _, i in ordered], seen
 
 
 def insert_after(lines, items, kinds, new_lines, new_items):

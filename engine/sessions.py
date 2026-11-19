@@ -178,8 +178,9 @@ def _stock_list(rows):
     return ", ".join(f"{s.replace('.NS', '')} {p:+.1f}%" for s, p, *_ in rows)
 
 
-def preopen_brief(pre, cues, flows, events_today):
-    """Lines for the India pre-open brief. pre: parse_preopen output or None. cues: [(name, pct)]. flows: parse_flows or {}."""
+def preopen_brief(pre, cues, flows, events_today, watch=()):
+    """Lines for the India pre-open brief. pre: parse_preopen output or None. cues: [(name, pct)]. flows: parse_flows or {}.
+    watch: recently listed stocks with their listing-day range, the levels an IPO breakout or breakdown is measured from."""
     lines = []
     if pre and (pre[0] or pre[1]):
         up, down, adv, dec = pre
@@ -195,6 +196,8 @@ def preopen_brief(pre, cues, flows, events_today):
         lines.append(f"Previous day net flows ({flows['date']}): FII/FPI {flows.get('FII/FPI', 0):+,.0f} cr, DII {flows.get('DII', 0):+,.0f} cr")
     if events_today:
         lines.append("Today: " + "; ".join(events_today[:6]))
+    if watch:
+        lines.append("Stock watch (recent listings, last close vs listing-day range): " + "; ".join(list(watch)[:8]))
     return lines
 
 

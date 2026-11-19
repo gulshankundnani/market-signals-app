@@ -234,6 +234,12 @@ repeated.
   or low; liquid stocks). **Penny and small stocks are included** with higher bars (12% India / 10% US, or 5x volume on a 5%+ move, no 52-week alerts), an
   average-turnover floor so a handful of trades cannot raise an alert, a "small stock" label, and at most 3 of a run's mover alerts; their own headlines looked up **stock by stock** in a rotating slice of 50 per run (stocks that just moved
   first), so the list is covered every few hours. Deals and official event dates cover every NSE stock.
+* **52-week lows** are their own alert category ("52-WEEK LOWS" in Telegram, at most 5 per run), separate from movers.
+* **IPO watch:** every stock listed within the last 90 days has its listing-day high and low taken from its first daily candle. While its market is
+  open, a price above that high sends an "IPO breakout" alert and a price below that low an "IPO breakdown" alert (once per stock per day, at most 5
+  per run). They are statements of where the price is, not forecasts. The pre-open brief ends with a "Stock watch" line listing these stocks, their
+  last price and listing-day range. IPO and grey-market pages (IPO GMP, price band, subscription status) never count as news for a listed stock, and a
+  group company ("NTPC Green") is not matched to its parent ("NTPC").
 * **Index alerts:** moves past 1, 2 and 3 percent, 52-week highs and lows, and volatility indexes past a level, for the main NSE indexes (while
   the market is open) and the global ones (once per session).
 * **Briefs:** India pre-open (09:08 to 09:40 IST), post-close (16:00 to 19:30) and institutional flows (18:30 to 22:00), and the US close

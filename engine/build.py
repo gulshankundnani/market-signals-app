@@ -646,6 +646,12 @@ def run(args):
     quotes = wide.fetch_quotes(quote_session, sorted(market_of)) if quote_session.start() else {}
     open_now = wide.open_markets(quotes, market_of)
     mover_events = wide.mover_events(quotes, market_of, open_now)
+    ipo_levels = {}                                # recently listed stocks and their listing-day range
+    for x in records:
+        lv = wide.ipo_levels(ctx["completed_bars"].get(x["symbol"]) if ctx.get("completed_bars") else ctx["bars"].get(x["symbol"]), x.get("listed"), today) if x.get("listed") else None
+        if lv:
+            ipo_levels[x["symbol"]] = lv
+    mover_events = sorted(mover_events + wide.ipo_events(ipo_levels, quotes, market_of, open_now), key=lambda e: -e["magnitude"])
     wide_batch, wide_cursor = wide.pick_news_batch(wide_list, state.get("wide_cursor", 0), [e["symbol"] for e in mover_events])
     wide_found = wide.wide_news(wide_batch, now, ctx["news_breaker"])
     print(f"Wide coverage: {len(market_of)} stocks, {len(quotes)} quotes, {len(mover_events)} mover events, news looked up for {len(wide_batch)} ({len(wide_found)} with fresh headlines)")
@@ -688,7 +694,7 @@ def run(args):
         body = []
         if window == "in_preopen":
             payload, nse["preopen"] = sessions.Source("NSE pre-open", sessions.PREOPEN).fetch(now, nse.get("preopen"))
-            body = sessions.preopen_brief(sessions.parse_preopen(payload) if payload else None, cues, flows, todays)
+            body = sessions.preopen_brief(sessions.parse_preopen(payload) if payload else None, cues, flows, todays, wide.stock_watch(ipo_levels, quotes))
         elif window == "in_postclose" and "IN" not in open_now:
             up, down, extremes = wide.top_moves(quotes, market_of, "IN")
             payload, nse["deals"] = sessions.Source("NSE large deals", sessions.LARGE_DEALS).fetch(now, nse.get("deals"))

@@ -166,7 +166,22 @@ def _find(words, target):
     return None
 
 
-def is_relevant(title, name, ticker_base=None, source=None, mention_only=False):
+# IPO and grey-market pages are re-dated by news sites every time they are refreshed, so a years-old page can look two hours old.
+# They are about an issue, not about a listed company's shares, so they never count as news for a stock.
+_IPO_PAGE = re.compile(r"(ipo gmp|gmp today|grey market|price band|subscription status|allotment status|ipo review|expected listing)", re.I)
+# "NTPC Green Energy" is a different listed company from "NTPC": a one-word name followed by one of these belongs to a group company.
+_GROUP_QUALIFIERS = {"green", "renewable", "renewables", "greenfield"}
+
+
+def _group_company(words, name_words):
+    """True when the stock's one-word name appears only as the start of a group company's name (NTPC Green, not NTPC)."""
+    if len(name_words) != 1 or name_words[0] in _GROUP_QUALIFIERS:
+        return False
+    spots = [i for i, w in enumerate(words) if w == name_words[0]]
+    return bool(spots) and all(i + 1 < len(words) and words[i + 1] in _GROUP_QUALIFIERS for i in spots)
+
+
+def is_relevant(title, name, ticker_base=None, source=None, mention_only=False, ipo_pages=False):
     """True when the headline is about this company, so it can be shown as news for the stock.
 
     The stock comes first and its news follows, so the match has to be confident and the company has to be the
@@ -179,8 +194,12 @@ def is_relevant(title, name, ticker_base=None, source=None, mention_only=False):
     words = _words(title)
     if _about_a_person_or_sport(words, source) or _looks_like_roundup(title):
         return False
+    if not ipo_pages and _IPO_PAGE.search(title or ""):
+        return False
     text = " " + " ".join(words) + " "
     name_words = [w for w in _words(name) if w not in NAME_SUFFIXES]
+    if _group_company(words, name_words):
+        return False
     phrase = " ".join(name_words)
     short_names = [w for w in name_words if len(w) >= 4 and w not in GENERIC_WORDS]
     if _is_broker_mention(" ".join(words), [phrase] + short_names):

@@ -23,6 +23,8 @@ READINGS_TITLE = "━━ READINGS ━━"
 NEWS_TITLE = "━━ NEWS ━━"
 DEALS_TITLE = "━━ BLOCK DEALS ━━"
 MOVERS_TITLE = "━━ MOVERS ━━"
+LOW_TITLE = "━━ 52-WEEK LOWS ━━"
+IPO_TITLE = "━━ IPO WATCH ━━"
 INDEX_TITLE = "━━ INDEXES ━━"
 BRIEF_TITLE = "━━ MARKET BRIEF ━━"
 FOOTER = "ℹ️ " + html.escape(alerts.NOTE) + "\n" + html.escape(alerts.ADVISORY)
@@ -92,7 +94,8 @@ def index_card(item, link):
 
 def mover_card(item, link):
     """A stock that moved a lot, hit a 52-week extreme or traded far above its average volume: what happened, no judgement."""
-    lines = [f"\U0001F4C8 <b>{esc(item['name'])} ({esc(item['symbol'])})</b>",
+    icon = {"low52": "\U0001F53B", "ipo": "\U0001F680"}.get(item["kind"], "\U0001F4C8")
+    lines = [f"{icon} <b>{esc(item['name'])} ({esc(item['symbol'])})</b>",
              f"{BULLET} {esc('; '.join(item['tags']))}" + (" · small stock" if item.get("small") else ""),
              f"{BULLET} Price: {esc(alerts.money_text(item['price'], item.get('currency') or ''))}"]
     if link:
@@ -141,7 +144,7 @@ def render(items, links, now_ts, max_chars=None, max_messages=MAX_MESSAGES):
     cards = []
     for index, item in enumerate(items):
         link = links[index] if links and index < len(links) else None
-        make = {"signal": reading_card, "deal": deal_card, "mover": mover_card, "index": index_card, "brief": brief_card}.get(item["kind"], news_card)
+        make = {"signal": reading_card, "deal": deal_card, "mover": mover_card, "low52": mover_card, "ipo": mover_card, "index": index_card, "brief": brief_card}.get(item["kind"], news_card)
         cards.append((item["kind"], make(item, link)))
     room = max_chars - alerts.visible_length(FOOTER) - RESERVE - 60
     chunks, current, used = [], [], 0
@@ -162,12 +165,12 @@ def render(items, links, now_ts, max_chars=None, max_messages=MAX_MESSAGES):
         for index in chunk:
             kind, card = cards[index]
             if kind != last_kind:
-                blocks.append({"signal": READINGS_TITLE, "deal": DEALS_TITLE, "mover": MOVERS_TITLE, "index": INDEX_TITLE, "brief": BRIEF_TITLE}.get(kind, NEWS_TITLE))
+                blocks.append({"signal": READINGS_TITLE, "deal": DEALS_TITLE, "mover": MOVERS_TITLE, "low52": LOW_TITLE, "ipo": IPO_TITLE, "index": INDEX_TITLE, "brief": BRIEF_TITLE}.get(kind, NEWS_TITLE))
                 last_kind = kind
             blocks.append(card)
         readings = sum(1 for i in chunk if cards[i][0] == "signal")
         deal_count = sum(1 for i in chunk if cards[i][0] == "deal")
-        mover_count = sum(1 for i in chunk if cards[i][0] == "mover")
+        mover_count = sum(1 for i in chunk if cards[i][0] in ("mover", "low52", "ipo"))
         other_count = sum(1 for i in chunk if cards[i][0] in ("index", "brief"))
         text = _header(now_ts, readings, len(chunk) - readings - deal_count - mover_count - other_count, number, parts, deal_count, mover_count, other_count) + "\n\n" + "\n\n".join(blocks)
         if number == len(kept) and left_out:

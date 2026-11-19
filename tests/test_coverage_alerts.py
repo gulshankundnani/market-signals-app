@@ -390,3 +390,54 @@ class DigestCardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IpoAndLowTests(unittest.TestCase):
+    BARS = {"d": ["2026-11-10", "2026-11-11", "2026-11-12"], "o": [100, 110, 112], "h": [120, 118, 119], "l": [98, 105, 108], "c": [110, 112, 115], "v": [1, 1, 1]}
+    TODAY = __import__("datetime").date(2026, 11, 19)
+
+    def test_levels_need_the_listing_day_bar(self):
+        self.assertEqual(wide.ipo_levels(self.BARS, "2026-11-10", self.TODAY)["high"], 120)
+        self.assertIsNone(wide.ipo_levels(self.BARS, "2026-11-05", self.TODAY))      # history starts after the listing day
+        self.assertIsNone(wide.ipo_levels(self.BARS, "2026-05-01", self.TODAY))      # too old to watch
+
+    def test_breakout_and_breakdown_only_in_a_running_session(self):
+        lv = {"X.NS": wide.ipo_levels(self.BARS, "2026-11-10", self.TODAY)}
+        up = wide.ipo_events(lv, {"X.NS": q(price=125.0, chg=4.0)}, {"X.NS": "IN"}, {"IN"})
+        self.assertIn("IPO breakout", up[0]["tags"][0])
+        down = wide.ipo_events(lv, {"X.NS": q(price=90.0, chg=-5.0)}, {"X.NS": "IN"}, {"IN"})
+        self.assertIn("IPO breakdown", down[0]["tags"][0])
+        self.assertEqual(wide.ipo_events(lv, {"X.NS": q(price=110.0)}, {"X.NS": "IN"}, {"IN"}), [])
+        self.assertEqual(wide.ipo_events(lv, {"X.NS": q(price=125.0)}, {"X.NS": "IN"}, set()), [])
+
+    def test_stock_watch_lists_levels(self):
+        lv = {"X.NS": wide.ipo_levels(self.BARS, "2026-11-10", self.TODAY)}
+        self.assertIn("X last 115.00, listing-day range 98.00-120.00", wide.stock_watch(lv, {"X.NS": q(price=115.0)})[0])
+
+    def test_52_week_low_is_its_own_category_and_ipo_alerts_are_separate(self):
+        events = [{"symbol": "A.NS", "tags": ["-9.0%", "at 52-week low"], "move": -9.0, "price": 50.0, "magnitude": 11},
+                  {"symbol": "X.NS", "tags": ["IPO breakout: above listing-day high 120.00"], "move": 4.0, "price": 125.0, "ipo": True, "magnitude": 4}]
+        lines, items, seen = alerts.mover_alerts(events, {}, {}, 1_794_000_000)
+        self.assertEqual([i["kind"] for i in items], ["ipo", "mover", "low52"])
+        self.assertEqual(items[2]["tags"], ["at 52-week low"])
+        again = alerts.mover_alerts(events, {}, seen, 1_794_000_100)
+        self.assertEqual(again[0], [])
+        from engine import digest
+        text = digest.render(items, None, 1_794_000_000)[0][0]
+        for title in (digest.IPO_TITLE, digest.MOVERS_TITLE, digest.LOW_TITLE):
+            self.assertIn(title, text)
+
+    def test_preopen_brief_carries_the_stock_watch(self):
+        from engine import sessions
+        lines = sessions.preopen_brief(None, [], {}, [], ["X last 115.00, listing-day range 98.00-120.00"])
+        self.assertTrue(any(l.startswith("Stock watch") for l in lines))
+
+
+class StaleAndGroupNewsTests(unittest.TestCase):
+    def test_ipo_pages_and_group_companies_are_not_news_for_the_parent(self):
+        from engine import news
+        title = "NTPC Green Energy Limited IPO, GMP, Details, Price, And Review IPO GMP Today, Expected Listing Gain & Price Band"
+        self.assertFalse(news.is_relevant(title, "NTPC", "NTPC", "IndiaIPO"))
+        self.assertFalse(news.is_relevant("NTPC Green Energy shares jump 5% on order win", "NTPC", "NTPC"))
+        self.assertTrue(news.is_relevant("NTPC shares rise after quarterly profit beats estimates", "NTPC", "NTPC"))
+        self.assertTrue(news.is_relevant("Acme IPO GMP today: premium at Rs 40", "Acme", ipo_pages=True))
