@@ -379,3 +379,7 @@ dl.terms { margin: 0; font-size: 13px; } dl.terms dd { margin: 0 0 6px; color: v
 
 .verifyline { margin: 4px 0; } .verifyline a { font-weight: 700; }
 .notice { margin: 0 0 6px; }
+
+.lag { color: var(--warn); cursor: help; }
+details.evidence { margin-bottom: 8px; }
+details.evidence summary { cursor: pointer; font-size: 13px; }

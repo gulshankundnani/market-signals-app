@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
-from . import fundamentals
+from . import dividends, evidence, fundamentals
 
 SHARDS = 64
 PER_RUN = 60
@@ -101,6 +101,14 @@ TECH_KEYS = ("rsi", "macd_hist", "sma20", "sma50", "sma200", "atr", "momentum126
 NEAR = 0.05          # the same 5% as the "Near 52-week high / low" lists of the curated stocks
 
 
+def _indicated_yield(q):
+    """Yahoo's indicated annual dividend over the price, or None. A result over 50% of the price is a data error (a different currency or a stale rate)."""
+    rate, price = q.get("dividend_rate"), q.get("price")
+    if not rate or not price or rate / price > 0.5:
+        return None
+    return _round(rate / price, 5)
+
+
 def quote_lists(q):
     """Lists a stock belongs to from its quote alone, so even a stock that is not analysed yet appears in them."""
     price, high, low = q["price"], q.get("high52"), q.get("low52")
@@ -112,7 +120,23 @@ def quote_lists(q):
     return lists
 
 
+def extra_row(record):
+    """What the table needs only for its technical filters and its Valuation, Dividend, Technical and Risk column views: the stock's indicator values, pattern
+    names, pressure and fundamentals. They are in index_extra.json, which the page fetches only when one of those is used, so the start-up file stays small."""
+    row = {"ind": {k: _round(v, 3) for k, v in ((record or {}).get("indicators") or {}).items() if k in TECH_KEYS and isinstance(v, (int, float))},
+           "pressure": ((record or {}).get("pressure") or {}).get("label"),
+           "patterns": [[p["name"], p.get("bias")] for p in (record or {}).get("patterns") or [] if isinstance(p, dict) and p.get("name")],
+           "fund": {k: v for k, v in ((record or {}).get("fundamentals") or {}).items() if k in FUND_KEYS and isinstance(v, (int, float))}}
+    return {k: v for k, v in row.items() if v is not None and v != [] and v != {}}
+
+
 def index_row(stock, q, entry, record):
+    """One compact row. Empty values are left out (the page treats a missing field as none), which roughly halves the file."""
+    row = _index_row(stock, q, entry, record)
+    return {k: v for k, v in row.items() if v is not None and v != [] and v != {}}
+
+
+def _index_row(stock, q, entry, record):
     short = (record or {}).get("short") or {}
     long_ = (record or {}).get("long") or {}
     return {"symbol": stock["symbol"], "name": stock["name"], "market": stock["market"], "sector": "Other",
@@ -122,13 +146,12 @@ def index_row(stock, q, entry, record):
             "high52": _round(q.get("high52"), 2), "low52": _round(q.get("low52"), 2), "shard": shard_of(stock["symbol"]), "analysed": bool(record), "series": stock.get("series"),
             "short": {"label": short.get("label"), "score": short.get("score")} if record else None,
             "long": {"label": long_.get("label"), "score": long_.get("score")} if record else None,
-            "analysed_at": (entry or {}).get("at") if record else None,
-            "pe": _round(q.get("pe"), 2), "forward_pe": _round(q.get("forward_pe"), 2), "pb": _round(q.get("pb"), 2), "eps": _round(q.get("eps"), 2),
-            "book_value": _round(q.get("book_value"), 2), "dividend_yield": _round(q.get("dividend_yield"), 4),
-            "ind": {k: _round(v, 3) for k, v in ((record or {}).get("indicators") or {}).items() if k in TECH_KEYS and isinstance(v, (int, float))},
-            "pressure": ((record or {}).get("pressure") or {}).get("label"),
-            "patterns": [[p["name"], p.get("bias")] for p in (record or {}).get("patterns") or [] if isinstance(p, dict) and p.get("name")],
-            "fund": {k: v for k, v in ((record or {}).get("fundamentals") or {}).items() if k in FUND_KEYS and isinstance(v, (int, float))},
+                        "pe": _round(q.get("pe"), 2), "forward_pe": _round(q.get("forward_pe"), 2), "pb": _round(q.get("pb"), 2), "eps": _round(q.get("eps"), 2),
+            "book_value": _round(q.get("book_value"), 2), "dividend_rate": _round(q.get("dividend_rate"), 4),
+            # for a stock that is analysed the yield is worked out from its payments; otherwise it is Yahoo's indicated rate over the price (marked on the page)
+            "dividend_yield": _round((record or {}).get("dividend_yield"), 5) if record else _indicated_yield(q),
+            "dividend_basis": None if record else "indicated",
+            "thin": True if q.get("avg_volume") is not None and q.get("price") and q["price"] * q["avg_volume"] < evidence.THIN_TURNOVER.get("IN" if stock["symbol"].endswith(".NS") else "US", 0) else None,
             "lists": list(dict.fromkeys(quote_lists(q) + [n for n in (record or {}).get("lists", []) if n != "Other"]))}
 
 
@@ -171,6 +194,7 @@ def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, l
         if record is None:
             index[symbol] = {"at": stamp, "ok": False, "error": error}
             continue
+        record["dividend_check"] = dividends.cross_check(record.get("dividend"), record.get("price"), (quotes.get(symbol) or {}).get("dividend_rate"))
         if lists_fn:
             lists_fn([record])                          # the lists (Oversold, Low debt and so on) the curated stocks get
         shards[shard_of(symbol)][symbol] = record
@@ -189,7 +213,18 @@ def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, l
             (out / "detail" / f"{name}.json").write_text(json.dumps(records, allow_nan=False, separators=(",", ":")), encoding="utf-8")
     all_records = {s: r for records in shards.values() for s, r in records.items()}
     rows = [index_row(s, quotes[s["symbol"]], index.get(s["symbol"]), all_records.get(s["symbol"])) for s in wide_list if s["symbol"] in quotes]
+    # A stock the quote request did not return this run (a failed batch, a Yahoo outage) keeps its row from the last publish instead of vanishing from the table.
+    previous_rows = {r.get("symbol"): r for r in ((loader(prev, "index.json") if prev else {}) or {}).get("stocks", []) if isinstance(r, dict)}
+    seen = {r["symbol"] for r in rows}
+    kept = [previous_rows[s["symbol"]] for s in wide_list if s["symbol"] not in seen and s["symbol"] in previous_rows]
+    rows += kept
+    extras = {r["symbol"]: extra_row(all_records[r["symbol"]]) for r in rows if r.get("analysed") and r["symbol"] in all_records}
+    previous_extra = ((loader(prev, "index_extra.json") if prev else {}) or {}).get("stocks", {})
+    extras.update({r["symbol"]: previous_extra[r["symbol"]] for r in kept if r["symbol"] in previous_extra})
     payload = {"generated_at": stamp, "count": len(rows), "analysed": sum(1 for r in rows if r["analysed"]), "stocks": rows}
     (out / "index.json").write_text(json.dumps(payload, allow_nan=False, separators=(",", ":")), encoding="utf-8")
+    (out / "index_extra.json").write_text(json.dumps({"generated_at": stamp, "stocks": {s: e for s, e in extras.items() if e}}, allow_nan=False, separators=(",", ":")), encoding="utf-8")
+    if kept:
+        log(f"Catalog: {len(kept)} stocks had no quote this run and keep their previous row")
     log(f"Catalog: {len(rows)} stocks listed, {payload['analysed']} analysed; {done} analysed this run, {len(results) - done} without enough history")
     return index

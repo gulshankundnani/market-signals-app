@@ -278,7 +278,7 @@ Details and evidence: `docs/audit-followup-2026-11-16.md`.
 
 * `python tools/verify_market_data.py --volume` checks the deployed prices (and NSE volumes) against the NSE end-of-day file and the
   Cboe history, same session only. Not-yet-published references give UNVERIFIED, never a pass or a fail.
-* `python tools/check_production.py --cache signals-v33` reads what the deployed site published (data freshness, the NSE feed and US IPO
+* `python tools/check_production.py --cache signals-v34` reads what the deployed site published (data freshness, the NSE feed and US IPO
   status as the Actions run saw them, stale handling, the service-worker cache name) and prints PASS, FAIL or UNVERIFIED for each. It cannot read
   the Actions logs, which need a login, so "error logged" stays UNVERIFIED unless you read the run log yourself.
 * `python tools/strategy_report.py` measures the two rules against buy-and-hold (drawdown, downside deviation, Sharpe, Sortino,
@@ -391,6 +391,21 @@ Then open http://127.0.0.1:8765/. Python 3.10+ and Node 18+ are the only require
   average counts as the full +1 or -1). A stock sitting on an average therefore scores near zero and its reading cannot flip
   between two extremes when the price ticks across the line.
 * **Long-term (months to years):** price against the 200-day average, golden/death cross, 6-month return, 52-week position and volatility.
+* **Evidence beside every reading** (`engine/evidence.py`): a reading is how indicators line up today, not a recommendation, so the page shows what the same fixed rule did
+  in the past test. A strip above the table gives, per market and view, on how many stocks the rule beat buy-and-hold (currently 14% of 200 NSE stocks for the weeks
+  view and 20% for the months-to-years view, with median returns) and the live track-record count; a ▽ in the table marks a stock where the rule lagged holding; the
+  stock page and Telegram reading alerts carry that stock's own result. Stocks with small turnover are tagged "Thinly traded" and ones with under a year of prices are
+  tagged too. The test uses today's stock list, so it is not free of survivorship bias.
+* **Checked against the live channel:** the mover, IPO-level, 52-week and index numbers in sampled Telegram messages were compared with Yahoo's day range and prices
+  (33 of 33 price cards inside the day's range, index levels and percentages equal). The sample found and fixed: IPO breakouts repeated all day (now only the crossing of the
+  listing-day high or low), 52-week alerts for stocks listed under a year ago, auto-generated "Investor Analysis | StockIQ" pages and look-alike companies
+  (NLC India Renewables, Raymond James) shown as news.
+* **Three small files instead of one big one:** `data.json` (the main list, slim records), `index.json` (one compact row per other stock) and
+  `index_extra.json` (their indicator values, patterns, pressure and fundamentals), which the page fetches only when a technical filter, the technical panel
+  or a column view other than Overview is used. Export CSV waits for it so the export is complete. A stock the quote request did not return in a run keeps its
+  previous row, so a Yahoo outage never empties the table.
+* **Release checks:** `docs/release-checklist.md` lists every check to do before a push, and `python tools/qa_sweep.py <build folder>` runs the data and file
+  ones (unique symbols, readings equal in every file, plausible ratios, dividend sums, size budgets) and exits 1 on a failure.
 * **Which stocks are covered:** every stock on the NSE main board (EQ series, plus the BE and BZ series, many of them penny stocks, shown with their series), the
   NSE SME platform (Emerge) and the S&P 500, as long as Yahoo has a quote for it (about 3,100 in all). Companies listed only on the BSE are not covered: the BSE
   publishes no list the app can read, so there is nothing to build the list from. A search that finds nothing says so.
@@ -420,7 +435,7 @@ Then open http://127.0.0.1:8765/. Python 3.10+ and Node 18+ are the only require
 * **Chart patterns** (shown on the stock page, not part of the score): fixed rules on the latest completed candles. Candle shapes: doji, hammer,
   shooting star, bullish/bearish engulfing, morning/evening star, three white soldiers/black crows, bullish/bearish harami, inside day.
   Price structure: golden/death cross (last 10 days), MACD cross (last 3 days), 20-day breakout/breakdown, within 3% of the 52-week high or low,
-  gap up/down (opened 1% or more past the previous day's range), tight range (20 days inside a range under 6% wide), four days of higher or lower
+  gap up/down (opened 1% or more past the previous day's range), tight range (20 days inside a range under 10% wide), four days of higher or lower
   highs and lows. Volume: a surge of 2x the 20-day average on a 2%+ move (skipped when volume is not reported). Each is a description of what the
   candles did, tagged bullish, bearish or neutral by its rule, not a forecast. Many stocks have no pattern on a given day, and the page says so.
 * Each score runs from -100 to +100: +20 or more is Buy, -20 or less is Sell, and +/-50 is Strong.

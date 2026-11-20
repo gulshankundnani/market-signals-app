@@ -170,15 +170,19 @@ def _find(words, target):
 # They are about an issue, not about a listed company's shares, so they never count as news for a stock.
 _IPO_PAGE = re.compile(r"(ipo gmp|gmp today|grey market|price band|subscription status|allotment status|ipo review|expected listing)", re.I)
 # "NTPC Green Energy" is a different listed company from "NTPC": a one-word name followed by one of these belongs to a group company.
-_GROUP_QUALIFIERS = {"green", "renewable", "renewables", "greenfield"}
+# "NLC India Renewables" is not "NLC India", and "Raymond James" is not "Raymond": the stock's name followed by one of these belongs to another company.
+_GROUP_QUALIFIERS = {"green", "renewable", "renewables", "greenfield", "solar", "james"}
+# Automatic pages and token listings that carry a company's name but say nothing about it ("X Investor Analysis | StockIQ", "Wrapped X Tokenized stock (xStock)").
+_AUTO_PAGE = re.compile(r"\|\s*stockiq\b|\b(?:investor|trader) analysis\b|\bstock price (?:&|and) chart\b|\bshare price\b[^|]*\blive\b|\bxstock\b|\btokenized\b", re.I)
 
 
 def _group_company(words, name_words):
-    """True when the stock's one-word name appears only as the start of a group company's name (NTPC Green, not NTPC)."""
-    if len(name_words) != 1 or name_words[0] in _GROUP_QUALIFIERS:
+    """True when the stock's whole name appears only as the start of another company's name (NTPC Green, not NTPC; NLC India Renewables, not NLC India)."""
+    if not name_words or any(w in _GROUP_QUALIFIERS for w in name_words):
         return False
-    spots = [i for i, w in enumerate(words) if w == name_words[0]]
-    return bool(spots) and all(i + 1 < len(words) and words[i + 1] in _GROUP_QUALIFIERS for i in spots)
+    size = len(name_words)
+    spots = [i for i in range(len(words) - size + 1) if words[i:i + size] == name_words]
+    return bool(spots) and all(i + size < len(words) and words[i + size] in _GROUP_QUALIFIERS for i in spots)
 
 
 def is_relevant(title, name, ticker_base=None, source=None, mention_only=False, ipo_pages=False):
@@ -194,7 +198,7 @@ def is_relevant(title, name, ticker_base=None, source=None, mention_only=False, 
     words = _words(title)
     if _about_a_person_or_sport(words, source) or _looks_like_roundup(title):
         return False
-    if not ipo_pages and _IPO_PAGE.search(title or ""):
+    if (not ipo_pages and _IPO_PAGE.search(title or "")) or _AUTO_PAGE.search(title or ""):
         return False
     text = " " + " ".join(words) + " "
     name_words = [w for w in _words(name) if w not in NAME_SUFFIXES]

@@ -23,7 +23,7 @@ from .fetch import FetchError, http_get
 SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 QUOTE_URL = "https://query1.finance.yahoo.com/v7/finance/quote?symbols={symbols}"
 REFRESH_HOURS = 20
-LIST_VERSION = 2          # raised when the list's content rules change (version 2: the BE and BZ series are included), so a cached older list is rebuilt
+LIST_VERSION = 3          # raised when the list's content rules change (version 2: the BE and BZ series are included), so a cached older list is rebuilt
 BATCH = 100
 NEWS_PER_RUN = 50
 NEWS_WORKERS = 6
@@ -73,10 +73,10 @@ def short_name(name):
     return name or (original or "")
 
 
-def build_universe(nse_names, sp500, curated, series=None):
+def build_universe(nse_names, sp500, curated, series=None, listed=None):
     """The wide list: [{"symbol", "name", "market"}] for every NSE and S&P 500 stock that is not in the curated list. series: {symbol: "BE"|"BZ"}."""
-    skip, series = set(curated), series or {}
-    wide = [{"symbol": s, "name": n, "market": "IN", **({"series": series[s]} if s in series else {})} for s, n in sorted(nse_names.items()) if s not in skip]
+    skip, series, listed = set(curated), series or {}, listed or {}
+    wide = [{"symbol": s, "name": n, "market": "IN", **({"series": series[s]} if s in series else {}), **({"listed": listed[s]} if s in listed else {})} for s, n in sorted(nse_names.items()) if s not in skip]
     wide += [{"symbol": s, "name": v["name"], "market": "US"} for s, v in sorted(sp500.items()) if s not in skip]
     return wide
 
@@ -91,12 +91,15 @@ def load_universe(state, now, curated, fetcher=http_get, log=print):
         fresh = False
     if fresh and cache.get("list") and cache.get("v") == LIST_VERSION:
         return [s for s in cache["list"] if s["symbol"] not in set(curated)], cache
-    nse, sp, series, sme = {}, {}, {}, {}
+    nse, sp, series, sme, listed = {}, {}, {}, {}, {}
     try:
         text = fetcher(discover.NSE_LIST_URL).decode("utf-8", "replace")
         nse, series = discover.nse_company_names(text), discover.nse_series(text)
+        listed.update(discover.listing_dates(text))
         try:                                         # the NSE's SME platform has its own list; if it fails the main list still loads
-            sme = discover.sme_listings(fetcher(discover.SME_LIST_URL).decode("utf-8", "replace"))
+            sme_text = fetcher(discover.SME_LIST_URL).decode("utf-8", "replace")
+            sme = discover.sme_listings(sme_text)
+            listed.update(discover.listing_dates(sme_text, sme_format=True))
         except FetchError as err:
             sme = {}
             log(f"Wide universe: the NSE SME list failed ({str(err)[-60:]})")
@@ -110,7 +113,7 @@ def load_universe(state, now, curated, fetcher=http_get, log=print):
     except FetchError as err:
         log(f"Wide universe: the S&P 500 list failed ({str(err)[-60:]})")
     previous = cache.get("list") or []
-    wide = build_universe(nse, sp, curated, series) if (nse or sp) else []
+    wide = build_universe(nse, sp, curated, series, listed) if (nse or sp) else []
     kept_sme = [s for s in previous if s.get("series") == "SME" and not any(w["symbol"] == s["symbol"] for w in wide)] if nse and not sme else []
     wide += kept_sme                                 # an SME list that failed to load does not drop the SME stocks already known
     if not nse:                                      # keep the old Indian list rather than lose it
@@ -144,7 +147,9 @@ def parse_quotes(payload):
                               "low52": _num(row.get("fiftyTwoWeekLow")), "cap": _num(row.get("marketCap")), "state": row.get("marketState"),
                               "time": _num(row.get("regularMarketTime")), "pe": _num(row.get("trailingPE")), "forward_pe": _num(row.get("forwardPE")),
                               "eps": _num(row.get("epsTrailingTwelveMonths")), "book_value": _num(row.get("bookValue")), "pb": _num(row.get("priceToBook")),
-                              "dividend_yield": _num(row.get("trailingAnnualDividendYield"))}
+                              # Yahoo's own "trailing" dividend fields are wrong for many NSE stocks (Infosys shows 0.05%), so only its indicated annual
+                              # dividend per share is kept, and the yield is that divided by the price
+                              "dividend_rate": _num(row.get("dividendRate"))}
     return out
 
 
@@ -163,7 +168,7 @@ def fetch_quotes(session, symbols, log=print, pause=0.15):
     return out
 
 
-def mover_events(quotes, market_of, open_markets):
+def mover_events(quotes, market_of, open_markets, young=()):
     """Factual events from live quotes: a big move, a volume surge, a new 52-week high or low.
 
     quotes: {symbol: quote}. market_of: {symbol: "IN"|"US"}. open_markets: markets whose session is running (a quote outside the session
@@ -184,9 +189,9 @@ def mover_events(quotes, market_of, open_markets):
                 tags.append(f"{move:+.1f}%")
             if q.get("volume") and q["volume"] >= VOLUME_RATIO * avg and move is not None and abs(move) >= VOLUME_MOVE:
                 tags.append(f"volume {q['volume'] / avg:.1f}x average")
-            if q.get("high52") and price >= q["high52"] * NEAR_EXTREME:
+            if symbol not in young and q.get("high52") and price >= q["high52"] * NEAR_EXTREME:
                 tags.append("at 52-week high")
-            elif q.get("low52") and price <= q["low52"] / NEAR_EXTREME:
+            elif symbol not in young and q.get("low52") and price <= q["low52"] / NEAR_EXTREME:
                 tags.append("at 52-week low")
         else:
             if move is not None and abs(move) >= s["move"]:
@@ -230,10 +235,15 @@ def ipo_events(levels, quotes, market_of, open_markets):
         q = quotes.get(symbol)
         if not q or market_of.get(symbol) not in open_markets or q.get("state") not in (None, "REGULAR") or lv["sessions"] < IPO_MIN_SESSIONS + 1:
             continue
-        price = q["price"]
-        if price > lv["high"]:
+        price, change = q["price"], q.get("change_pct")
+        previous = price / (1 + change / 100) if isinstance(change, (int, float)) and change > -99 else None
+        if previous is None:
+            continue
+        # An event is the crossing: the previous close was inside or on the other side of the line and the price is now past it. A stock that has been above its
+        # listing-day high for weeks is not an event, and was the same five names repeated all day.
+        if previous <= lv["high"] < price:
             tag = f"IPO breakout: above listing-day high {lv['high']:,.2f}"
-        elif price < lv["low"]:
+        elif previous >= lv["low"] > price:
             tag = f"IPO breakdown: below listing-day low {lv['low']:,.2f}"
         else:
             continue

@@ -163,11 +163,39 @@
      is a separate file, fetched only when the stock is opened. */
   const slimStock = (r) => ({ ...r, lists: r.lists || [], tags: [], news: { fresh: [] }, slim: true,
     short: r.short || { label: null, score: null }, long: r.long || { label: null, score: null },
-    dividend_yield: r.dividend_yield,
-    fundamentals: { market_cap: r.cap, pe: r.pe, forward_pe: r.forward_pe, pb: r.pb, eps: r.eps, book_value: r.book_value, ...(r.fund || {}) }, indicators: { ...(r.ind || {}), hi252: r.high52, lo252: r.low52 },
-    pressure: r.pressure ? { label: r.pressure } : null, patterns: (r.patterns || []).map(([name, bias]) => ({ name, bias })) });
+    dividend_yield: r.dividend_yield, dividend_check: r.dividend_check,
+    fundamentals: { market_cap: r.cap, pe: r.pe, forward_pe: r.forward_pe, pb: r.pb, eps: r.eps, book_value: r.book_value }, indicators: { hi252: r.high52, lo252: r.low52 },
+    pressure: null, patterns: [], flags: r.thin ? ['thin'] : [] });
+  /* The indicator values, pattern names, pressure and fundamentals of the other stocks are a second file, fetched the first time something needs them: a technical
+     filter, the technical panel, or a column view other than Overview. */
+  function loadExtra() {
+    if (!S.extraPromise || S.extra === null) S.extraPromise = fetchExtra();
+    return S.extraPromise;
+  }
+  async function fetchExtra() {
+    S.extra = 'loading';
+    try {
+      const response = await fetch('index_extra.json', { cache: 'no-store' });
+      if (!response.ok) throw new Error('index_extra.json');
+      const stocks = (await response.json()).stocks || {};
+      for (const row of S.others) {
+        const e = stocks[row.symbol];
+        if (!e) continue;
+        row.fundamentals = { ...row.fundamentals, ...(e.fund || {}) };
+        row.indicators = { ...row.indicators, ...(e.ind || {}) };
+        row.pressure = e.pressure ? { label: e.pressure } : null;
+        row.patterns = (e.patterns || []).map(([name, bias]) => ({ name, bias }));
+        row.techLoaded = true;
+      }
+      S.extra = 'ready';
+    } catch (err) { S.extra = 'failed'; }
+    if ($('#cats')) updateSignals();
+  }
+  const needsExtra = () => activeTech().length > 0 || S.filters.view !== 'overview' || S.techOpen;
   async function loadCatalog(prefetched) {
     S.catalog = 'loading';
+    S.extra = null;
+    S.extraPromise = null;
     if ($('#cats')) updateSignals();
     try {
       const response = await (prefetched || fetch('index.json', { cache: 'no-store' }));
@@ -408,13 +436,13 @@
       (s, v) => { const x = rangePos(s); return x !== null && (v === 'high' ? x >= 0.9 : v === 'low' ? x <= 0.1 : x > 0.1 && x < 0.9); }],
     ['pressure', 'Buying or selling pressure', [['buy', 'Buying pressure'], ['sell', 'Selling pressure']],
       (s, v) => !!s.pressure && s.pressure.label.startsWith(v === 'buy' ? 'Buying' : 'Selling')],
-    ['swing', 'Daily swing (ATR as % of price)', [['low', 'Calm (under 1.5%)'], ['mid', 'Moderate'], ['high', 'Wide (over 3.5%)']],
-      (s, v) => { const a = indOf(s).atr; if (!isNum(a) || !isNum(s.price) || !s.price) return false; const x = (a / s.price) * 100; return v === 'low' ? x < 1.5 : v === 'high' ? x > 3.5 : x >= 1.5 && x <= 3.5; }],
+    ['swing', 'Daily swing (ATR as % of price)', [['low', 'Calm (under 2.5%)'], ['mid', 'Moderate'], ['high', 'Wide (over 4%)']],
+      (s, v) => { const a = indOf(s).atr; if (!isNum(a) || !isNum(s.price) || !s.price) return false; const x = (a / s.price) * 100; return v === 'low' ? x < 2.5 : v === 'high' ? x > 4 : x >= 2.5 && x <= 4; }],
     ['pattern', 'Pattern on the latest candles', [['bullish', 'Any bullish pattern'], ['bearish', 'Any bearish pattern']].concat(PATTERN_NAMES.map((n) => [n, n])),
       (s, v) => (s.patterns || []).some((p) => (v === 'bullish' || v === 'bearish' ? p.bias === v : p.name === v))],
   ];
   const activeTech = () => TECH_FILTERS.filter(([key]) => S.filters.tech && S.filters.tech[key]);
-  const hasTech = (s) => (s.slim ? !!s.analysed : !!s.indicators);
+  const hasTech = (s) => (s.slim ? !!s.techLoaded : !!s.indicators);
   const techPass = (s) => activeTech().every(([key, , , test]) => test(s, S.filters.tech[key]));
 
   const searchTokens = () => {
@@ -467,15 +495,17 @@
     return /[",\n\r]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
   }
 
-  function exportCsv() {
+  async function exportCsv() {
+    if (S.catalog === 'ready' && S.extra !== 'ready') { toast('Preparing the export…'); await loadExtra(); }       // the other stocks' ratios are in the second file
     const rows = visibleStocks();
-    const head = ['Symbol', 'Name', 'Market', 'Sector', 'Currency', 'Price', 'Day change %', 'Weeks-view reading', 'Weeks-view indicator alignment', 'Months-view reading',
-      'Months-view indicator alignment', 'Pressure', 'Dividend yield (12m)', 'P/E', 'ROE', 'Debt/Equity', 'Yearly volatility', 'Last price date'];
+    const head = ['Symbol', 'Name', 'Market', 'Sector', 'Series', 'Currency', 'Price', 'Day change %', 'Weeks-view reading', 'Weeks-view indicator alignment', 'Months-view reading',
+      'Months-view indicator alignment', 'Pressure', 'Dividend yield', 'P/E', 'EPS', 'EV/EBITDA', 'EBITDA', 'ROE', 'Debt/Equity', 'RSI', 'Yearly volatility', 'Analysed', 'Last price date'];
     const lines = [head.map(csvCell).join(',')];
     for (const s of rows) {
       const fund = s.fundamentals || {};
-      lines.push([s.symbol, s.name, s.market, s.sector, s.currency, s.price, s.change_pct, labelText(s.short.label), s.short.score, labelText(s.long.label), s.long.score,
-        s.pressure ? s.pressure.label : '', s.dividend_yield, fund.pe, fund.roe, fund.debt_to_equity, (s.risk || {}).annual_vol, s.as_of].map(csvCell).join(','));
+      lines.push([s.symbol, s.name, s.market, s.sector, s.series || '', s.currency, s.price, s.change_pct, s.short.label ? labelText(s.short.label) : '', s.short.score,
+        s.long.label ? labelText(s.long.label) : '', s.long.score, s.pressure ? s.pressure.label : '', s.dividend_yield, fund.pe, fund.eps, fund.ev_ebitda, fund.ebitda, fund.roe,
+        fund.debt_to_equity, (s.indicators || {}).rsi, (s.risk || {}).annual_vol, s.slim && !s.analysed ? 'no' : 'yes', s.as_of].map(csvCell).join(','));
     }
     const url = URL.createObjectURL(new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }));
     const link = h('a', { href: url, download: `stock-signals-${todayIso()}.csv` });
@@ -521,7 +551,7 @@
   const pressureText = (s) => (s.pressure ? s.pressure.label.replace(' pressure', '') : DASH);
   const pressureClass = (s) => (s.pressure && s.pressure.label.startsWith('Buying') ? 'pos' : s.pressure && s.pressure.label.startsWith('Selling') ? 'neg' : '');
   const dividendCell = (s) => (isNum(s.dividend_yield) && s.dividend_yield > 0
-    ? [percent(s.dividend_yield, 2), s.dividend ? h('span', { class: 'muted small', title: `${s.dividend.frequency} dividend${s.dividend.overdue ? ', payment overdue' : ''}` }, ` ${FREQ_CODE[s.dividend.frequency] || ''}${s.dividend.overdue ? '!' : ''}`) : null]
+    ? [percent(s.dividend_yield, 2), s.slim && s.dividend_basis === 'indicated' ? h('span', { class: 'muted small', title: 'Yahoo\'s indicated annual dividend divided by the price. This stock is not analysed yet, so the yield is not worked out from its payments.' }, ' *') : null, s.dividend ? h('span', { class: 'muted small', title: `${s.dividend.frequency} dividend${s.dividend.overdue ? ', payment overdue' : ''}` }, ` ${FREQ_CODE[s.dividend.frequency] || ''}${s.dividend.overdue ? '!' : ''}`) : null]
     : DASH);
   const newsCell = (s) => (s.news.fresh.length ? h('span', { class: 'tag', title: 'A headline about this company from the last few hours' }, 'New') : null);
 
@@ -606,10 +636,10 @@
     }, S.watch.has(s.symbol) ? '★' : '☆');
     const row = h('tr', { class: 'stock', tabindex: '0', 'aria-label': `${s.name} details` },
       h('td', null, star),
-      h('td', { class: 'name' }, h('b', null, s.name), h('span', null, s.symbol, s.new ? ' · new listing' : '', s.stale ? ' · stale price' : '', s.slim && !s.analysed ? ' · quote only' : '', s.series ? ` · ${s.series} series` : '')),
+      h('td', { class: 'name' }, h('b', null, s.name), h('span', null, s.symbol, s.new ? ' · new listing' : '', s.stale ? ' · stale price' : '', s.slim && !s.analysed ? ' · quote only' : '', s.series ? ` · ${s.series} series` : '', (s.flags || []).includes('thin') ? ' · thinly traded' : '')),
       h('td', { class: 'num' }, money(s.price, s.currency)),
       h('td', { class: `num ${isNum(s.change_pct) ? (s.change_pct >= 0 ? 'up' : 'down') : ''}` }, signed(s.change_pct)),
-      h('td', null, badge(s[f.horizon])),
+      h('td', null, badge(s[f.horizon]), lagMark(s)),
       extraColumns(f.view).map((column) => h('td', { class: `${columnClass(column)}${column.cls ? ' ' + column.cls(s) : ''}` }, column.render(s))));
     row.addEventListener('click', () => openDetail(s.symbol, row));
     row.addEventListener('keydown', (e) => { if (e.key === 'Enter') openDetail(s.symbol, row); });
@@ -648,6 +678,7 @@
   function updateSignals() {
     const cats = $('#cats'), sectorRail = $('#sectorrail'), results = $('#results');
     if (!cats || !sectorRail || !results) return;
+    if (needsExtra() && S.catalog === 'ready' && !S.extra) loadExtra();
     const rows = visibleStocks();
     const fuzzy = S.fuzzy;                 // a later call below recomputes S.fuzzy
     const strips = listChips(fuzzy);
@@ -659,6 +690,8 @@
     if (signature !== S.sig) { S.sig = signature; S.shown = {}; }        // a new search or filter starts again at the first page
     const hidden = f.signal === 'ALL' ? 0 : visibleStocks(true).filter((s) => !s[f.horizon].label).length;
     const hiddenTech = activeTech().length ? visibleStocks(false, true).filter((s) => !hasTech(s)).length : 0;
+    const extraNote = needsExtra() && S.catalog === 'ready' ? (S.extra === 'failed' ? h('p', { class: 'small notice warnline' }, 'The indicator values of the other stocks could not be loaded, so technical filters and the extra columns only cover the main list. ', h('button', { type: 'button', class: 'chip', onclick: () => { S.extra = null; updateSignals(); } }, 'Try again'))
+      : S.extra !== 'ready' ? h('p', { class: 'muted small notice' }, 'Loading indicator values for the other stocks…') : null) : null;
     const info = S.catalogInfo;
     const status = S.catalog === 'loading' ? h('p', { class: 'muted small notice' }, 'Loading every other listed stock… the table shows the main list for now.')
       : S.catalog === 'failed' ? h('p', { class: 'small notice warnline' }, 'The full list of listed stocks could not be loaded, so only the main list is shown. ',
@@ -683,7 +716,7 @@
       } }, 'Delete this list') : null);
     if (!rows.length) {
       const clear = () => { f.market = 'ALL'; f.list = 'ALL'; f.sector = 'ALL'; f.signal = 'ALL'; f.tech = {}; S.q = ''; saveFilters(); render(); };
-      results.replaceChildren(...[status, activeBar, head, h('div', { class: 'empty' },
+      results.replaceChildren(...[status, extraNote, activeBar, head, h('div', { class: 'empty' },
         f.list === 'WATCH' && !S.q ? 'Your watchlist is empty. Tap the star next to a stock to add it.'
           : S.catalog === 'loading' && S.q ? 'Nothing found in the main list yet. Every other listed stock is still loading.'
           : S.q ? `No stock matches "${S.q.trim()}". This app covers stocks listed on the NSE (main board and SME) and the S&P 500; a company listed only on the BSE is not included. ` : 'No stocks match these filters. ',
@@ -691,7 +724,7 @@
       return;
     }
     const codes = f.market === 'ALL' ? ['IN', 'US'] : [f.market];
-    results.replaceChildren(...[status, activeBar, head, h('div', { class: 'cols' + (codes.length > 1 ? ' two' : '') + (f.view !== 'overview' ? ' wide-view' : '') }, codes.map((code) => marketPanel(code, rows.filter((s) => s.market === code))))].filter(Boolean));
+    results.replaceChildren(...[status, extraNote, activeBar, head, h('div', { class: 'cols' + (codes.length > 1 ? ' two' : '') + (f.view !== 'overview' ? ' wide-view' : '') }, codes.map((code) => marketPanel(code, rows.filter((s) => s.market === code))))].filter(Boolean));
     decorateHelp(results);
   }
 
@@ -707,11 +740,13 @@
     const choose = (key, label, options) => h('label', { class: 'field' }, label,
       h('select', { onchange: (e) => { if (e.target.value) f.tech[key] = e.target.value; else delete f.tech[key]; saveFilters(); renderTech(); updateSignals(); } },
         [['', 'Any']].concat(options).map(([v, text]) => h('option', { value: v, selected: v === (f.tech[key] || '') }, text))));
-    return h('details', { class: 'card techfilters', open: open ? 'open' : null },
+    const panel = h('details', { class: 'card techfilters', open: open ? 'open' : null },
       h('summary', null, 'Technical filters', n ? h('span', { class: 'tag', style: 'margin-left:8px' }, `${n} on`) : null),
       h('div', { class: 'row', style: 'margin-top:8px' }, TECH_FILTERS.map(([key, label, options]) => choose(key, label, options))),
       h('p', { class: 'muted small', style: 'margin:6px 0 0' }, 'Every filter you set must be true for a stock to show. Each one reads the stock\'s indicator values; a stock that is not analysed yet has none, so it is hidden while a technical filter is on. ',
         n ? h('button', { type: 'button', class: 'chip', onclick: () => { f.tech = {}; saveFilters(); renderTech(); updateSignals(); } }, 'Clear technical filters') : null));
+    panel.addEventListener('toggle', () => { S.techOpen = panel.open; if (panel.open) updateSignals(); });
+    return panel;
   }
   function renderTech() {
     const box = $('#techbox');
@@ -733,7 +768,7 @@
           onclick: () => { f.horizon = hz; saveFilters(); render(); } }, hz === 'short' ? 'Short-term' : 'Long-term')))),
       select('Columns', f.view, VIEWS, (v) => { f.view = v; saveFilters(); updateSignals(); }),
       h('button', { type: 'button', class: 'chip', title: 'Download the stocks shown as a spreadsheet file', onclick: exportCsv }, 'Export CSV')));
-    const root = h('div', null, bar, h('div', { class: 'signals-layout' },
+    const root = h('div', null, evidenceStrip(), bar, h('div', { class: 'signals-layout' },
       h('aside', { id: 'cats', class: 'rail', 'aria-label': 'Categories' }),
       h('div', { class: 'signals-main' }, h('div', { id: 'techbox' }), h('div', { id: 'results' })),
       h('aside', { id: 'sectorrail', class: 'rail', 'aria-label': 'Sectors' })));
@@ -756,6 +791,7 @@
           h('button', { type: 'button', class: 'dclose', 'aria-label': 'Close', onclick: closeDetail }, '✕'))),
       h('div', { class: 'kv', style: 'padding:0 12px' }, [['Price', money(row.price, row.currency)], ['Day', signed(row.change_pct)], ['Market cap', big(row.cap, row.currency)],
         ['P/E', number(row.pe, 1)], ['P/B', number(row.pb, 1)], ['EPS', number(row.eps, 2)], ['Book value per share', number(row.book_value, 2)],
+        ['Dividend (Yahoo indicated)', isNum(row.dividend_rate) && row.dividend_rate > 0 ? `${money(row.dividend_rate, row.currency)} a year (${percent(row.dividend_yield, 2)} of the price)` : DASH],
         ['Position in 52-week range', range], ['Volume vs average', isNum(row.volume) && row.avg_volume ? `${(row.volume / row.avg_volume).toFixed(1)}x` : DASH]]
         .map(([k, v]) => h('div', null, h('span', null, k), h('b', null, naOr(v))))),
       h('p', { class: 'muted small', style: 'padding:8px 12px' }, note),
@@ -977,26 +1013,58 @@
       h('p', { class: 'muted small' }, 'Figures are as reported by Yahoo Finance for the last twelve months, in the company\'s reporting currency. A blank (n/a) means Yahoo has no value; nothing is estimated. They are shown as they are: no rating or "cheap/expensive" label is made from them.'));
   }
 
+  /* Every dividend figure with the payments it is added up from, so it can be checked by hand, then a cross-check against Yahoo's own indicated amount. */
+  function dividendCheck(s) {
+    const c = s.dividend_check;
+    if (!c) return h('p', { class: 'muted small' }, 'Cross-check: Yahoo shows no indicated annual dividend for this stock, so there is nothing to compare with.');
+    const f = (v) => money(v, s.currency);
+    const cls = c.status === 'agrees' ? '' : 'warn';
+    const verdict = { agrees: 'Agrees', differs: 'Differs', not_paid: 'No payment here yet' }[c.status] || c.status;
+    return h('div', { class: 'card', style: 'padding:10px 12px;margin-top:10px' },
+      h('p', { style: 'margin:0 0 4px' }, h('strong', null, 'Cross-check with Yahoo: '), h('span', { class: `tag ${cls}` }, verdict)),
+      h('p', { class: 'small', style: 'margin:0' }, `Yahoo's indicated annual dividend is ${f(c.rate)} a share (${percent(c.yield, 2)} of the price). `,
+        isNum(c.ours_ttm) ? `Here, the last 12 months add up to ${f(c.ours_ttm)}` : '', isNum(c.ours_forward) ? ` and the recurring yearly dividend to ${f(c.ours_forward)}. ` : '. ',
+        c.status === 'agrees' ? 'The two are within 15% of each other.' : ''),
+      c.note ? h('p', { class: 'muted small', style: 'margin:4px 0 0' }, c.note) : null);
+  }
+
   function dividendBlock(s) {
     const d = s.dividend;
-    if (!d) return h('p', { class: 'muted small' }, 'No dividend was paid in the last two years.');
+    const f = (v) => money(v, s.currency);
+    if (!d) return h('div', null, h('p', { class: 'muted small' }, 'No dividend has gone ex-dividend in the last two years.'), dividendCheck(s));
     const per = d.payments_per_year;
     const plural = (n) => (n === 1 ? '' : 's');
+    const sum = (list) => list.map((p) => `${p.date} ${f(p.amount)}`).join(' + ');
+    const ttm = d.ttm_payments || [];
+    const oneOffs = ttm.filter((p) => p.special);
+    const inYear = new Set(ttm.map((p) => p.date));
+    const rhythm = d.rhythm === 'uneven' ? 'The gaps between payments are uneven (for example an interim and a final dividend), so the number of payments a year was used.'
+      : d.rhythm === 'even' ? 'The payments come at an even rhythm.' : '';
+    const steps = [
+      `1. Payments with an ex-dividend date in the last 12 months (${d.ttm_count}): ${ttm.length ? sum(ttm) : 'none'} = ${f(d.ttm_amount)}.`,
+      `2. 12-month yield = ${f(d.ttm_amount)} ÷ price ${f(s.price)} = ${percent(d.ttm_yield, 2)}.`,
+      oneOffs.length ? `3. One-off payment${plural(oneOffs.length)} (more than 3 times the usual and not repeated): ${sum(oneOffs)}. Without ${oneOffs.length === 1 ? 'it' : 'them'} the 12-month amount is ${f(d.ttm_regular_amount)} (${percent(d.ttm_regular_yield, 2)}).`
+        : `3. No one-off payments were found, so the recurring figure is the same as the 12-month one.${(d.large_kept || []).length ? ` Payment${(d.large_kept || []).length === 1 ? '' : 's'} much larger than the usual (${sum(d.large_kept)}) ${(d.large_kept || []).length === 1 ? 'was' : 'were'} kept as regular because ${(d.large_kept || []).length === 1 ? 'it repeats' : 'they repeat'} at the same time each year or ${(d.large_kept || []).length === 1 ? 'sits' : 'sit'} next to another payment at the same level. If the company calls ${(d.large_kept || []).length === 1 ? 'it' : 'them'} a special dividend, expect the recurring figure to be lower.` : ''}`,
+      per ? `4. Pattern: ${d.frequency} (${per} payment${plural(per)} a year). ${rhythm}` : `4. Pattern: ${d.frequency}. ${d.frequency === 'Single payment' ? 'One regular payment is not enough to say it recurs.' : 'There is no clear pattern.'}`,
+      isNum(d.forward_amount) ? `5. Recurring yearly dividend = the last ${per} regular payment${plural(per)}: ${sum(d.forward_payments || [])} = ${f(d.forward_amount)}; yield ${f(d.forward_amount)} ÷ ${f(s.price)} = ${percent(d.forward_yield, 2)}.`
+        : '5. Recurring yearly dividend: cannot be estimated from this history.'];
     return h('div', null,
+      h('div', { class: 'card', style: 'padding:10px 12px' }, h('h4', { style: 'margin:0 0 6px' }, 'How the figures are worked out'),
+        steps.map((line) => h('p', { class: 'small', style: 'margin:0 0 4px' }, line))),
       kv([
-        ['Payment frequency', d.frequency + (per ? ` (${per} a year)` : '')],
-        ['Paid in last 12 months', `${d.ttm_count} payment${plural(d.ttm_count)}, ${money(d.ttm_amount, s.currency)} per share`],
+        ['Payment pattern', d.frequency + (per ? ` (${per} a year)` : '')],
+        ['Paid in last 12 months', `${d.ttm_count} payment${plural(d.ttm_count)}, ${f(d.ttm_amount)} per share`],
         ['Yield on 12-month payments', percent(d.ttm_yield, 2)],
-        ['Recurring yearly dividend', isNum(d.forward_amount) ? `${money(d.forward_amount, s.currency)} per share` : 'Cannot be estimated'],
+        ['Recurring yearly dividend', isNum(d.forward_amount) ? `${f(d.forward_amount)} per share` : 'Cannot be estimated'],
         ['Yield on recurring dividend', isNum(d.forward_yield) ? percent(d.forward_yield, 2) : '–'],
-        ['Last payment', `${money(d.last_amount, s.currency)} on ${d.last_date} (${percent(d.last_pct_of_price, 2)} of price)`],
+        ['Last payment', `${f(d.last_amount)} on ${d.last_date} (${percent(d.last_pct_of_price, 2)} of price)`],
         ['Change vs previous 12 months', isNum(d.growth) ? signed(d.growth * 100, 1) : 'Not comparable'],
         ['Payout ratio', percent((s.fundamentals || {}).payout_ratio, 0)]]),
+      dividendCheck(s),
       d.overdue ? h('p', { class: 'tag warn' }, 'A payment looks overdue. The usual schedule says one should have been paid by now, so the dividend may have been cut or paused.') : null,
-      d.special_count ? h('p', { class: 'tag' }, `${d.special_count} one-off special dividend${plural(d.special_count)} in the last 12 months, left out of the recurring figure`) : null,
-      h('table', null, h('thead', null, h('tr', null, h('th', null, 'Paid on'), h('th', { class: 'num' }, 'Per share'), h('th', null, 'Type'))),
-        h('tbody', null, (d.history || []).map((p) => h('tr', null, h('td', null, p.date), h('td', { class: 'num' }, money(p.amount, s.currency)), h('td', null, p.special ? 'Special (one-off)' : 'Regular'))))),
-      h('p', { class: 'muted small' }, 'Worked out from payments actually made: amount per payment times the number of payments, divided by the current price. The yield moves with the share price, and a past dividend can be cut.'));
+      h('table', null, h('thead', null, h('tr', null, h('th', null, 'Paid on'), h('th', { class: 'num' }, 'Per share'), h('th', null, 'Type'), h('th', null, 'In the 12 months'))),
+        h('tbody', null, (d.history || []).map((p) => h('tr', null, h('td', null, p.date), h('td', { class: 'num' }, f(p.amount)), h('td', null, p.special ? 'One-off' : 'Regular'), h('td', null, inYear.has(p.date) ? 'Yes' : 'No'))))),
+      h('p', { class: 'muted small' }, 'Amounts are per share as reported by Yahoo Finance, on the ex-dividend date, adjusted for splits. A past dividend can be cut, and the yield moves with the share price.'));
   }
 
   function peersBlock(s) {
@@ -1072,9 +1140,45 @@
     const part = (n, k) => (n ? h('i', { class: k, style: `flex:${n}` }) : null);
     return h('div', { class: 'vblock' },
       h('div', { class: 'verdicts' }, verdictCard('Weeks view', s.short), verdictCard('Months-to-years view', s.long)),
+      ['short', 'long'].some((hz) => pastTest(s, hz)) ? h('div', { class: 'small muted', style: 'margin:6px 0' }, ['short', 'long'].map((hz) => (pastTest(s, hz) ? h('p', { style: 'margin:2px 0' }, h('b', null, hz === 'short' ? 'Weeks view. ' : 'Months-to-years view. '), pastTest(s, hz)) : null)), h('p', { style: 'margin:2px 0' }, 'Past results do not predict future ones.')) : null,
       checks.length ? h('div', { class: 'vsum' },
         h('div', { class: 'small' }, h('b', null, lean), h('span', { class: 'muted' }, ` \u00B7 ${up} of ${checks.length} checks point up, ${down} down, ${flat} neutral`)),
         h('div', { class: 'stackbar', role: 'img', 'aria-label': `${up} checks point up, ${down} point down, ${flat} neutral` }, part(up, 'u'), part(flat, 'n'), part(down, 'd'))) : null);
+  }
+
+  /* Evidence beside a reading: what the same fixed rule did on this stock in the past test, and across the whole list. Shown so a reading is never taken for a promise. */
+  const pastTest = (s, horizon) => {
+    const e = (s.evidence || {})[horizon];
+    if (!e) return null;
+    return `Past test on this stock (${e.years} years, after costs and with dividends): the rule returned ${signed(e.rule * 100, 0)} against ${signed(e.hold * 100, 0)} for simply holding, so it ${e.beat ? 'beat' : 'lagged'} holding${e.few_trades ? ' (few trades, so little to go on)' : ''}.`;
+  };
+  const lagMark = (s) => {
+    const e = (s.evidence || {})[S.filters.horizon];
+    return e && !e.beat ? h('span', { class: 'lag', title: pastTest(s, S.filters.horizon) + ' Past results do not predict future ones.' }, ' ▽') : null;
+  };
+  const FLAG_TEXT = { thin: ['Thinly traded', 'Small daily turnover: a few trades move the price, so indicators on this stock say little.'], short_history: ['Under a year of prices', 'Long-term checks need about a year of prices, so the months-to-years reading rests on less.'] };
+  const flagTags = (s) => (s.flags || []).filter((f) => FLAG_TEXT[f]).map((f) => h('span', { class: 'tag warn', title: FLAG_TEXT[f][1] }, FLAG_TEXT[f][0]));
+
+  function evidenceStrip() {
+    const ev = (S.data && S.data.evidence) || {};
+    const lines = [];
+    for (const [market, name] of [['IN', 'NSE'], ['US', 'US']]) {
+      for (const [hz, label] of [['short', 'weeks view'], ['long', 'months-to-years view']]) {
+        const x = (ev[market] || {})[hz];
+        if (x) lines.push([`${name}, ${label}`, `${x.beat} of ${x.n} stocks (${x.beat_pct}%) beat buy-and-hold; median return ${signed(x.median_rule * 100, 0)} for the rule against ${signed(x.median_hold * 100, 0)} for holding, over about ${x.median_years} years`]);
+      }
+    }
+    const tr = (S.data && S.data.track_record) || {};
+    const o = tr.overall || {};
+    const live = o.n ? (o.reliable ? `${o.n} resolved calls; ${o.target_pct}% reached their target before their stop` : `${o.n} resolved calls so far, too few to judge (at least ${tr.min_sample || 30} are needed)`) : 'no resolved calls yet under the current rules';
+    const best = ev.IN && ev.IN.short ? ev.IN.short : null;
+    return h('details', { class: 'card evidence' },
+      h('summary', null, h('b', null, 'How much weight can a reading carry? '),
+        best ? `In the past test the weeks-view rule beat buy-and-hold on ${best.beat_pct}% of NSE stocks. ` : '', h('span', { class: 'muted' }, 'Tap for the evidence')),
+      h('p', { class: 'small', style: 'margin:8px 0 4px' }, 'A reading says how price and volume indicators line up today. It is not a recommendation and not a forecast. These are the results of the same fixed rules in a past test (next-day prices, assumed costs, dividends included):'),
+      h('ul', { class: 'clean small' }, lines.map(([k, v]) => h('li', null, h('b', null, k + ': '), v)),
+        h('li', null, h('b', null, 'Live record: '), live + '. ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); S.tab = 'track'; render(); } }, 'See the track record'))),
+      h('p', { class: 'muted small', style: 'margin:4px 0 0' }, 'The test uses today\'s stock list, so it is NOT free of survivorship bias (companies that failed or were removed are missing), and past results do not predict future ones. ▽ in the table marks a stock where the rule lagged simply holding it. Prices are delayed up to 15 minutes and come from Yahoo Finance; ratios are as Yahoo reports them.'));
   }
 
   /* Small data-check tag for the top of the page; the full sentence is at the bottom of the Overview tab. */
@@ -1112,7 +1216,7 @@
     const r = s.risk;
     const hero = h('div', { class: 'hero' },
       h('div', { class: 'herotags chips-row' }, h('span', { class: 'tag' }, s.market === 'IN' ? 'India' : 'US'), s.exchange ? h('span', { class: 'tag' }, s.exchange) : null, s.sector ? h('span', { class: 'tag' }, s.sector) : null,
-        qualityTag(s)),
+        qualityTag(s), flagTags(s)),
       verdictBlock(s),
       priceMap(s), statsGrid(s), glanceChips(s));
 

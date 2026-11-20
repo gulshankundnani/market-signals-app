@@ -80,7 +80,7 @@ def _breakouts(bars, ind):
 
 
 GAP_PCT = 0.01             # an opening gap past the previous day's range of at least 1%
-TIGHT_RANGE = 0.06         # the 20-day high-to-low range is under 6% of the price
+TIGHT_RANGE = 0.10         # the 20-day high-to-low range is under 10% of the price (on 70 real charts the median range was 15% and none was under 6%)
 SURGE_RATIO = 2.0          # volume at least twice the 20-day average
 SURGE_MOVE = 0.02          # on a move of at least 2%
 
@@ -130,7 +130,7 @@ def _structure(bars, ind):
         found.append(_pattern("Gap down", "bearish", "Opened below the previous day's low by at least 1%"))
     top, bottom = max(h[i - 19:i + 1]), min(l[i - 19:i + 1])
     if c[i] > 0 and (top - bottom) / c[i] <= TIGHT_RANGE:
-        found.append(_pattern("Tight range", "neutral", "The last 20 days stayed inside a range under 6% wide"))
+        found.append(_pattern("Tight range", "neutral", "The last 20 days stayed inside a range under 10% wide"))
     last = range(i - 3, i + 1)
     if all(h[k] > h[k - 1] and l[k] > l[k - 1] for k in last):
         found.append(_pattern("Higher highs and lows", "bullish", "Each of the last 4 days made a higher high and a higher low"))

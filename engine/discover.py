@@ -60,6 +60,21 @@ def nse_company_names(text):
     return {row["SYMBOL"] + ".NS": row["NAME OF COMPANY"] for row in _rows(text)}
 
 
+def listing_dates(text, sme_format=False):
+    """{"SYMBOL.NS": "YYYY-MM-DD"} from the NSE list's date of listing (main list "17-SEP-2026", SME list "16-Nov-26")."""
+    out = {}
+    for row in csv.DictReader(io.StringIO(text)):
+        row = {(k or "").strip(): (v or "").strip() for k, v in row.items()}
+        raw = row.get("DATE_OF_LISTING" if sme_format else "DATE OF LISTING", "")
+        for fmt in ("%d-%b-%Y", "%d-%b-%y"):
+            try:
+                out[row.get("SYMBOL", "") + ".NS"] = datetime.strptime(raw.title(), fmt).date().isoformat()
+                break
+            except ValueError:
+                continue
+    return out
+
+
 SME_LIST_URL = "https://nsearchives.nseindia.com/emerge/corporates/content/SME_EQUITY_L.csv"
 
 

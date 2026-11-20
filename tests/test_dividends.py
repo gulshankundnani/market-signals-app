@@ -105,3 +105,70 @@ class DividendTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RealPatternTests(unittest.TestCase):
+    """Payment patterns of real companies that the first version got wrong (dates as days before NOW)."""
+
+    def profile(self, days_and_amounts, price=1000.0):
+        return dv.dividend_profile(paid(days_and_amounts), price, NOW)
+
+    def test_a_big_yearly_final_dividend_is_regular_not_special(self):
+        # interim 1.0 and 0.5, final 6.5 and 5.0 (GAIL-like): the final repeats every year
+        p = self.profile([(80, 0.5), (290, 5.0), (470, 1.0), (640, 6.5)])
+        self.assertEqual(p["special_count"], 0)
+        self.assertEqual((p["frequency"], p["payments_per_year"]), ("Half-yearly", 2))
+        self.assertAlmostEqual(p["forward_amount"], 5.5)
+        self.assertAlmostEqual(p["ttm_amount"], 5.5)
+
+    def test_uneven_interim_and_final_pay_twice_a_year_not_quarterly(self):
+        # two payments a year, 87 and 281 days apart (Bajaj Holdings-like): the median gap would say quarterly
+        p = self.profile([(60, 65.0), (143, 130.0), (425, 65.0), (510, 28.0)])
+        self.assertEqual((p["frequency"], p["payments_per_year"], p["rhythm"]), ("Half-yearly", 2, "uneven"))
+        self.assertAlmostEqual(p["forward_amount"], 195.0)       # the last two payments, not four spanning two years
+
+    def test_one_dividend_paid_in_two_parts_counts_once(self):
+        # 11.0 then 2.5 four weeks later, then 13.0 a year later (HDFC Bank-like)
+        p = self.profile([(150, 13.0), (500, 2.5), (528, 11.0)])
+        self.assertEqual((p["frequency"], p["payments_per_year"]), ("Yearly", 1))
+        self.assertAlmostEqual(p["forward_amount"], 13.0)
+
+    def test_a_raised_dividend_that_stays_raised_is_not_special(self):
+        history = [(88, 0.25), (178, 0.25), (270, 0.01), (365 + 20, 0.01), (365 + 110, 0.01), (365 + 200, 0.01)]
+        p = self.profile(history, price=100.0)
+        self.assertEqual(p["special_count"], 0)
+
+    def test_a_lone_one_off_is_still_special_and_kept_out_of_the_recurring_figure(self):
+        p = self.profile([(30, 1.0), (120, 1.0), (210, 9.0), (300, 1.0), (390, 1.0), (480, 1.0)])
+        self.assertEqual(p["special_count"], 1)
+        self.assertAlmostEqual(p["ttm_amount"], 12.0)
+        self.assertAlmostEqual(p["ttm_regular_amount"], 3.0)
+        self.assertAlmostEqual(p["ttm_regular_yield"], 0.003)
+
+    def test_the_payments_behind_the_figures_are_listed(self):
+        p = self.profile([(30, 1.0), (120, 1.0), (210, 1.0), (300, 1.0)], price=100.0)
+        self.assertEqual(len(p["ttm_payments"]), 4)
+        self.assertAlmostEqual(sum(x["amount"] for x in p["ttm_payments"]), p["ttm_amount"])
+        self.assertEqual(len(p["forward_payments"]), 4)
+
+
+class CrossCheckTests(unittest.TestCase):
+    def profile(self):
+        return dv.dividend_profile(paid([(30, 1.0), (120, 1.0), (210, 1.0), (300, 1.0)]), 100.0, NOW)
+
+    def test_agrees_when_within_fifteen_percent(self):
+        out = dv.cross_check(self.profile(), 100.0, 4.4)
+        self.assertEqual(out["status"], "agrees")
+        self.assertAlmostEqual(out["yield"], 0.044)
+
+    def test_differs_when_far_apart_and_says_why(self):
+        out = dv.cross_check(self.profile(), 100.0, 8.0)
+        self.assertEqual(out["status"], "differs")
+        self.assertIn("actually made", out["note"])
+
+    def test_yahoo_rate_but_no_payment_here(self):
+        self.assertEqual(dv.cross_check(None, 100.0, 2.0)["status"], "not_paid")
+
+    def test_no_yahoo_rate_means_no_check(self):
+        self.assertIsNone(dv.cross_check(self.profile(), 100.0, None))
+        self.assertIsNone(dv.cross_check(self.profile(), 100.0, 0))

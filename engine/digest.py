@@ -29,6 +29,7 @@ INDEX_TITLE = "━━ INDEXES ━━"
 BRIEF_TITLE = "━━ MARKET BRIEF ━━"
 FOOTER = "ℹ️ " + html.escape(alerts.NOTE) + "\n" + html.escape(alerts.ADVISORY)
 MAX_TITLE = 280
+NL2 = chr(10) * 2
 esc = html.escape
 INVISIBLE = "​"            # a zero-width space: invisible, but it stops Telegram turning "Site.com" into a link
 
@@ -60,6 +61,10 @@ def reading_card(item, link):
         lines.append(f"{BULLET} Volatility risk level: {esc(alerts.money_text(levels['risk_price'], currency))} ({levels['risk_pct']:+.1f}%)")
     elif item["side"] == "hold":
         lines.append(f"{BULLET} No reference level: the reading has faded to mixed")
+    if item.get("evidence"):
+        lines.append(f"{BULLET} {esc(item['evidence'])}")
+    if "thin" in (item.get("flags") or []):
+        lines.append(f"{BULLET} Thinly traded: a few trades move the price, so indicators on it say little")
     reasons = item.get("reasons") or []
     if reasons:
         lines.append(f"{BULLET} Indicator readings:")
@@ -146,6 +151,29 @@ def render(items, links, now_ts, max_chars=None, max_messages=MAX_MESSAGES):
         link = links[index] if links and index < len(links) else None
         make = {"signal": reading_card, "deal": deal_card, "mover": mover_card, "low52": mover_card, "ipo": mover_card, "index": index_card, "brief": brief_card}.get(item["kind"], news_card)
         cards.append((item["kind"], make(item, link)))
+    titles = {"signal": READINGS_TITLE, "deal": DEALS_TITLE, "mover": MOVERS_TITLE, "low52": LOW_TITLE, "ipo": IPO_TITLE, "index": INDEX_TITLE, "brief": BRIEF_TITLE}
+
+    def build(chunk, number, parts, left_out):
+        """The text of one message holding the alerts at these positions."""
+        last_kind, blocks = None, []
+        for index in chunk:
+            kind, card = cards[index]
+            if kind != last_kind:
+                blocks.append(titles.get(kind, NEWS_TITLE))
+                last_kind = kind
+            blocks.append(card)
+        readings = sum(1 for i in chunk if cards[i][0] == "signal")
+        deal_count = sum(1 for i in chunk if cards[i][0] == "deal")
+        mover_count = sum(1 for i in chunk if cards[i][0] in ("mover", "low52", "ipo"))
+        other_count = sum(1 for i in chunk if cards[i][0] in ("index", "brief"))
+        text = _header(now_ts, readings, len(chunk) - readings - deal_count - mover_count - other_count, number, parts, deal_count, mover_count, other_count) + NL2 + NL2.join(blocks)
+        if number == parts and left_out:
+            text += f"{NL2}+{left_out} more alert{'s' if left_out != 1 else ''}. Open the app to see them."
+        legend = (NL2 + html.escape("Key: " + alerts.LEGEND)) if readings else ""
+        return text + legend + NL2 + FOOTER
+
+    # First split by the size of the cards, then measure each real message (header, one title per kind, legend, footer) and move cards that do not fit to
+    # the next message, so no message is ever over Telegram's limit whatever mix of alert kinds it holds.
     room = max_chars - alerts.visible_length(FOOTER) - RESERVE - 60
     chunks, current, used = [], [], 0
     for index, (kind, card) in enumerate(cards):
@@ -157,24 +185,16 @@ def render(items, links, now_ts, max_chars=None, max_messages=MAX_MESSAGES):
         used += cost
     if current:
         chunks.append(current)
-    kept = chunks[:max_messages]
+    tight, pending = [], list(chunks)
+    while pending:
+        chunk = pending.pop(0)
+        while len(chunk) > 1 and alerts.visible_length(build(chunk, 1, max_messages, len(items))) > max_chars:
+            moved = chunk.pop()
+            if pending:
+                pending[0].insert(0, moved)
+            else:
+                pending.append([moved])
+        tight.append(chunk)
+    kept = tight[:max_messages]
     left_out = len(items) - sum(len(c) for c in kept)
-    messages = []
-    for number, chunk in enumerate(kept, 1):
-        parts, last_kind, blocks = len(kept), None, []
-        for index in chunk:
-            kind, card = cards[index]
-            if kind != last_kind:
-                blocks.append({"signal": READINGS_TITLE, "deal": DEALS_TITLE, "mover": MOVERS_TITLE, "low52": LOW_TITLE, "ipo": IPO_TITLE, "index": INDEX_TITLE, "brief": BRIEF_TITLE}.get(kind, NEWS_TITLE))
-                last_kind = kind
-            blocks.append(card)
-        readings = sum(1 for i in chunk if cards[i][0] == "signal")
-        deal_count = sum(1 for i in chunk if cards[i][0] == "deal")
-        mover_count = sum(1 for i in chunk if cards[i][0] in ("mover", "low52", "ipo"))
-        other_count = sum(1 for i in chunk if cards[i][0] in ("index", "brief"))
-        text = _header(now_ts, readings, len(chunk) - readings - deal_count - mover_count - other_count, number, parts, deal_count, mover_count, other_count) + "\n\n" + "\n\n".join(blocks)
-        if number == len(kept) and left_out:
-            text += f"\n\n+{left_out} more alert{'s' if left_out != 1 else ''}. Open the app to see them."
-        legend = ("\n\n" + html.escape("Key: " + alerts.LEGEND)) if readings else ""
-        messages.append((text + legend + "\n\n" + FOOTER, chunk[0], chunk[-1] + 1))
-    return messages
+    return [(build(chunk, number, len(kept), left_out), chunk[0], chunk[-1] + 1) for number, chunk in enumerate(kept, 1)]

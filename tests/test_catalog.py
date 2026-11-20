@@ -41,7 +41,7 @@ class CatalogTests(unittest.TestCase):
         self.assertTrue(rows["S0.NS"]["analysed"])
         self.assertEqual(rows["S0.NS"]["short"], {"label": "Buy", "score": 30})
         self.assertFalse(rows["S4.NS"]["analysed"])               # too little history: the row shows the quote only
-        self.assertIsNone(rows["S4.NS"]["short"])
+        self.assertNotIn("short", rows["S4.NS"])                 # empty values are left out of the row
         shard = json.loads((out / "detail" / f"{rows['S0.NS']['shard']}.json").read_text())
         self.assertIn("S0.NS", shard)
         self.assertEqual(index["S4.NS"]["ok"], False)
@@ -137,9 +137,10 @@ class RatioTests(unittest.TestCase):
     def test_bulk_quote_carries_pe_eps_and_book_value(self):
         from engine import wide
         payload = {"quoteResponse": {"result": [{"symbol": "A.NS", "regularMarketPrice": 100.0, "trailingPE": 20.5, "epsTrailingTwelveMonths": 4.9,
-                                                 "bookValue": 40.0, "priceToBook": 2.5, "trailingAnnualDividendYield": 0.01}]}}
+                                                 "bookValue": 40.0, "priceToBook": 2.5, "trailingAnnualDividendYield": 0.0005, "dividendRate": 1.0}]}}
         q = wide.parse_quotes(payload)["A.NS"]
-        self.assertEqual((q["pe"], q["eps"], q["book_value"], q["pb"], q["dividend_yield"]), (20.5, 4.9, 40.0, 2.5, 0.01))
+        self.assertEqual((q["pe"], q["eps"], q["book_value"], q["pb"], q["dividend_rate"]), (20.5, 4.9, 40.0, 2.5, 1.0))
+        self.assertNotIn("dividend_yield", q)                      # Yahoo's trailing yield is wrong for many NSE stocks and is not used
         self.assertIsNone(q["forward_pe"])
 
     def test_index_row_has_quote_ratios_and_the_analysed_stocks_fundamentals(self):
@@ -147,8 +148,9 @@ class RatioTests(unittest.TestCase):
         record = {"short": {}, "long": {}, "fundamentals": {"ebitda": 5e9, "ev_ebitda": 11.5, "roe": 0.2, "sector": "X", "events": {}}}
         row = catalog.index_row({"symbol": "A.NS", "name": "A", "market": "IN"}, q, {"at": "t"}, record)
         self.assertEqual((row["pe"], row["eps"], row["book_value"]), (20.0, 5.0, 40.0))
-        self.assertEqual(row["fund"], {"ebitda": 5e9, "ev_ebitda": 11.5, "roe": 0.2})       # only the numeric ratios the table uses
-        self.assertEqual(catalog.index_row({"symbol": "B.NS", "name": "B", "market": "IN"}, q, None, None)["fund"], {})
+        self.assertNotIn("fund", row)                                                         # the heavy fields are in index_extra.json
+        self.assertEqual(catalog.extra_row(record)["fund"], {"ebitda": 5e9, "ev_ebitda": 11.5, "roe": 0.2})       # only the numeric ratios the table uses
+        self.assertEqual(catalog.extra_row(None), {})
 
     def test_rotation_fetches_fundamentals_and_keeps_the_old_ones_when_yahoo_has_none(self):
         shard = catalog.shard_of("S0.NS")
@@ -188,8 +190,38 @@ class TechnicalFieldTests(unittest.TestCase):
         q = {"price": 100.0}
         record = {"short": {}, "long": {}, "indicators": {"rsi": 28.123456, "macd_hist": -0.5, "sma200": 90.0, "hi252": 150.0, "junk": 1, "sma50": None},
                   "pressure": {"label": "Buying pressure"}, "patterns": [{"name": "Hammer", "bias": "bullish", "note": "x"}]}
-        row = catalog.index_row({"symbol": "A.NS", "name": "A", "market": "IN"}, q, {"at": "t"}, record)
+        row = catalog.extra_row(record)
         self.assertEqual(row["ind"], {"rsi": 28.123, "macd_hist": -0.5, "sma200": 90.0})      # only the fields the filters use, none that are missing
         self.assertEqual((row["pressure"], row["patterns"]), ("Buying pressure", [["Hammer", "bullish"]]))
         plain = catalog.index_row({"symbol": "B.NS", "name": "B", "market": "IN"}, q, None, None)
-        self.assertEqual((plain["ind"], plain["pressure"], plain["patterns"]), ({}, None, []))
+        self.assertTrue(all(k not in plain for k in ("ind", "pressure", "patterns", "fund")))
+
+
+class KeepRowsTests(unittest.TestCase):
+    def test_a_stock_with_no_quote_this_run_keeps_its_previous_row(self):
+        out = tempfile.mkdtemp()
+        old_row = {"symbol": "S3.NS", "name": "Stock 3", "market": "IN", "price": 7.0, "analysed": False}
+        loader = lambda prev, name: {"stocks": [old_row]} if name == "index.json" else {}
+        quotes = {k: v for k, v in QUOTES.items() if k != "S3.NS"}
+        catalog.update(NOW, {}, WIDE, quotes, fake_analyse, {"bars": {}}, "prev", loader, out, log=lambda *_: None)
+        rows = {r["symbol"]: r for r in json.loads((Path(out) / "index.json").read_text())["stocks"]}
+        self.assertEqual(rows["S3.NS"]["price"], 7.0)
+        self.assertEqual(len(rows), 5)
+
+
+class ExtraFileTests(unittest.TestCase):
+    def test_the_extra_file_holds_the_technicals_of_analysed_stocks_only(self):
+        out = tempfile.mkdtemp()
+
+        def analyse(entry, ctx):
+            if entry["symbol"] == "S4.NS":
+                raise ValueError("short")
+            return {"symbol": entry["symbol"], "name": entry["name"], "short": {"label": "Buy", "score": 1}, "long": {}, "indicators": {"rsi": 40.0},
+                    "fundamentals": {"ebitda": 5.0}, "pressure": {"label": "Buying pressure"}, "patterns": []}
+        catalog.update(NOW, {}, WIDE, QUOTES, analyse, {"bars": {}}, "prev", lambda prev, name: {}, out, log=lambda *_: None)
+        extra = json.loads((Path(out) / "index_extra.json").read_text())["stocks"]
+        self.assertEqual(extra["S0.NS"]["ind"], {"rsi": 40.0})
+        self.assertEqual(extra["S0.NS"]["fund"], {"ebitda": 5.0})
+        self.assertNotIn("S4.NS", extra)
+        rows = {r["symbol"]: r for r in json.loads((Path(out) / "index.json").read_text())["stocks"]}
+        self.assertNotIn("ind", rows["S0.NS"])

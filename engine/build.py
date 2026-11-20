@@ -15,7 +15,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from . import digest, event_news, events, market as market_view, verify
-from . import catalog, universe_sync, alerts, backtest, costs, deals_live, sessions, wide, discover, membership as index_membership, official, dividends, exchange, fetch, fundamentals, ipo, ipo_gmp, ledger, news, patterns, risk, signals, tracking
+from . import catalog, evidence, universe_sync, alerts, backtest, costs, deals_live, sessions, wide, discover, membership as index_membership, official, dividends, exchange, fetch, fundamentals, ipo, ipo_gmp, ledger, news, patterns, risk, signals, tracking
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKERS = 6
@@ -222,6 +222,8 @@ def analyse(entry, ctx):
     record["backtest"] = run_backtests(ind, n, market, ctx.get("costs"), backtest.dividends_by_bar(bars, chart["dividends"]),
                                        index_membership.first_eligible_index(bars["d"], member_from))
     record["member_from"] = member_from
+    record["evidence"] = evidence.stock_evidence(record["backtest"])          # the rule's own result on this stock, shown beside the reading
+    record["flags"] = evidence.data_flags(price, ind["avg_volume20"][i], market, n)
     return record
 
 
@@ -238,7 +240,8 @@ def add_lists(records):
         lists = [rec["sector"]] + [labels.get(t, t) for t in rec["tags"]]
         ind, rsk, fund = rec.get("indicators") or {}, rec.get("risk") or {}, rec.get("fundamentals") or {}
         threshold = 0.03 if rec["market"] == "IN" else 0.025
-        if (rec.get("dividend_yield") or 0) >= threshold and not (rec.get("dividend") or {}).get("overdue"):
+        recurring = (rec.get("dividend") or {}).get("ttm_regular_yield")       # one-off specials do not make a stock a high-dividend one
+        if (recurring if recurring is not None else rec.get("dividend_yield") or 0) >= threshold and not (rec.get("dividend") or {}).get("overdue"):
             lists.append("High dividend")
         debt = fund.get("debt_to_equity")
         if debt is not None and debt < 0.5 and rec["sector"] not in ("Banks", "Financials"):
@@ -649,7 +652,10 @@ def run(args):
     quote_session = fetch.YahooSession()
     quotes = wide.fetch_quotes(quote_session, sorted(market_of)) if quote_session.start() else {}
     open_now = wide.open_markets(quotes, market_of)
-    mover_events = wide.mover_events(quotes, market_of, open_now)
+    # a stock listed less than a year ago has no 52-week range, only its life so far: no 52-week alerts for it
+    young = {s["symbol"] for s in wide_list if s.get("listed") and (today - date.fromisoformat(s["listed"])).days < 365}
+    young |= {x["symbol"] for x in records if x.get("new") or (x.get("bars") is not None and x["bars"] < 252)}
+    mover_events = wide.mover_events(quotes, market_of, open_now, young)
     ipo_levels = {}                                # recently listed stocks and their listing-day range
     for x in records:
         lv = wide.ipo_levels(ctx["completed_bars"].get(x["symbol"]) if ctx.get("completed_bars") else ctx["bars"].get(x["symbol"]), x.get("listed"), today) if x.get("listed") else None
@@ -715,6 +721,11 @@ def run(args):
             briefs_sent[window] = today_ist
     lines, items = alerts.insert_after(lines, items, (), brief_lines, brief_items)
     by_symbol = {x["symbol"]: x for x in records}
+    for item in items:                     # a reading alert carries what the rule has done on this stock, so it is never read as a promise
+        rec = by_symbol.get(item.get("symbol")) if item.get("kind") == "signal" else None
+        if rec:
+            item["evidence"] = evidence.evidence_text(rec.get("evidence"), item.get("horizon"))
+            item["flags"] = rec.get("flags") or []
     alert_log, added = alerts.update_log(alerts.drop_irrelevant(state.get("alert_log", []), by_symbol), lines, now_ts, [i["symbol"] for i in items])
     print(f"Alerts: {len(added)} new ({len(deal_lines)} block deals), {len(watch)} stocks watched")
     token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
@@ -737,11 +748,13 @@ def run(args):
     track_record, pending, queue, notified, outcome_lines = track(args, state, prev_data, calls, ctx, now_ts, token, chat, link_for_symbol)
     if outcome_lines:
         alert_log, _ = alerts.update_log(alert_log, [text for _, text in outcome_lines], now_ts, [sym for sym, _ in outcome_lines])
+    for rec in records:                    # Yahoo's indicated annual dividend, as an independent check on the amounts worked out from the payments
+        rec["dividend_check"] = dividends.cross_check(rec.get("dividend"), rec.get("price"), (quotes.get(rec["symbol"]) or {}).get("dividend_rate"))
     analysis_index = catalog.update(now, state.get("analysis_index"), wide_list, quotes, analyse, ctx, args.prev, load_previous, Path(args.out), lists_fn=add_lists, curated_records=records,
                                     fundamentals_fn=lambda symbol: fundamentals.fetch_fundamentals(quote_session, symbol))
     status = status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy, official_events, live_deals)
     data = {"version": 1, "generated_at": now.isoformat(timespec="seconds"), "market": overview, "conditions": conditions,
-            "status": status, "accuracy": accuracy, "backtest_method": {"costs": costs.describe(cost_overrides), "notes": BACKTEST_NOTES}, "events": events_data, "ipos": ipos,
+            "status": status, "accuracy": accuracy, "evidence": evidence.summarise(records), "backtest_method": {"costs": costs.describe(cost_overrides), "notes": BACKTEST_NOTES}, "events": events_data, "ipos": ipos,
             "stocks": [catalog.lite(x) for x in records], "errors": [{"symbol": e["symbol"], "error": e["error"]} for e in errors],
             "alerts": alert_log, "track_record": track_record,
             "exchange_data": {"delivery_dates": sorted(delivery)[-3:], "note": "NSE delivery data and bulk/block deals. The exchange order book (bid/ask depth) is not published for free."}}

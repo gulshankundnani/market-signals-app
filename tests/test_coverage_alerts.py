@@ -403,10 +403,12 @@ class IpoAndLowTests(unittest.TestCase):
 
     def test_breakout_and_breakdown_only_in_a_running_session(self):
         lv = {"X.NS": wide.ipo_levels(self.BARS, "2026-11-10", self.TODAY)}
-        up = wide.ipo_events(lv, {"X.NS": q(price=125.0, chg=4.0)}, {"X.NS": "IN"}, {"IN"})
+        up = wide.ipo_events(lv, {"X.NS": q(price=125.0, chg=6.0)}, {"X.NS": "IN"}, {"IN"})          # yesterday's close 117.9 was inside the range
         self.assertIn("IPO breakout", up[0]["tags"][0])
-        down = wide.ipo_events(lv, {"X.NS": q(price=90.0, chg=-5.0)}, {"X.NS": "IN"}, {"IN"})
+        down = wide.ipo_events(lv, {"X.NS": q(price=96.0, chg=-2.1)}, {"X.NS": "IN"}, {"IN"})       # yesterday's close 98.06 was inside the range
         self.assertIn("IPO breakdown", down[0]["tags"][0])
+        # already above the listing-day high yesterday: a state, not an event
+        self.assertEqual(wide.ipo_events(lv, {"X.NS": q(price=130.0, chg=2.0)}, {"X.NS": "IN"}, {"IN"}), [])
         self.assertEqual(wide.ipo_events(lv, {"X.NS": q(price=110.0)}, {"X.NS": "IN"}, {"IN"}), [])
         self.assertEqual(wide.ipo_events(lv, {"X.NS": q(price=125.0)}, {"X.NS": "IN"}, set()), [])
 
@@ -482,3 +484,31 @@ class SmeAndSeriesTests(unittest.TestCase):
             return fetch(url, **kw)
         later, _ = wide.load_universe(cache, NOW_IN_MORNING.replace(day=19), set(), sme_down, lambda s: None)
         self.assertIn("SMEONE.NS", {s["symbol"] for s in later})
+
+
+class SampleFindingsTests(unittest.TestCase):
+    """Defects found by reading the live Telegram channel."""
+
+    def test_automatic_pages_and_look_alike_companies_are_not_news(self):
+        from engine import news
+        self.assertFalse(news.is_relevant("Polyspin Exp Investor Analysis | StockIQ", "Polyspin Exports", "POLYSPIN"))
+        self.assertFalse(news.is_relevant("HAL Trader Analysis | StockIQ", "Hindustan Aeronautics", "HAL"))
+        self.assertFalse(news.is_relevant("Wrapped Alphabet Tokenized stock (xStock): Funding, Investors", "Alphabet", "GOOGL"))
+        self.assertFalse(news.is_relevant("Here's How Much $1000 Invested In Raymond James Finl 15 Years Ago Would Be Worth Today", "Raymond", "RAYMOND"))
+        self.assertFalse(news.is_relevant("NLC India Renewables files DRHP for IPO", "NLC India", "NLCINDIA"))
+        self.assertTrue(news.is_relevant("NLC India profit rises 12% in the September quarter", "NLC India", "NLCINDIA"))
+        self.assertTrue(news.is_relevant("Raymond shares jump after quarterly results", "Raymond", "RAYMOND"))
+
+    def test_no_52_week_alert_for_a_stock_listed_less_than_a_year_ago(self):
+        quotes = {"NEW.NS": q(price=50.0, high=50.0, low=20.0), "OLD.NS": q(price=50.0, high=50.0, low=20.0)}
+        both = wide.mover_events(quotes, {"NEW.NS": "IN", "OLD.NS": "IN"}, {"IN"})
+        self.assertEqual({e["symbol"] for e in both}, {"NEW.NS", "OLD.NS"})
+        kept = wide.mover_events(quotes, {"NEW.NS": "IN", "OLD.NS": "IN"}, {"IN"}, young={"NEW.NS"})
+        self.assertEqual({e["symbol"] for e in kept}, {"OLD.NS"})
+
+    def test_listing_dates_read_both_nse_formats(self):
+        from engine import discover
+        main = "SYMBOL,NAME OF COMPANY, SERIES, DATE OF LISTING\nSTEAMHOUSE,Steamhouse India Limited,EQ,17-SEP-2026\n"
+        sme = "SYMBOL,NAME_OF_COMPANY,SERIES,DATE_OF_LISTING\nAATMAJ,Aatmaj Healthcare Limited,SM,16-Nov-26\n"
+        self.assertEqual(discover.listing_dates(main), {"STEAMHOUSE.NS": "2026-09-17"})
+        self.assertEqual(discover.listing_dates(sme, sme_format=True), {"AATMAJ.NS": "2026-11-16"})
