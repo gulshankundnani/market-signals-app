@@ -105,14 +105,30 @@ ul.reasons li::before { content: "+ "; color: var(--buy); font-weight: 700; } ul
 .panelhead { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
 .panelhead h2 { margin: 0 6px 0 0; }
 .tablewrap { overflow-x: auto; }
+/* Signals page: the categories on the left and the sectors on the right of the table on a wide screen; above it on a small one. */
+.signals-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px 12px; }
+.signals-layout .signals-main { order: 3; min-width: 0; }
+.signals-layout #cats { order: 1; }
+.signals-layout #sectorrail { order: 2; }
+.railtitle { display: none; }
 @media (min-width: 1100px) {
+  .signals-layout { grid-template-columns: 200px minmax(0, 1fr) 200px; align-items: start; }
+  .signals-layout .signals-main, .signals-layout #cats, .signals-layout #sectorrail { order: 0; }
+  .rail { position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow-y: auto; scrollbar-width: thin; }
+  .rail .railtitle { display: block; margin: 0 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+  .rail .chips { flex-direction: column; overflow: visible; padding: 0 0 8px; gap: 4px; }
+  .rail .chip { width: 100%; text-align: left; border-radius: 8px; white-space: normal; }
+}
+@media (min-width: 1560px) {
   .cols.two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+@media (min-width: 1100px) {
   .tablewrap { overflow: auto; max-height: calc(100vh - 175px); }
   .tablewrap thead th { position: sticky; top: 0; z-index: 1; background: var(--card); box-shadow: 0 1px 0 var(--line); }
 }
-@media (min-width: 1100px) and (max-width: 1499px) { .cols.two:not(.wide-view) .hide-md { display: none; } }
+@media (min-width: 1100px) and (max-width: 1899px) { .cols.two:not(.wide-view) .hide-md { display: none; } }
 /* The extra-column views need more room than half a screen, so India and the US stack on smaller desktops. */
-@media (min-width: 1100px) and (max-width: 1699px) { .cols.two.wide-view { grid-template-columns: minmax(0, 1fr); } }
+@media (min-width: 1100px) and (max-width: 1999px) { .cols.two.wide-view { grid-template-columns: minmax(0, 1fr); } }
 
 /* stock detail */
 dialog { width: min(1180px, 100vw - 16px); max-height: 94vh; padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--text); }

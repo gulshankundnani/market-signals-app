@@ -391,6 +391,9 @@ Then open http://127.0.0.1:8765/. Python 3.10+ and Node 18+ are the only require
   average counts as the full +1 or -1). A stock sitting on an average therefore scores near zero and its reading cannot flip
   between two extremes when the price ticks across the line.
 * **Long-term (months to years):** price against the 200-day average, golden/death cross, 6-month return, 52-week position and volatility.
+* **Layout of the Signals page:** on a screen 1100 px wide or more, the categories (lists and screens) are a column on the left of the table and the sectors
+  a column on the right, both staying in view as you scroll; India and the US sit side by side from 1560 px and stack below that. On a phone or small
+  window they are the two horizontal strips above the table, as before.
 * **Technical filters** (a panel under the list chips on the Signals page, working on every listed stock that has been analysed): RSI (oversold, neutral,
   overbought), price above or below the 20, 50 and 200-day averages, MACD above or below its signal line, 6-month return, position in the 52-week range
   (top 10%, middle, bottom 10%), buying or selling pressure, daily swing (ATR as a percent of price) and any pattern on the latest candles (any bullish, any

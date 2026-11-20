@@ -168,7 +168,7 @@
     pressure: r.pressure ? { label: r.pressure } : null, patterns: (r.patterns || []).map(([name, bias]) => ({ name, bias })) });
   async function loadCatalog(prefetched) {
     S.catalog = 'loading';
-    if ($('#chips')) updateSignals();
+    if ($('#cats')) updateSignals();
     try {
       const response = await (prefetched || fetch('index.json', { cache: 'no-store' }));
       if (!response || !response.ok) throw new Error('index.json');
@@ -182,7 +182,7 @@
     } catch (err) {
       S.catalog = 'failed';        // the dashboard keeps working with the curated list
     }
-    if ($('#chips')) updateSignals();
+    if ($('#cats')) updateSignals();
   }
   async function loadRecord(row) {
     let shard = S.shards.get(row.shard);
@@ -639,10 +639,11 @@
   }
 
   function updateSignals() {
-    const chips = $('#chips'), results = $('#results');
-    if (!chips || !results) return;
+    const cats = $('#cats'), sectorRail = $('#sectorrail'), results = $('#results');
+    if (!cats || !sectorRail || !results) return;
     const strips = listChips();
-    chips.replaceChildren(...[h('div', { class: 'chips', role: 'group', 'aria-label': 'Lists and technical screens' }, strips.lists),
+    cats.replaceChildren(h('div', { class: 'railtitle' }, 'Categories'), h('div', { class: 'chips', role: 'group', 'aria-label': 'Lists and technical screens' }, strips.lists));
+    sectorRail.replaceChildren(...[strips.sectors.length ? h('div', { class: 'railtitle' }, 'Sectors') : null,
       strips.sectors.length ? h('div', { class: 'chips', role: 'group', 'aria-label': 'Sectors' }, strips.sectors) : null].filter(Boolean));
     const rows = visibleStocks();
     const fuzzy = S.fuzzy;                 // a later call below recomputes S.fuzzy
@@ -715,7 +716,10 @@
           onclick: () => { f.horizon = hz; saveFilters(); render(); } }, hz === 'short' ? 'Short-term' : 'Long-term')))),
       select('Columns', f.view, VIEWS, (v) => { f.view = v; saveFilters(); updateSignals(); }),
       h('button', { type: 'button', class: 'chip', title: 'Download the stocks shown as a spreadsheet file', onclick: exportCsv }, 'Export CSV')));
-    const root = h('div', null, bar, h('div', { id: 'chips' }), h('div', { id: 'techbox' }), h('div', { id: 'results' }));
+    const root = h('div', null, bar, h('div', { class: 'signals-layout' },
+      h('aside', { id: 'cats', class: 'rail', 'aria-label': 'Categories' }),
+      h('div', { class: 'signals-main' }, h('div', { id: 'techbox' }), h('div', { id: 'results' })),
+      h('aside', { id: 'sectorrail', class: 'rail', 'aria-label': 'Sectors' })));
     queueMicrotask(() => { renderTech(); updateSignals(); });
     return root;
   }
