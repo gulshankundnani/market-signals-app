@@ -8,6 +8,7 @@ from . import indicators as ta
 
 SHORT_WEIGHTS = {"trend": 30, "macd": 25, "rsi": 20, "volume": 5, "pressure": 15}
 LONG_WEIGHTS = {"trend200": 35, "cross": 25, "momentum": 20, "position": 10, "volatility": 10}
+NEWS_WEIGHT = 5            # news tone is an additional, optional part of the short-term score (5 of 105); the long-term score has none (see engine/sentiment.py)
 
 BUY, SELL = 20, -20
 STRONG = 50
@@ -83,16 +84,17 @@ def build_indicators(bars):
     }
 
 
-def _combine_detail(components, weights, min_weight_share=0.5):
+def _combine_detail(components, weights, min_weight_share=0.5, optional=()):
     """components: {name: (value, text) or None}.
 
     Returns {"score", "reasons", "coverage", "missing"}. coverage is the share of the rule's total weight that had data;
     missing lists the components that could not be worked out. score is None when too little had data."""
     used = {k: v for k, v in components.items() if v is not None}
-    missing = [k for k in weights if k not in used]
+    missing = [k for k in weights if k not in used and k not in optional]
     total = sum(weights[k] for k in used)
-    coverage = total / sum(weights.values())
-    if total < min_weight_share * sum(weights.values()):
+    base = sum(w for k, w in weights.items() if k not in optional)           # an optional part (news) neither counts toward coverage nor lowers it when absent
+    coverage = sum(weights[k] for k in used if k not in optional) / base
+    if coverage < min_weight_share:
         return {"score": None, "reasons": [], "coverage": round(coverage, 2), "missing": missing}
     score = sum(weights[k] * used[k][0] for k in used) / total * 100
     reasons = []
@@ -144,8 +146,8 @@ def buy_sell_pressure(ind, i):
     return {"value": value, "label": name, "money_flow": cmf, "up_volume_share": share}
 
 
-def short_detail(ind, i):
-    """Swing view (days to weeks). Price, volume and indicators only: news is never part of a reading."""
+def short_detail(ind, i, news=None):
+    """Swing view (days to weeks): price, volume and indicators, plus news tone when given (news = (value from -1 to +1, text) from engine/sentiment.py)."""
     bars = ind["bars"]
     close, volume = bars["c"], bars["v"]
     c = {}
@@ -192,7 +194,9 @@ def short_detail(ind, i):
     if pressure is not None:
         c["pressure"] = (pressure["value"], f"Volume pressure: {pressure['label'].lower()} over 20 days")
 
-    return _combine_detail(c, SHORT_WEIGHTS, min_weight_share=0.75)
+    if news is not None:
+        c["news"] = (clamp(news[0]), news[1])
+    return _combine_detail(c, {**SHORT_WEIGHTS, "news": NEWS_WEIGHT}, min_weight_share=0.75, optional=("news",))
 
 
 def short_score(ind, i):

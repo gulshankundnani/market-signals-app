@@ -44,3 +44,10 @@ are listed so the same pass can be repeated.
 - [ ] All Python and JS tests pass.
 - [ ] README describes what the app does now.
 - [ ] Service worker version raised when the page files changed.
+
+
+## After pushing the learning and news work
+* Start **Learn from the past** (Actions, Run workflow) once; it logs the outlook table to the `data` branch (`learning/outlook-table.json`). The 10-minute build uses it from the next run.
+* Start **News AI scores** once and read its log: it needs the `models: read` permission and GitHub Models access. If it says nothing was scored, the site keeps using the rule-based news score (nothing breaks). Variables: `NEWS_AI=off` to switch it off, `NEWS_AI_MODEL` to choose a model.
+* Check the Market tab: "Data health" lists each source's reliability and any paused stocks; the News tab lists each news provider's state.
+* NewsData.io is off unless the secret `NEWSDATA_API_KEY` exists; read its terms for public use first.

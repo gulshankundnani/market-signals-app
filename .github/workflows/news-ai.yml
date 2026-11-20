@@ -1,0 +1,39 @@
+name: News AI scores
+
+# Asks a hosted language model (GitHub Models, free tier, rate limited) about NEW headlines only and stores the answers on the 'data' branch. The
+# 10-minute "Update signals" run reads them and blends them with its own rule-based score. If the model is unavailable or over its limit this job
+# stops cleanly and nothing else changes. Uses the job's own GITHUB_TOKEN (permission models: read): no key is stored anywhere.
+# Turn it off with the repository variable NEWS_AI = off. Choose another model with the variable NEWS_AI_MODEL (default openai/gpt-4o-mini).
+
+on:
+  schedule:
+    - cron: "*/30 3-15 * * 1-5"      # every half hour while the Indian market and the evening news cycle are on (UTC)
+  workflow_dispatch:
+
+permissions:
+  contents: write                    # appends to the 'data' branch; the main branch is never changed
+  models: read                       # GitHub Models inference
+
+concurrency:
+  group: news-ai
+  cancel-in-progress: false
+
+jobs:
+  score:
+    if: ${{ vars.NEWS_AI != 'off' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Score new headlines
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEWS_AI_MODEL: ${{ vars.NEWS_AI_MODEL }}
+        run: python -m engine.news_ai --publish

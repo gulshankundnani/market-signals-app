@@ -37,6 +37,17 @@ class _NoNews:
         pass
 
 
+def news_summary(intel):
+    """The few news-intelligence fields the table, screens and filters need; the stories themselves are in the stock's detail shard."""
+    if not intel:
+        return None
+    latest = (intel.get("latest") or [{}])[0]
+    return {"label": intel.get("label"), "interpretation": intel.get("interpretation"), "sentiment": intel.get("sentiment"), "impact": intel.get("impact"),
+            "credibility": intel.get("credibility"), "n": intel.get("n"), "fundamental": {"level": (intel.get("fundamental") or {}).get("level"), "direction": (intel.get("fundamental") or {}).get("direction")},
+            "validation": (intel.get("validation") or {}).get("state"), "reaction": (intel.get("reaction") or {}).get("state"),
+            "top": {k: latest.get(k) for k in ("title", "source", "link", "ts", "event_label", "kind")} if latest else None}
+
+
 def lite(record):
     """The part of a curated stock's record that the dashboard needs (table, screens, peers, alerts), without what only its own page shows:
     the older headlines, the provisional reading, the price series for charts and the backtest detail. The full record is in its detail
@@ -44,7 +55,8 @@ def lite(record):
     news = record.get("news") or {}
     dividend = record.get("dividend")
     statements = record.get("statements")
-    return {**{k: v for k, v in record.items() if k not in ("spark_sma50", "live", "levels", "provenance")},
+    return {**{k: v for k, v in record.items() if k not in ("spark_sma50", "live", "levels", "provenance", "outlook")},
+            "news_intel": news_summary(record.get("news_intel")),
             "statements": {k: v for k, v in statements.items() if k not in ("quarterly", "annual")} if isinstance(statements, dict) else statements,
             "dividend": {k: v for k, v in dividend.items() if k != "history"} if isinstance(dividend, dict) else dividend,
             "spark": (record.get("spark") or [])[-2:],
@@ -157,7 +169,7 @@ def _index_row(stock, q, entry, record):
             "lists": list(dict.fromkeys(quote_lists(q) + [n for n in (record or {}).get("lists", []) if n != "Other"]))}
 
 
-def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, log=print, lists_fn=None, curated_records=(), fundamentals_fn=None, statements_fn=None):
+def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, log=print, lists_fn=None, curated_records=(), fundamentals_fn=None, statements_fn=None, outlook_fn=None):
     """Analyse this run's slice, rewrite the shards and the index. Returns the analysis index to keep in the saved state.
 
     analyse(entry, ctx) is the same function the curated list uses. One bad stock never stops the run."""
@@ -202,6 +214,8 @@ def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, l
             index[symbol] = {"at": stamp, "ok": False, "error": error}
             continue
         record["dividend_check"] = dividends.cross_check(record.get("dividend"), record.get("price"), (quotes.get(symbol) or {}).get("dividend_rate"))
+        if outlook_fn:
+            record["outlook"] = outlook_fn(record)
         record["provenance"], record["provenance_ok"] = provenance.build(record, int(now.timestamp()))
         if lists_fn:
             lists_fn([record])                          # the lists (Oversold, Low debt and so on) the curated stocks get

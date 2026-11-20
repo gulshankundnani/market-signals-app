@@ -19,7 +19,7 @@ def make_calls(items, records, now_ts):
     found = []
     for index, item in enumerate(items):
         record = records.get(item["symbol"])
-        if item["kind"] != "signal" or not record or record.get("carried") or record.get("series_lag") or record.get("provenance_ok") is False or (record.get("quality") or {}).get("status") in ("mismatch", "behind"):
+        if item["kind"] != "signal" or not record or record.get("carried") or record.get("series_lag") or record.get("provenance_ok") is False or record.get("quarantine") or (record.get("quality") or {}).get("status") in ("mismatch", "behind"):
             continue
         call = ledger.make_call(record, item["symbol"], item["horizon"], item["side"], item["announced"], now_ts)
         if call:

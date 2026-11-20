@@ -141,6 +141,7 @@ class Ledger:
         self.directory = Path(directory)
         self.calls, self.outcomes = {}, {}
         self.skipped_lines = 0
+        self.conflicts = 0                   # later lines that tried to change an existing record
         self._new = {"calls": [], "outcomes": []}
 
     def load(self):
@@ -151,9 +152,14 @@ class Ledger:
                         continue
                     try:
                         item = json.loads(line)
-                        store[item["id"]] = item
+                        key = item["id"]
                     except (ValueError, KeyError, TypeError):
                         self.skipped_lines += 1
+                        continue
+                    if key in store:                 # the first record of an id stands: a later line cannot rewrite history
+                        self.conflicts += 1 if store[key] != item else 0
+                        continue
+                    store[key] = item
         return self
 
     def add_call(self, call):

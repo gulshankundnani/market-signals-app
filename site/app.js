@@ -97,10 +97,11 @@
     error: null,
     tab: 'signals',
     others: [], shards: new Map(), shown: {}, catalog: 'loading', catalogInfo: null, sig: '',
-    filters: Object.assign({ market: 'ALL', horizon: 'short', signal: 'ALL', list: 'ALL', sector: 'ALL', tech: {}, sort: 'score', view: 'overview' }, store.get('filters', {}), { market: 'ALL' }),
+    filters: Object.assign({ market: 'ALL', horizon: 'short', signal: 'ALL', list: 'ALL', sector: 'ALL', tech: {}, sort: 'score', view: 'overview', news: 'ALL' }, store.get('filters', {}), { market: 'ALL' }),
     q: '',
     watch: new Set(store.get('watch', [])),
     lists: store.get('lists', {}),
+    newsFilters: { tone: 'ALL', sector: 'ALL', official: false, tracked: false, q: '' },
     profile: Object.assign({ goal: 'balanced', horizon: 'long', risk: 'medium', market: 'ALL' }, store.get('profile', {}), { market: 'ALL' }),
     calc: Object.assign({ capital: 100000, risk: 1 }, store.get('calc', {})),
     notify: store.get('notify', false),
@@ -299,6 +300,7 @@
     [/^Recent alerts$/, 'The latest alerts the app has raised: a change in a stock\'s reading, a fresh headline about the stock, or a price reaching its reference or risk level. Use "View analysis" to open the stock.'],
     [/^World and market news/, 'Headlines about markets, interest rates, oil, geopolitics and the economy, from outside news sources. They are not checked by this app.'],
     [/^India IPOs, dates and grey-market premium/, 'Open and upcoming India IPOs with their dates, price band, lot size and subscription. Grey-market premium (GMP) is an unofficial rumour of where the shares may list, and it can be wrong. The listing price and profit or loss are illustrations only.'],
+    [/^Sentiment dashboard/, 'How the news reads across the market and sectors: sentiment from -100 to +100 and impact from 0 to 100, built from exchange filings and headlines with repeats counted once. It describes the news, not the stock, and never creates a Buy or Sell reading.'],
     [/^Recently listed stocks/, 'Stocks that have listed recently, found automatically on the NSE list. They need about 60 trading days of history before readings appear.'],
     [/^Check an IPO yourself/, 'Optional. Free sources do not publish an unlisted company\'s financials, so you type the figures here and the same fixed rules check them. It is the one place where you enter data.'],
     [/^IPO checker$/, 'Type in the figures of an IPO from its official documents and the fixed rules turn them into a reading for listing day and for holding long term. The reading is not a recommendation to apply.'],
@@ -473,6 +475,11 @@
     else if (f.signal === 'BUY' && reading !== 'buy') return false;
     else if (f.signal === 'HOLD' && reading !== 'hold') return false;
     else if (f.signal === 'SELL' && reading !== 'sell') return false;
+    if (f.news && f.news !== 'ALL') {
+      const n = s.news_intel;
+      if (!n) return false;
+      if (f.news === 'CONFIRMS' ? n.validation !== 'confirms' : f.news === 'CONFLICTS' ? n.validation !== 'conflicts' : n.label !== f.news) return false;
+    }
     if (tokens.length && !matchesQuery(s, tokens, fuzzy)) return false;
     return skipTech || techPass(s);
   }
@@ -567,7 +574,12 @@
   const dividendCell = (s) => (isNum(s.dividend_yield) && s.dividend_yield > 0
     ? [percent(s.dividend_yield, 2), s.slim && s.dividend_basis === 'indicated' ? h('span', { class: 'muted small', title: 'Yahoo\'s indicated annual dividend divided by the price. This stock is not analysed yet, so the yield is not worked out from its payments.' }, ' *') : null, s.dividend ? h('span', { class: 'muted small', title: `${s.dividend.frequency} dividend${s.dividend.overdue ? ', payment overdue' : ''}` }, ` ${FREQ_CODE[s.dividend.frequency] || ''}${s.dividend.overdue ? '!' : ''}`) : null]
     : DASH);
-  const newsCell = (s) => (s.news.fresh.length ? h('span', { class: 'tag', title: 'A headline about this company from the last few hours' }, 'New') : null);
+  const newsCell = (s) => {
+    const n = s.news_intel;
+    const fresh = s.news && s.news.fresh && s.news.fresh.length ? h('span', { class: 'tag', title: 'A headline about this company from the last few hours' }, 'New') : null;
+    if (!n || !n.interpretation || n.interpretation === 'Neutral' && n.impact < 20) return fresh;
+    return h('span', null, h('span', { class: `tag ${INTERPRETATION_CLASS[n.interpretation] || ''}`, title: `News ${n.interpretation.toLowerCase()}: sentiment ${signedInt(n.sentiment)}, impact ${n.impact}. ${(VALIDATION_TEXT[n.validation] || [])[1] || ''}` }, n.interpretation), n.validation === 'conflicts' ? h('span', { class: 'lag', title: 'The news conflicts with the reading' }, ' ≠') : null, fresh ? ' ' : null, fresh);
+  };
 
   /* Extra columns for each table view, after the fixed Stock, Price, Day and Signal columns. */
   function extraColumns(view) {
@@ -700,7 +712,7 @@
     sectorRail.replaceChildren(...[strips.sectors.length ? h('div', { class: 'railtitle' }, 'Sectors') : null,
       strips.sectors.length ? h('div', { class: 'chips', role: 'group', 'aria-label': 'Sectors' }, strips.sectors) : null].filter(Boolean));
     const f = S.filters;
-    const signature = [f.market, f.list, f.sector, f.signal, S.q, JSON.stringify(f.tech || {})].join('|');
+    const signature = [f.market, f.list, f.sector, f.signal, f.news, S.q, JSON.stringify(f.tech || {})].join('|');
     if (signature !== S.sig) { S.sig = signature; S.shown = {}; }        // a new search or filter starts again at the first page
     const hidden = f.signal === 'ALL' ? 0 : visibleStocks(true).filter((s) => readingSide(s, f.horizon) === null).length;
     const hiddenTech = activeTech().length ? visibleStocks(false, true).filter((s) => !hasTech(s)).length : 0;
@@ -715,6 +727,7 @@
     const on = [];
     if (f.market !== 'ALL') on.push(['India only', () => { f.market = 'ALL'; f.list = 'ALL'; f.sector = 'ALL'; }]);
     if (f.signal !== 'ALL') on.push([`Reading: ${READING[f.signal]}`, () => { f.signal = 'ALL'; }]);
+    if (f.news && f.news !== 'ALL') on.push([`News: ${({ Positive: 'positive', Negative: 'negative', Mixed: 'mixed', CONFIRMS: 'confirms the reading', CONFLICTS: 'conflicts with the reading' })[f.news] || f.news}`, () => { f.news = 'ALL'; }]);
     if (S.q.trim()) on.push([`Search: "${S.q.trim()}"`, () => { S.q = ''; const box = document.querySelector('input[type=search]'); if (box) box.value = ''; }]);
     for (const [key, label, options] of activeTech()) on.push([`${label}: ${(options.find(([v]) => v === f.tech[key]) || [])[1] || f.tech[key]}`, () => { delete f.tech[key]; renderTech(); }]);
     const activeBar = on.length ? h('div', { class: 'chips', role: 'group', 'aria-label': 'Filters that are on' },
@@ -775,6 +788,7 @@
     const bar = h('div', { class: 'card filterbar' }, h('div', { class: 'row' },
       h('label', { class: 'field' }, 'Search', search),
       select('Reading', f.signal, [['ALL', 'Any'], ['BUY', 'Aligned bullish'], ['HOLD', 'Mixed'], ['SELL', 'Aligned bearish']], (v) => { f.signal = v; saveFilters(); updateSignals(); }),
+      select('News', f.news || 'ALL', [['ALL', 'Any'], ['Positive', 'Positive'], ['Negative', 'Negative'], ['Mixed', 'Mixed'], ['CONFIRMS', 'Confirms the reading'], ['CONFLICTS', 'Conflicts with the reading']], (v) => { f.news = v; saveFilters(); updateSignals(); }),
       select('Sort by', f.sort, [['score', 'Indicator alignment'], ['change', 'Day change'], ['dividend', 'Dividend yield'], ['name', 'Name']].concat(['score', 'change', 'dividend', 'name'].includes(f.sort) ? [] : [[f.sort, 'Table column']]), (v) => { f.sort = v; f.dir = defaultDir(v); saveFilters(); updateSignals(); }),
       h('div', { class: 'field' }, 'Horizon', h('div', { class: 'row', style: 'gap:6px' },
         ['short', 'long', 'both'].map((hz) => h('button', { type: 'button', class: 'chip' + (f.horizon === hz ? ' on' : ''), 'aria-pressed': f.horizon === hz ? 'true' : 'false',
@@ -913,7 +927,7 @@
   const STATE_TAG = { fresh: ['buy', 'Current'], verified: ['buy', 'Verified'], aging: ['', 'Ageing'], unverified: ['', 'Not cross-checked'], unknown: ['', 'Unknown'],
     stale: ['warn', 'Not current'], disputed: ['warn', 'Disputed'] };
   const GROUP_NAMES = { price: 'Price', indicators: 'Indicators and readings', end_of_day: 'Closing price cross-check', live: 'Live price cross-check',
-    fundamentals: 'Fundamentals (ratios)', statements: 'Quarterly results and statements', dividends: 'Dividends', news: 'Headlines' };
+    outlook: 'Outlook from the past', fundamentals: 'Fundamentals (ratios)', statements: 'Quarterly results and statements', dividends: 'Dividends', news: 'Headlines' };
   const readStamp = (iso) => { const d = iso ? new Date(iso) : null; return d && !Number.isNaN(d.getTime()) ? d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '–'; };
 
   function provenanceCard(s) {
@@ -929,6 +943,7 @@
     const notCurrent = ['price', 'indicators', 'end_of_day', 'live'].filter((k) => p[k] && ['stale', 'disputed'].includes(p[k].state)).map((k) => GROUP_NAMES[k].toLowerCase());
     return h('details', { class: 'card wide provenance', open: s.provenance_ok === false },
       h('summary', null, h('b', null, 'Data sources and freshness '), s.provenance_ok === false ? h('span', { class: 'tag warn' }, 'Some inputs are not current') : h('span', { class: 'tag buy' }, 'Inputs current')),
+      s.quarantine ? h('p', { class: 'small warnline' }, `Paused by the data-health monitor since ${readStamp(s.quarantine.since)}: ${(s.quarantine.reasons || []).join('; ')}. No alerts or tracked readings until the data has been clean for several runs.`) : null,
       s.provenance_ok === false ? h('p', { class: 'small warnline' }, `The ${notCurrent.join(' and ') || 'inputs'} behind this reading ${notCurrent.length > 1 ? 'are' : 'is'} not current or not confirmed, so treat the reading with care. New alerts and tracked readings for this stock are paused until the data catches up.`) : null,
       h('div', { style: 'overflow-x:auto' }, h('table', null, h('thead', null, h('tr', null, h('th', null, 'Figures'), h('th', null, 'Source'), h('th', { class: 'num' }, 'Data as of'), h('th', { class: 'num hide-sm' }, 'Read'), h('th', null, 'Status'))), h('tbody', null, rows))),
       h('p', { class: 'muted small', style: 'margin-bottom:0' }, 'Every group of figures carries its source, the date it describes and the time it was read. No alert is sent and no reading is tracked on a price series that is missing the newest session or that a second source disputes.'));
@@ -974,6 +989,188 @@
       reasonsList(v.reasons),
       v.missing.length ? h('p', { class: 'muted small' }, 'Not used (no data): ' + v.missing.map((k) => names[k] || k).join(', ') + '.') : null,
       h('p', { class: 'muted small', style: 'margin-bottom:0' }, "A description of the reported figures against fixed bands, not a forecast or a recommendation. Banks have no debt or EBITDA figure, and the sector P/E is the median of the stocks in this app's list."));
+  }
+
+
+  /* ---------- outlook: what happened after situations like today's ---------- */
+  const OUTLOOK_HORIZONS = [['5', '5 trading days'], ['20', '20 trading days (about a month)'], ['60', '60 trading days (about three months)']];
+  const pc = (v, d = 0) => (isNum(v) ? `${(v * 100).toFixed(d)}%` : '–');
+
+  function outlookCard(s) {
+    const o = s.outlook;
+    if (!o || !o.horizons) return null;
+    const rows = OUTLOOK_HORIZONS.filter(([k]) => o.horizons[k]).map(([k, label]) => {
+      const x = o.horizons[k];
+      return h('tr', null, h('td', null, label),
+        h('td', { class: 'num' }, h('b', null, pc(x.p_up)), x.ci ? h('div', { class: 'muted small' }, `range ${pc(x.ci[0])} to ${pc(x.ci[1])}`) : null),
+        h('td', { class: 'num hide-sm' }, pc(x.base)),
+        h('td', { class: 'num hide-sm' }, signed(x.median * 100, 1), h('div', { class: 'muted small' }, `${signed(x.p10 * 100, 0)} to ${signed(x.p90 * 100, 0)}`)),
+        h('td', { class: 'num hide-sm' }, x.n.toLocaleString(), h('div', { class: 'muted small' }, `${x.level === 'L3' ? 'exact match' : x.level === 'L0' ? 'all situations' : 'broader match'}`)),
+        h('td', null, h('span', { class: `tag ${x.edge ? 'buy' : ''}` }, x.edge ? 'Beat the base rate' : 'No better than base rate')));
+    });
+    const anyEdge = Object.values(o.horizons).some((x) => x.edge);
+    const card = (S.data.learning || {}).scorecard;
+    return h('details', { class: 'card wide outlook', open: true },
+      h('summary', null, h('b', null, 'Outlook from the past '), h('span', { class: 'muted small' }, 'what happened after situations like this one')),
+      h('p', { class: 'small', style: 'margin:6px 0' }, 'Today: ', (o.factors || []).map((f) => h('span', { class: 'tag', title: f.name }, f.text))),
+      h('div', { style: 'overflow-x:auto' }, h('table', null, h('thead', null, h('tr', null, h('th', null, 'Looking ahead'), h('th', { class: 'num' }, 'Price was higher'), h('th', { class: 'num hide-sm' }, 'All situations'),
+        h('th', { class: 'num hide-sm' }, 'Typical move (middle, 10th to 90th)'), h('th', { class: 'num hide-sm' }, 'Past cases'), h('th', null, 'Later-data test'))), h('tbody', null, rows))),
+      h('p', { class: 'small muted', style: 'margin:6px 0 0' }, anyEdge ? 'Where the tag says "Beat the base rate", this table did better than simply using the all-situations share on prices it had not seen.' : 'In a test on later prices this table did not do meaningfully better than simply using the all-situations share, so read it as context, not as a forecast.',
+        ' The range is how much the share moves when whole trading days are resampled.'),
+      card && card.n ? h('p', { class: 'small muted', style: 'margin:4px 0 0' }, `Live check: of ${card.n} forecasts of this kind the app has made and resolved, the error was ${isNum(card.skill) && card.skill > 0 ? `${(card.skill * 100).toFixed(1)}% lower` : 'not lower'} than always saying the all-situations share.`) : null,
+      h('p', { class: 'muted small', style: 'margin:4px 0 0' }, `A description of the past, not a prediction or a recommendation. Learned ${readStamp(o.generated_at)} from ${o.universe} stocks (${(o.span || []).join(' to ')}). Only price and volume factors are learned: past fundamentals are not available point in time. Prices exclude costs and dividends, the stock list is today's, and market conditions change.`));
+  }
+
+  function learningCard() {
+    const l = S.data.learning;
+    if (!l) return null;
+    const rows = OUTLOOK_HORIZONS.filter(([k]) => (l.validation || {})[k]).map(([k, label]) => {
+      const v = l.validation[k];
+      return h('tr', null, h('td', null, label), h('td', { class: 'num' }, pc((l.base_rates || {})[k])), h('td', { class: 'num hide-sm' }, isNum(v.tested) ? v.tested.toLocaleString() : '–'),
+        h('td', { class: 'num hide-sm' }, isNum(v.skill) ? `${(v.skill * 100).toFixed(2)}%` : '–'), h('td', null, h('span', { class: `tag ${v.edge ? 'buy' : ''}` }, v.edge ? 'Beat the base rate' : 'No reliable edge'), h('div', { class: 'muted small' }, v.reason || '')));
+    });
+    const c = l.scorecard || {};
+    return h('details', { class: 'card', open: true },
+      h('summary', null, h('b', null, 'What the app has learned '), h('span', { class: 'muted small' }, `from ${l.universe} stocks, ${(l.span || []).join(' to ')}, ${isNum(l.samples) ? l.samples.toLocaleString() : ''} situations, learned ${readStamp(l.generated_at)}`)),
+      h('p', { class: 'small' }, 'Every week the app re-learns how often the price was higher after each combination of trend, RSI, MACD, 52-week position and volatility, and tests that on the later 40% of the dates. A pattern is called an edge only if it beat the all-situations share there by a margin that matters with its whole range above zero.'),
+      h('div', { style: 'overflow-x:auto' }, h('table', null, h('thead', null, h('tr', null, h('th', null, 'Looking ahead'), h('th', { class: 'num' }, 'Price was higher (all situations)'), h('th', { class: 'num hide-sm' }, 'Later cases tested'), h('th', { class: 'num hide-sm' }, 'Error cut vs all-situations'), h('th', null, 'Result'))), h('tbody', null, rows))),
+      c.n ? h('div', null, h('h4', null, `Forecasts made and resolved so far (${c.n})`), h('p', { class: 'small' }, `Error score ${c.brier} against ${c.brier_base} for always saying the all-situations share${isNum(c.skill) ? ` (${c.skill > 0 ? '' : '+'}${(-c.skill * 100).toFixed(1)}% change)` : ''}. A band that came true as often as it said is well calibrated.`),
+        h('div', { style: 'overflow-x:auto' }, h('table', null, h('thead', null, h('tr', null, h('th', null, 'Said'), h('th', { class: 'num' }, 'Forecasts'), h('th', { class: 'num' }, 'Came true'))),
+          h('tbody', null, (c.bands || []).map((b) => h('tr', null, h('td', null, `${b.from_pct}% to ${b.to_pct}%`), h('td', { class: 'num' }, b.n), h('td', { class: 'num' }, `${b.came_true_pct}%`))))))) : h('p', { class: 'muted small' }, 'No forecast has reached its date yet, so there is no live accuracy figure. The first ones resolve after 20 trading days.'),
+      h('p', { class: 'muted small', style: 'margin-bottom:0' }, 'This describes the past. It does not change any reading, threshold or alert, and it is not tuned to beat buy-and-hold.'));
+  }
+
+
+
+  /* ---------- news intelligence: sources, de-duplicated stories, sentiment, impact, reaction and validation ---------- */
+  const TONE_CLASS = { Positive: 'buy', Negative: 'warn', Mixed: '', Neutral: '' };
+  const INTERPRETATION_CLASS = { Bullish: 'buy', Bearish: 'warn', Mixed: '', Neutral: '' };
+  const VALIDATION_TEXT = { confirms: ['buy', 'News confirms the reading'], conflicts: ['warn', 'News conflicts with the reading'], neutral: ['', 'News neither confirms nor conflicts'] };
+  const REACTION_TEXT = { 'price confirms': ['buy', 'Price confirms'], 'price diverges': ['warn', 'Price diverges'], 'no clear reaction': ['', 'No clear reaction'], unknown: ['', 'No price to compare'] };
+  const when = (ts) => (isNum(ts) ? new Date(ts * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'time not given');
+  const signedInt = (v) => (isNum(v) ? `${v > 0 ? '+' : ''}${Math.round(v)}` : '–');
+
+  function storyRow(st, withStock) {
+    const official = st.kind === 'nse' || st.kind === 'bse';
+    const sources = (st.sources && st.sources.length ? st.sources : [st.source]).filter(Boolean);
+    return h('li', { class: 'newsstory' },
+      h('div', null,
+        withStock && st.symbol ? h('a', { href: '#stock=' + st.symbol, class: 'small', title: 'Open the stock' }, h('b', null, st.name || st.symbol), ' ') : (withStock ? h('b', { class: 'small' }, `${st.sector || 'Market'} `) : null),
+        h('span', { class: `tag ${TONE_CLASS[st.tone] || ''}` }, `${st.tone} ${signedInt(st.sentiment)}`), ' ',
+        h('span', { class: 'tag', title: 'How much this could matter: event type, credibility, relevance and how recent it is, from 0 to 100' }, `Impact ${st.impact}`), ' ',
+        official ? h('span', { class: 'tag buy', title: 'An official filing on the exchange' }, 'Official') : null, st.ai ? h('span', { class: 'tag', title: 'Also scored by a language model' }, 'AI-scored') : null,
+        h('span', { class: 'muted small' }, ` ${st.event_label}`)),
+      h('div', null, safeUrl(st.link) ? h('a', { href: st.link, target: '_blank', rel: 'noopener noreferrer' }, st.title) : st.title),
+      h('div', { class: 'muted small' }, `${sources.join(', ')} · ${when(st.ts)} · credibility ${st.credibility}`, st.duplicates ? ` · ${st.duplicates} repeat${st.duplicates === 1 ? '' : 's'} not counted` : '',
+        isNum(st.age_hours) ? '' : ''));
+  }
+
+  function newsIntelCard(s) {
+    const n = s.news_intel;
+    if (!n || !n.stories) return h('section', { class: 'card wide', id: 'd-news-intel' }, h('h3', null, 'News intelligence'), h('p', { class: 'muted small', style: 'margin:0' }, n ? 'The stories load when this page opens.' : 'No recent news about this company was found in the exchange announcements, the news feeds or the headline search.'));
+    const [vc, vt] = VALIDATION_TEXT[(n.validation || {}).state] || VALIDATION_TEXT.neutral;
+    const [rc, rt] = REACTION_TEXT[(n.reaction || {}).state] || ['', ''];
+    const f = n.fundamental || {};
+    return h('section', { class: 'card wide', id: 'd-news-intel' },
+      h('h3', null, 'News intelligence ', h('span', { class: `tag ${INTERPRETATION_CLASS[n.interpretation] || ''}` }, `Interpretation: ${n.interpretation}`), ' ', h('span', { class: `tag ${vc}` }, vt)),
+      h('div', { class: 'kv' }, kv([['Overall sentiment', `${n.label} (${signedInt(n.sentiment)} on a scale from -100 to +100)`], ['News impact', `${n.impact} of 100`], ['Average credibility', `${n.credibility} of 100`],
+        ['Fundamental impact', f.text || '–'], ['Market reaction', n.reaction ? h('span', null, h('span', { class: `tag ${rc}` }, rt), ' ', n.reaction.text) : '–']])),
+      n.horizons && (n.horizons.short || n.horizons.long) ? h('p', { class: 'small' }, n.horizons.short ? h('span', null, h('b', null, 'Short term: '), n.horizons.short, ' ') : null, n.horizons.long ? h('span', null, h('b', null, 'Long term: '), n.horizons.long) : null) : null,
+      h('p', { class: 'small' }, h('b', null, 'Explanation: '), n.explanation),
+      (n.risks || []).length ? h('div', null, h('b', { class: 'small' }, 'Key risks'), h('ul', { class: 'clean small' }, n.risks.map((x) => h('li', null, x)))) : null,
+      h('h4', null, 'Latest important news'), h('ul', { class: 'clean' }, (n.stories || []).slice(0, 6).map((st) => storyRow(st, false))),
+      h('p', { class: 'muted small', style: 'margin-bottom:0' }, (n.validation || {}).text ? `${n.validation.text} ` : '', 'This is a rule-based reading of exchange filings and headlines (event type, word list, source credibility, recency), not a language model understanding the articles, except stories marked AI-scored. News never creates a Buy or Sell reading: it is an extra check on the one the price rules gave. Headlines are shown as published, with their source and a link to the original.'));
+  }
+
+  const newsLine = (s) => {
+    const n = s.news_intel;
+    if (!n) return null;
+    const [vc, vt] = VALIDATION_TEXT[typeof n.validation === 'object' ? (n.validation || {}).state : n.validation] || VALIDATION_TEXT.neutral;
+    return h('div', { class: 'wide small', style: 'margin:6px 0' }, h('b', null, 'News: '), h('span', { class: `tag ${INTERPRETATION_CLASS[n.interpretation] || ''}` }, n.interpretation), ` sentiment ${signedInt(n.sentiment)}, impact ${n.impact}, ${n.n} stor${n.n === 1 ? 'y' : 'ies'} `, h('span', { class: `tag ${vc}` }, vt),
+      n.top && n.top.title ? h('div', { class: 'muted' }, `${n.top.event_label || 'Latest'}: ${n.top.title} (${n.top.source || ''})`) : null);
+  };
+
+  /* ---------- the News tab and the Sentiment Dashboard ---------- */
+  function viewNews() {
+    const d = S.data.news_intel;
+    if (!d) return h('div', null, h('h2', null, 'News'), h('div', { class: 'empty' }, 'News intelligence is not available in this data yet. It appears after the next update.'));
+    const nf = S.newsFilters;
+    const sectors = [...new Set((d.stories || []).map((x) => x.sector).filter(Boolean))].sort();
+    const list = h('ul', { class: 'clean' });
+    const status = h('p', { class: 'muted small' });
+    const draw = () => {
+      const q = nf.q.trim().toLowerCase();
+      const rows = (d.stories || []).filter((x) => (nf.tone === 'ALL' || x.tone === nf.tone) && (!nf.official || x.kind === 'nse' || x.kind === 'bse') && (nf.sector === 'ALL' || x.sector === nf.sector)
+        && (!nf.tracked || x.tracked) && (!q || `${x.title} ${x.name || ''} ${x.symbol || ''} ${x.event_label}`.toLowerCase().includes(q)));
+      status.textContent = `${rows.length} stor${rows.length === 1 ? 'y' : 'ies'} shown of the ${d.stories.length} most important. Sorted by impact and recency; repeats of the same story across outlets and exchanges count once.`;
+      list.replaceChildren(...(rows.length ? rows.slice(0, 80).map((x) => storyRow(x, true)) : [h('li', { class: 'empty' }, 'No story matches these filters.')]));
+    };
+    const sel = (label, key, options) => h('label', { class: 'field' }, label, h('select', { onchange: (e) => { nf[key] = e.target.value; draw(); } }, options.map(([v, text]) => h('option', { value: v, selected: nf[key] === v }, text))));
+    const toneWord = d.market_tone >= 20 ? 'leaning positive' : d.market_tone <= -20 ? 'leaning negative' : 'neutral';
+    const cnt = d.counts || {};
+    const sectorRows = (d.sectors || []).map((x) => h('tr', null, h('td', null, x.sector), h('td', { class: 'num' }, x.stocks),
+      h('td', { class: 'num' }, h('span', { class: `tag ${x.sentiment >= 20 ? 'buy' : x.sentiment <= -20 ? 'warn' : ''}` }, signedInt(x.sentiment))), h('td', { class: 'num hide-sm' }, x.impact),
+      h('td', { class: 'num hide-sm' }, `${x.positive} / ${x.negative} / ${x.mixed}`), h('td', { class: 'num' }, isNum(x.price_move_pct) ? signed(x.price_move_pct) : '–'),
+      h('td', null, h('span', { class: `tag ${(REACTION_TEXT[x.state] || [''])[0]}` }, (REACTION_TEXT[x.state] || ['', x.state])[1]))));
+    const stockList = (title, rows) => (rows || []).length ? h('div', { class: 'card' }, h('h4', { style: 'margin:0 0 4px' }, title),
+      h('ul', { class: 'clean small' }, rows.map((r) => h('li', null, h('a', { href: '#stock=' + r.symbol }, h('b', null, r.name)), ` ${signedInt(r.sentiment)}, impact ${r.impact}`, isNum(r.change_pct) ? `, price ${signed(r.change_pct)}` : '', r.validation && r.validation !== 'neutral' ? ` · ${VALIDATION_TEXT[r.validation][1].toLowerCase()}` : '')))) : null;
+    const providers = (d.providers || []).map((x) => h('tr', null, h('td', null, x.name), h('td', null, h('span', { class: `tag ${x.ok ? 'buy' : 'warn'}` }, x.ok ? 'Working' : 'Down')),
+      h('td', { class: 'num' }, x.items), h('td', { class: 'small muted hide-sm' }, x.error || (x.fetched_at ? `read ${readStamp(x.fetched_at)}` : ''))));
+    const root = h('div', null,
+      h('h2', null, 'News and sentiment ', h('span', { class: 'muted small' }, `updated ${readStamp(d.generated_at)}`)),
+      h('details', { class: 'card', open: true },
+        h('summary', null, h('b', null, 'Sentiment dashboard '), h('span', { class: `tag ${d.market_tone >= 20 ? 'buy' : d.market_tone <= -20 ? 'warn' : ''}` }, `Market news ${toneWord} (${signedInt(d.market_tone)})`)),
+        h('p', { class: 'small' }, `${cnt.stories_shown} important stories from ${cnt.stocks_with_news} stocks; ${cnt.duplicates_removed} repeated copies were not counted; ${cnt.official_share_pct === null ? 'no' : cnt.official_share_pct + '%'} are official exchange filings.`,
+          d.ai && d.ai.enabled ? ` ${d.ai.scored} are also scored by a language model (${d.ai.model}, via GitHub Models).` : ' Sentiment is rule-based; no language model score is available right now.'),
+        (d.sectors || []).length ? h('div', { style: 'overflow-x:auto' }, h('table', null, h('thead', null, h('tr', null, h('th', null, 'Sector'), h('th', { class: 'num' }, 'Stocks with news'), h('th', { class: 'num' }, 'Sentiment'), h('th', { class: 'num hide-sm' }, 'Impact'),
+          h('th', { class: 'num hide-sm' }, 'Pos / neg / mixed'), h('th', { class: 'num' }, 'Sector move today'), h('th', null, 'Price vs news'))), h('tbody', null, sectorRows))) : h('p', { class: 'muted small' }, 'No sector has enough news yet.'),
+        h('div', { class: 'grid', style: 'margin-top:8px' }, stockList('Most positive news', d.top_positive), stockList('Most negative news', d.top_negative), stockList('Price disagrees with the news', d.divergences)),
+        h('p', { class: 'muted small' }, 'Events in the stories: ' + (Object.entries(d.events || {}).slice(0, 8).map(([k, v]) => `${k} ${v}`).join(', ') || 'none') + '.')),
+      h('details', { class: 'card' }, h('summary', null, h('b', null, 'News sources '), h('span', { class: 'muted small' }, `${(d.providers || []).filter((x) => x.ok).length} of ${(d.providers || []).length} working`)),
+        h('div', { style: 'overflow-x:auto' }, h('table', null, h('thead', null, h('tr', null, h('th', null, 'Source'), h('th', null, 'State'), h('th', { class: 'num' }, 'Items'), h('th', { class: 'hide-sm' }, 'Detail'))), h('tbody', null, providers))),
+        h('p', { class: 'muted small', style: 'margin-bottom:0' }, 'Official: NSE corporate announcements and BSE corporate announcements. News: Business Standard, Mint, The Economic Times, Moneycontrol and The Hindu BusinessLine (public RSS feeds, headlines and links only) and Google News for each company. If a source is down the others carry on and recent items are kept. Stories link to the original; attribution is to the source named.',
+          d.ai && d.ai.enabled ? ' AI scoring: GitHub Models.' : '')),
+      h('div', { class: 'card filterbar' }, h('div', { class: 'row' },
+        h('label', { class: 'field' }, 'Search', h('input', { type: 'search', placeholder: 'Company, event or words', value: nf.q, oninput: (e) => { nf.q = e.target.value; draw(); } })),
+        sel('Sentiment', 'tone', [['ALL', 'Any'], ['Positive', 'Positive'], ['Negative', 'Negative'], ['Neutral', 'Neutral']]),
+        sel('Sector', 'sector', [['ALL', 'All sectors']].concat(sectors.map((x) => [x, x]))),
+        h('label', { class: 'field' }, h('span', null, 'Official filings only'), h('input', { type: 'checkbox', checked: nf.official, onchange: (e) => { nf.official = e.target.checked; draw(); } })),
+        h('label', { class: 'field' }, h('span', null, 'Stocks in the main list'), h('input', { type: 'checkbox', checked: nf.tracked, onchange: (e) => { nf.tracked = e.target.checked; draw(); } })))),
+      status, list,
+      h('p', { class: 'muted small' }, 'Sentiment runs from -100 (very negative) to +100 (very positive) and impact from 0 to 100. They describe the news, not the stock: they are not a Buy or Sell reading and are not a forecast.'));
+    draw();
+    return root;
+  }
+
+  /* ---------- news tone: an additional, low-weight part of the short-term reading, never the source of truth ---------- */
+  function newsToneCard(s) {
+    const n = s.news_tone;
+    if (!n) return null;
+    const cls = n.label === 'positive' ? 'buy' : n.label === 'negative' ? 'warn' : '';
+    return h('section', { class: 'card wide', id: 'd-news-tone' },
+      h('h3', null, 'News tone ', h('span', { class: `tag ${cls}` }, n.label === 'positive' ? 'Leaning positive' : n.label === 'negative' ? 'Leaning negative' : 'Neutral'), h('span', { class: 'muted small' }, ` ${n.score > 0 ? '+' : ''}${n.score.toFixed(2)} from ${n.n} recent headline${n.n === 1 ? '' : 's'} (${n.positive} positive, ${n.negative} negative), confidence ${n.confidence}`)),
+      h('ul', { class: 'clean small' }, (n.items || []).map((i) => h('li', null, h('span', { class: `tag ${i.score > 0.15 ? 'buy' : i.score < -0.15 ? 'warn' : ''}` }, `${i.score > 0 ? '+' : ''}${i.score.toFixed(2)}`), ` ${i.title}`, h('span', { class: 'muted' }, ` · ${i.source || 'source unknown'}, ${ageText(i.age_min)}`)))),
+      h('p', { class: 'muted small', style: 'margin-bottom:0' }, 'Read from the words of headlines that are clearly about this company, newer ones counting more and a few headlines counted cautiously. It carries a small weight in the short-term reading (5 of 105) and none in the long-term one. A word list can misread context or sarcasm: it is an additional signal, not the source of truth, and the headlines above are shown exactly as published.'));
+  }
+  const ageText = (minutes) => (!isNum(minutes) ? '' : minutes < 60 ? `${minutes} min ago` : minutes < 2880 ? `${Math.round(minutes / 60)} h ago` : `${Math.round(minutes / 1440)} days ago`);
+
+  /* ---------- data health: what the app has learned about its own data ---------- */
+  function dataHealthCard() {
+    const d = S.data.data_health;
+    if (!d) return null;
+    const rows = (d.sources || []).map((x) => h('tr', null, h('td', null, x.name), h('td', { class: 'num' }, isNum(x.reliability) ? `${Math.round(x.reliability * 100)}%` : '–', h('div', { class: 'muted small' }, `last ${x.runs} runs`)),
+      h('td', null, h('span', { class: `tag ${x.state === 'degraded' ? 'warn' : 'buy'}` }, x.state === 'degraded' ? 'Degraded' : 'Working')),
+      h('td', { class: 'small hide-sm' }, x.last_fail ? `${readStamp(x.last_fail)}${x.detail ? ': ' + x.detail : ''}` : '–')));
+    const hours = (d.lag_hours_ist || []);
+    const q = d.quarantined || [];
+    return h('details', { class: 'card', open: q.length > 0 || (d.sources || []).some((x) => x.state === 'degraded') },
+      h('summary', null, h('b', null, 'Data health '), h('span', { class: 'muted small' }, `learned from ${d.runs_observed} runs`),
+        q.length ? h('span', { class: 'tag warn' }, `${q.length} stock${q.length === 1 ? '' : 's'} paused`) : h('span', { class: 'tag buy' }, 'No stock paused')),
+      h('p', { class: 'small' }, 'Every run the app records which data sources worked and which stocks had data problems. A stock with problems in ' + (d.rules || {}).quarantine + ' is paused (no alerts, no tracked readings) until it has been clean for ' + (d.rules || {}).release + '. Sources below ' + Math.round(((d.rules || {}).degraded_below || 0.8) * 100) + '% are shown as degraded.'),
+      h('div', { style: 'overflow-x:auto' }, h('table', null, h('thead', null, h('tr', null, h('th', null, 'Source'), h('th', { class: 'num' }, 'Reliability'), h('th', null, 'State'), h('th', { class: 'hide-sm' }, 'Last problem'))), h('tbody', null, rows))),
+      hours.length ? h('p', { class: 'small' }, h('b', null, 'Observed lag hours (IST): '), hours.map((x) => `${String(x).padStart(2, '0')}:00`).join(', '), '. Yahoo\'s daily series was seen missing the newest session in these hours, so new readings in them wait for the series to catch up.') : h('p', { class: 'small muted' }, 'No hour of the day has shown a pattern of lagging prices yet.'),
+      q.length ? h('div', null, h('h4', null, 'Paused stocks'), h('ul', { class: 'clean small' }, q.map((x) => h('li', null, h('b', null, x.symbol), ` since ${readStamp(x.since)}: ${(x.reasons || []).join('; ')}`)))) : null,
+      h('p', { class: 'muted small', style: 'margin-bottom:0' }, 'This decides how far the data can be trusted right now. It never changes a reading, a score or a threshold.'));
   }
 
   /* Where the numbers come from and how current they are. */
@@ -1308,6 +1505,8 @@
         h('div', { class: 'grid wide', id: 'd-signals' }, h('section', { class: 'card' }, signalCard('Short-term view (weeks)', s.short)), h('section', { class: 'card' }, signalCard('Long-term view (months to years)', s.long))),
         dataNote(s),
         h('div', { class: 'wide' }, liveLine(s), qualityLine(s)),
+        newsLine(s),
+        outlookCard(s),
         provenanceCard(s)],
       technicals: [
         section('Buying and selling pressure', ...pressureBlock(s)),
@@ -1324,6 +1523,7 @@
         wide(section('Peers in the same sector', peersBlock(s))),
         section('Lists', listsBlock(s))],
       news: [
+        newsIntelCard(s),
         s.news.fresh.length ? h('section', { class: 'card wide', id: 'd-latest-headlines' }, h('h3', null, 'Latest headlines'), newsList(s.news.fresh)) : null,
         wide(section('Upcoming events', stockEvents(s))),
         section('News', s.news.error && !s.news.items.length
@@ -1389,7 +1589,10 @@
     if (!isNum(pick.quality.score)) why.push('Fundamentals unavailable, so they were left out of the ranking');
     if (s.pressure && s.pressure.label.startsWith('Buying')) why.push('Buying pressure');
     if (s.lists.includes('Strong delivery buying')) why.push('Strong delivery buying');
+    const ni = s.news_intel;
+    if (ni && ni.validation === 'confirms') why.push(`News confirms it (${ni.interpretation.toLowerCase()}, impact ${ni.impact})`);
     const risks = [`Moves about ${percent(pick.vol, 0)} a year`];
+    if (ni && ni.validation === 'conflicts') risks.push(`credible ${ni.interpretation.toLowerCase()} news runs against the reading (impact ${ni.impact})`);
     if (s.stop) risks.push(`volatility risk level ${signed(s.stop.pct, 1)} below the price`);
     const shortTest = (s.backtest || {}).short;
     if (shortTest && !shortTest.beats_buy_hold_oos) risks.push('the short-term rule has lagged buy-and-hold recently');
@@ -1977,6 +2180,7 @@
             a.symbol && (S.data.stocks.some((s) => s.symbol === a.symbol) || S.others.some((s) => s.symbol === a.symbol)) ? h('button', { type: 'button', class: 'chip', onclick: (e) => openDetail(a.symbol, e.currentTarget) }, 'View analysis') : null)))))] : null,
       h('h2', null, 'World and market news ', src('EXTERNAL')), h('div', { class: 'card' }, newsList(m.news, true)),
       accuracyCard(S.data.accuracy, S.data.live_check),
+      dataHealthCard(),
       statusCard(S.data.status),
       h('p', { class: 'muted small' }, (S.data.exchange_data || {}).note || ''));
   }
@@ -2088,6 +2292,7 @@
       h('h3', null, 'What the words mean'), h('dl', { class: 'terms' }, TERMS.map(([k, v]) => [h('dt', null, h('b', null, k)), h('dd', null, v)]))];
     return h('div', null,
       h('h2', null, 'Track record'),
+      learningCard(),
       scoreboard(t, min),
       h('p', { class: 'muted small' }, `${t.calls_total} readings recorded under the current rules: ${t.resolved} settled, ${t.open} open.${t.void ? ` ${t.void} more were set aside as not entered (the reference price never traded on the day of the alert), so they are neither successes nor failures.` : ''}${t.older_model_calls ? ` ${t.older_model_calls} more from earlier versions of the rules are kept in the record but not counted here.` : ''} A past record, not a forecast.`),
       groupCards(t),
@@ -2105,7 +2310,7 @@
     }
     const view = $('#view');
     if (!S.data) { view.replaceChildren(h('div', { class: 'empty' }, S.error || 'Loading...')); return; }
-    const builders = { signals: viewSignals, suggest: viewSuggest, ipo: viewIpo, market: viewMarket, events: viewEvents, track: viewTrack };
+    const builders = { signals: viewSignals, suggest: viewSuggest, news: viewNews, ipo: viewIpo, market: viewMarket, events: viewEvents, track: viewTrack };
     view.replaceChildren((builders[S.tab] || viewSignals)());
     decorateHelp(view);
   }

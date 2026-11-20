@@ -212,14 +212,19 @@ class SignalTests(unittest.TestCase):
         self.assertIsNone(signals.long_score(ind, 39)[0])
         self.assertIsNone(signals.short_score(ind, 39)[0])
 
-    def test_news_is_not_part_of_a_reading(self):
+    def test_news_is_an_optional_small_part_of_the_short_term_reading_only(self):
         closes = [100 + math.sin(i / 5) * 3 for i in range(120)]
         ind = signals.build_indicators(make_bars(closes))
-        score, reasons = signals.short_score(ind, len(closes) - 1)
-        self.assertNotIn("news", signals.SHORT_WEIGHTS)
-        self.assertNotIn("news", [r["key"] for r in reasons])
-        with self.assertRaises(TypeError):
-            signals.short_score(ind, len(closes) - 1, news=1.0)
+        i = len(closes) - 1
+        plain = signals.short_detail(ind, i)
+        self.assertNotIn("news", [r["key"] for r in plain["reasons"]])
+        with_news = signals.short_detail(ind, i, news=(1.0, "News tone: leaning positive"))
+        self.assertIn("news", [r["key"] for r in with_news["reasons"]])
+        self.assertEqual(with_news["coverage"], plain["coverage"], "an optional part never changes coverage")
+        self.assertLessEqual(abs(with_news["score"] - plain["score"]), 10, "5 of 105 of the weight: at most about ten points, at the extremes")
+        self.assertGreaterEqual(with_news["score"], plain["score"])
+        self.assertNotIn("news", signals.LONG_WEIGHTS)
+        self.assertEqual(signals.short_score(ind, i), (plain["score"], plain["reasons"]), "the score used by backtests has no news in it")
 
     def test_reasons_have_tone(self):
         ind = signals.build_indicators(make_bars([100 * 1.004 ** i for i in range(300)]))

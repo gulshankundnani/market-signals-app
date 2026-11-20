@@ -275,7 +275,7 @@ tracked or not, as soon as they appear. Only the 122 tracked stocks (plus new li
 Details and evidence: `docs/audit-followup-2026-11-16.md`.
 
 * `python tools/verify_market_data.py --volume` checks the deployed prices (and NSE volumes) against the NSE end-of-day file, same session only. Not-yet-published references give UNVERIFIED, never a pass or a fail.
-* `python tools/check_production.py --cache signals-v37` reads what the deployed site published (data freshness, the NSE feed
+* `python tools/check_production.py --cache signals-v40` reads what the deployed site published (data freshness, the NSE feed
   as the Actions run saw it, stale handling, the service-worker cache name) and prints PASS, FAIL or UNVERIFIED for each. It cannot read
   the Actions logs, which need a login, so "error logged" stays UNVERIFIED unless you read the run log yourself.
 * `python tools/strategy_report.py` measures the two rules against buy-and-hold (drawdown, downside deviation, Sharpe, Sortino,
@@ -370,6 +370,78 @@ time it was read, its age and a state: current, ageing, not current, verified, d
 "Data sources and freshness". `provenance_ok` is false when the price or indicators are not current (the series lacks the session that must be
 complete by now, or the NSE file or live snapshot disputes it); the table then says "data not current" and no alert or tracked reading is made on that
 stock. Fundamentals carry the period they describe (`most_recent_quarter`) as well as when they were read.
+
+## News intelligence and sentiment
+
+The **News** tab (and the News card on every stock) reads official announcements and headlines, de-duplicates them, scores them, and compares them with the
+price, volume and sector. It is a **validation layer**: it confirms, conflicts with or says nothing about the reading the price rules gave, and it never
+creates a Buy or Sell reading (a reading needs its price and volume parts; news is an optional 5 of 105 in the short-term score only).
+
+| Source | What it gives | Notes |
+|---|---|---|
+| NSE corporate announcements (`engine/news_sources.py`) | Official filings with the exchange's own category, for the whole market | One request per run for two days. The NSE RSS file was empty when tested, so the same announcements come from the NSE API |
+| BSE corporate announcements | Official filings from BSE's public RSS file | Mapped to the NSE symbol by company name; BSE-only companies are not tracked. `api.bseindia.com` refuses scripts (403) and is not used |
+| Business Standard, Mint, The Economic Times, Moneycontrol, The Hindu BusinessLine | Headlines and links from their public RSS feeds | Headlines only, attributed to the outlet, linked to the original |
+| Google News per company | Headlines about each tracked company | Already used for alerts |
+| NewsData.io (optional) | Business news for India | Off unless the secret `NEWSDATA_API_KEY` exists. Free plan: 200 credits a day, 12 hours delayed, "for testing & personal projects"; its terms limit use to "personal or internal business purposes" and require "Powered by NewsData.io API" attribution. Using it on a public site may exceed that licence, so decide before adding the key. Untested without a key |
+| Hypeless | Not found as a news provider, so not integrated | |
+
+How a story is scored (`engine/news_intel.py`, rules, no language model): the exchange's category or a keyword classifier gives the **event type** (results,
+order win, regulatory action, management change and so on); a financial word list with negation gives the **sentiment** from -100 to +100; the **source
+credibility** comes from a tier table (the exchange 95, established outlets 82, recognised 66, unknown 45, minus 25 for rumour wording, plus 8 when a second
+source confirms it); the **impact** (0 to 100) is the event's materiality times credibility, relevance and recency (half-life 36 hours). **Duplicates**: near-identical
+headlines (word overlap of 55% or more) and the same official filing posted on both exchanges count as one story; the other sources are listed and the repeat count is shown.
+Per stock: overall sentiment (impact-weighted), impact, fundamental impact, interpretation (Bullish, Bearish, Neutral or Mixed; held at Neutral when the average credibility
+is low), short and long-term implications, key risks, the market reaction (price move, volume against its 20-day average, the sector's move) and how it compares with the reading.
+
+Each provider runs in isolation: one being down never stops the others, a refusal (401, 403, 429) pauses only that provider, and the last 96 hours of mapped items
+are kept in `state.json`, so recent stories survive an outage. Every story keeps its headline, source, timestamp and a link to the original.
+
+**Optional language-model scoring.** GitHub Pages only serves static files, so a model cannot run on the site. A separate scheduled job
+(`.github/workflows/news-ai.yml`, `engine/news_ai.py`, `engine/ai_sentiment.py`) asks a hosted model (GitHub Models, the free rate-limited tier, with the job's own
+`GITHUB_TOKEN` and the permission `models: read`; model name in the repository variable `NEWS_AI_MODEL`, default `openai/gpt-4o-mini`) about new headlines only, in batches of 25, and
+stores each answer under a hash of the headline on the `data` branch. The 10-minute build averages the model's score with the rule-based one and marks the story "AI-scored". If the
+model is unavailable, over its limit or answers badly, the rule-based score stands alone. Headlines are untrusted input (the prompt treats them as data and only numbers and labels
+from fixed sets are accepted), nothing but the headline text is sent, and no key is stored. The endpoint, limits and permission could not be exercised from the development machine:
+check the first run's log. Turn it off with the repository variable `NEWS_AI` = `off`.
+
+## News tone and the data learning loop
+
+**News tone (an additional parameter, not the source of truth).** `engine/sentiment.py` reads the words of recent headlines that are clearly about the
+company (a financial word list with negation, phrases and intensity words, newer headlines counting more, duplicates once, pulled toward zero when there
+are few) and gives a tone from -1 to +1. It is an optional part of the **short-term** reading only, with weight 5 of 105 (at most about 10 points at the
+extremes of the score, usually 1 to 3), and is recorded with each tracked call so the Track record tab can show whether readings the news supported did
+better than readings it opposed. Backtests cannot include it (there is no historical news), so they use the price and volume rule alone. A word list
+reads words, not meaning, and its accuracy was not measured against labelled data: treat it as a rough extra signal. Headlines are still shown exactly as
+published. This replaces the earlier rule that news was never part of a reading.
+
+**Data learning loop** (`engine/data_learning.py`, state kept in `state.json`). Every run records which stocks had data incidents (a series missing the
+newest session, a feed behind the NSE file, a price the NSE file or live snapshot disputes, a stale input, a carried record) and whether each source
+worked (Yahoo charts, the NSE end-of-day file, the NSE live snapshot, Yahoo fundamentals, headline search, the learned table, block deals, official
+events). A stock with incidents in 3 of its last 6 runs is paused (no alerts, no tracked readings) until it has been clean for 3 runs; each source's
+reliability over its last 24 runs is shown, and the hours of the Indian day in which many stocks lag are learned. The Market tab shows it as "Data health".
+It never changes a reading, a score or a threshold.
+
+## Learning from the past: the outlook
+
+A weekly job (`.github/workflows/learn.yml`, `engine/learn.py`, `engine/learning.py`) reads five years of prices for the tracked NSE stocks and learns,
+for each combination of **current factors** (trend against the 50 and 200-day averages, RSI zone, MACD direction, position in the 52-week range,
+volatility), how often the price was higher 5, 20 and 60 trading days later in **past** situations with the same factors. Each stock page shows its
+factors and that frequency with a range ("Outlook from the past"). The table is published on the `data` branch and read by the 10-minute build.
+
+What keeps it honest:
+* A combination seen fewer than 150 times falls back to a coarser one, down to the all-situations share.
+* The range resamples whole trading dates, because stocks move together on a day.
+* It is tested on later data: built on the earlier 60% of dates, scored (Brier error against always saying the all-situations share) on the later 40%.
+  It is called an edge only if it did better by at least 1% of the error with the whole range above zero.
+* Each week's forecasts are logged on the `data` branch (append-only) and scored when their date passes; the Track record tab shows the live error
+  and how often each probability band came true.
+* Nothing learned here changes a reading, a threshold or an alert, and nothing is tuned to beat buy-and-hold.
+
+**Result on 200 NSE stocks, 2021-11 to 2026-11:** none of the three horizons beat the all-situations share on later data (skill -0.3%, -0.7%,
+-1.2%). The price factors in this app do not predict direction better than the base rate, so the outlook is context, not a forecast, and the page says
+so. Limits: past fundamentals are not available point in time (only price and volume factors are learned), prices exclude costs and dividends, the
+stock list is today's (survivorship bias), and the 2021 to 2026 period was a rising market (59% of 60-day windows ended higher).
 
 ## Second sources for prices and indicators
 

@@ -35,6 +35,7 @@ SOURCES = {
     "statements": "Yahoo Finance fundamentals time series",
     "dividends": "Yahoo Finance chart events",
     "news": "Google News (headlines as published)",
+    "outlook": "Learned from past prices of the tracked NSE stocks",
 }
 
 
@@ -110,6 +111,12 @@ def build(record, now_ts):
             else "aging" if days > STATEMENTS_AGING_DAYS else "fresh"
         out["statements"] = _entry("statements", state, newest, fetched, "Newest reported quarter" if newest else None, age_days=days)
 
+    outlook = record.get("outlook")
+    if outlook:
+        days = _days_between(outlook.get("generated_at"), now_ts) if outlook.get("generated_at") else None
+        span = outlook.get("span") or []
+        out["outlook"] = _entry("outlook", "unknown" if days is None else "stale" if days > 21 else "aging" if days > 8 else "fresh", span[1] if len(span) == 2 else None,
+                                outlook.get("generated_at"), f"Learned weekly from {outlook.get('universe')} stocks, {span[0]} to {span[1]}" if len(span) == 2 else None, age_days=days)
     dividend = record.get("dividend")
     if dividend is not None:
         out["dividends"] = _entry("dividends", "stale" if behind else "fresh", as_of, read_at, "Payments from the price chart's own events")

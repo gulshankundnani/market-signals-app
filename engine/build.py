@@ -11,11 +11,11 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from . import digest, event_news, events, market as market_view, verify
-from . import catalog, evidence, nse_live, provenance, statements, universe_sync, alerts, backtest, costs, deals_live, sessions, wide, discover, membership as index_membership, official, dividends, exchange, fetch, fundamentals, ipo_gmp, ledger, news, patterns, risk, signals, tracking
+from . import manifest, ai_sentiment, catalog, data_learning, evidence, learning, news_ai, news_intel, news_sources, nse_live, sentiment, provenance, statements, universe_sync, alerts, backtest, costs, deals_live, sessions, wide, discover, membership as index_membership, official, dividends, exchange, fetch, fundamentals, ipo_gmp, ledger, news, patterns, risk, signals, tracking
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKERS = 6
@@ -105,6 +105,78 @@ BACKTEST_NOTES = [
 ]
 
 
+def reading_side(label):
+    return "buy" if label in ("Buy", "Strong Buy") else "sell" if label in ("Sell", "Strong Sell") else "hold" if label else None
+
+
+def apply_news_context(record, sector_moves):
+    """Add the market reaction (price, volume and sector against the news) and the comparison with the existing reading to a record's news intelligence.
+    News never creates a reading: it only confirms, conflicts with or says nothing about the one the price rules gave."""
+    intel = record.get("news_intel")
+    if not intel:
+        return
+    intel["reaction"] = news_intel.reaction(intel, record.get("change_pct"), record.get("volume_ratio"), sector_moves.get(record.get("sector")))
+    intel["validation"] = news_intel.validate(intel, reading_side(((record.get("short") or {}).get("label"))))
+
+
+def news_dashboard(records, pool, market_items, names, sector_moves, provider_status, ai_scores, ai_meta, archive, now, limit=80):
+    """The News tab's data: the most important stories across the market, sector sentiment, stocks where price and news disagree, and the providers' state."""
+    by_symbol = {r["symbol"]: r for r in records}
+    stories, duplicates_removed, total_raw = [], 0, 0
+    for symbol, rows in pool.items():
+        raw = []
+        for r in rows:
+            raw.append({**r, "ai": ai_scores.get(ai_sentiment.key(r.get("text") if r["kind"] == "nse" else r["title"]))})
+        total_raw += len(raw)
+        unique = news_intel.dedupe([news_intel.make_story(r, now, names.get(symbol)) for r in raw])
+        duplicates_removed += len(raw) - len(unique)
+        rec = by_symbol.get(symbol)
+        sector = (rec or {}).get("sector") or next((r.get("industry") for r in rows if r.get("industry")), None) or "Other"
+        for s in unique:
+            if s["impact"] >= 20:
+                stories.append({**{k: s[k] for k in ("title", "source", "link", "ts", "kind", "event_label", "tone", "sentiment", "credibility", "impact", "horizon", "sources",
+                                                     "duplicates", "ai", "short_term", "long_term", "risk", "age_hours")},
+                                "symbol": symbol, "name": names.get(symbol), "sector": sector, "tracked": rec is not None,
+                                "interpretation": ((rec or {}).get("news_intel") or {}).get("interpretation")})
+    for r in market_items:
+        s = news_intel.make_story({**r, "ai": ai_scores.get(ai_sentiment.key(r["title"]))}, now, None)
+        sector = news_intel.sector_of_text(r["title"])
+        if s["impact"] >= 15 and sector:
+            stories.append({**{k: s[k] for k in ("title", "source", "link", "ts", "kind", "event_label", "tone", "sentiment", "credibility", "impact", "horizon", "sources",
+                                                 "duplicates", "ai", "short_term", "long_term", "risk", "age_hours")}, "symbol": None, "name": None, "sector": sector, "tracked": False, "interpretation": None})
+    stories.sort(key=lambda s: -(s["impact"] * max(0.2, 0.5 ** ((s["age_hours"] or 0) / 36.0))))
+    stories = stories[:limit]
+    with_intel = [r for r in records if r.get("news_intel")]
+    weight = sum(s["impact"] for s in stories)
+    tone = round(sum(s["impact"] * s["sentiment"] for s in stories) / (weight + 10)) if weight else 0
+    divergences = sorted((r for r in with_intel if (r["news_intel"].get("reaction") or {}).get("state") == "price diverges" and r["news_intel"]["impact"] >= 35),
+                         key=lambda r: -r["news_intel"]["impact"])[:10]
+    brief = lambda r: {"symbol": r["symbol"], "name": r["name"], "sector": r["sector"], "sentiment": r["news_intel"]["sentiment"], "impact": r["news_intel"]["impact"],
+                       "interpretation": r["news_intel"]["interpretation"], "change_pct": r.get("change_pct"), "reaction": (r["news_intel"].get("reaction") or {}).get("text"),
+                       "validation": (r["news_intel"].get("validation") or {}).get("state")}
+    ranked = sorted(with_intel, key=lambda r: r["news_intel"]["sentiment"] * r["news_intel"]["impact"])
+    events = {}
+    for s in stories:
+        events[s["event_label"]] = events.get(s["event_label"], 0) + 1
+    official = sum(1 for s in stories if s["kind"] in ("nse", "bse"))
+    return {"generated_at": now.isoformat(timespec="seconds"), "market_tone": tone, "stories": stories,
+            "sectors": news_intel.sector_table([{"sector": r["sector"], "intel": r["news_intel"]} for r in with_intel], sector_moves),
+            "top_negative": [brief(r) for r in ranked[:8] if r["news_intel"]["sentiment"] <= -20], "top_positive": [brief(r) for r in reversed(ranked[-8:]) if r["news_intel"]["sentiment"] >= 20],
+            "divergences": [brief(r) for r in divergences], "events": dict(sorted(events.items(), key=lambda kv: -kv[1])),
+            "providers": [{"name": k, "ok": v["ok"], "items": v.get("items", 0), "error": v.get("error"), "fetched_at": v.get("fetched_at")} for k, v in provider_status.items()],
+            "counts": {"archive_items": len(archive), "stocks_with_news": len(pool), "stories_shown": len(stories), "duplicates_removed": duplicates_removed, "raw_stock_items": total_raw,
+                       "official_share_pct": round(100 * official / len(stories)) if stories else None},
+            "ai": {"enabled": bool(ai_scores), "model": (ai_meta or {}).get("model"), "generated_at": (ai_meta or {}).get("generated_at"), "scored": sum(1 for s in stories if s["ai"])}}
+
+
+def learning_age_ok(learned, now):
+    """Whether the weekly learned table is not older than ten days."""
+    try:
+        return now - datetime.fromisoformat(learned["generated_at"]) <= timedelta(days=10)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def run_backtests(ind, n, market="IN", overrides=None, dividends=None, min_start=0):
     if n < 260:
         return None
@@ -161,7 +233,14 @@ def analyse(entry, ctx):
     news.mark_relevance(items, entry["name"], ticker_base)
 
     ind = signals.build_indicators(bars)
-    short_detail, long_detail = signals.short_detail(ind, i), signals.long_detail(ind, i)
+    # news intelligence: the stock's own headline search plus the exchanges' announcements and the RSS feeds mapped to it, de-duplicated and scored
+    ai_map = ctx.get("news_ai") or {}
+    raw_news = [{"title": it["title"], "text": it["title"], "source": it.get("source"), "link": it.get("link"), "ts": it.get("ts"), "kind": "media", "desc": "", "symbol": symbol}
+                for it in items if it.get("relevant", True)]
+    raw_news += list((ctx.get("news_pool") or {}).get(symbol, []))
+    raw_news = [{**row, "ai": ai_map.get(ai_sentiment.key(row.get("text") if row["kind"] == "nse" else row["title"]))} for row in raw_news]       # (a loop variable named r would hide the rounding helper r)
+    intel = news_intel.analyse_stock(news_intel.dedupe([news_intel.make_story(row, ctx["now"], entry["name"]) for row in raw_news]), ctx["now"])
+    short_detail, long_detail = signals.short_detail(ind, i, news=news_intel.tone_component(intel)), signals.long_detail(ind, i)
     pressure = signals.buy_sell_pressure(ind, i)
     live = None
     if provisional:
@@ -169,7 +248,7 @@ def analyse(entry, ctx):
         partial["v"][-1] = None            # the day's volume is incomplete, so volume rules must not use it
         live_ind = signals.build_indicators(partial)
         live_i = len(partial["c"]) - 1
-        live = {"short": signal_block(signals.short_detail(live_ind, live_i), live_ind, live_i, "short"),
+        live = {"short": signal_block(signals.short_detail(live_ind, live_i, news=news_intel.tone_component(intel)), live_ind, live_i, "short"),
                 "long": signal_block(signals.long_detail(live_ind, live_i), live_ind, live_i, "long")}
     dividend = dividends.dividend_profile(chart["dividends"], price, ctx["now_ts"])
     recent_splits = [{"date": datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d"), "ratio": f"{num:g}:{den:g}"}
@@ -201,6 +280,8 @@ def analyse(entry, ctx):
         "delivery": scrub(delivery),
         "deals": scrub(exchange_view),
         "news": {"items": items[:6], "fresh": news.fresh_headlines(items), "error": news_error},
+        "news_intel": intel,
+        "volume_ratio": round(bars["v"][i] / ind["avg_volume20"][i], 2) if bars["v"][i] and ind["avg_volume20"][i] else None,
         "dividend_yield": r(dividend["ttm_yield"], 5) if dividend else 0.0,
         "dividend": scrub(dividend),
         "splits": recent_splits,
@@ -355,7 +436,7 @@ def status_block(config, records, errors, carried, overview, conditions, ipos, d
     add("NSE delivery data", "ok" if latest else "info", f"Latest day {latest}" if latest else "Not loaded")
     if nse is not None:
         if nse.get("ok") and live_check:
-            add("NSE live prices", "ok" if live_check["mismatch"] == 0 else "warn",
+            add("NSE live prices", "ok" if live_check["mismatch"] <= max(1, 0.05 * live_check["compared"]) else "warn",       # one fast mover read a moment apart is not a fault
                 f"{live_check['match']} of {live_check['compared']} movers match Yahoo within 1% (median difference {live_check['median_diff_pct']}%, largest {live_check['max_diff_pct']}%), snapshot {live_check['as_of']}")
         elif nse.get("ok"):
             add("NSE live prices", "info", "Snapshot read, but none of its stocks are in the main list or it is not current")
@@ -557,8 +638,27 @@ def run(args):
         except fetch.FetchError as err:
             print("benchmark failed:", err)
 
+    repo_name = os.environ.get("GITHUB_REPOSITORY", "")
+    names = {s["symbol"]: s["name"] for s in universe}
+    names.update({s["symbol"]: s["name"] for s in ((state.get("wide_universe") or {}).get("list") or []) if s.get("market") == "IN"})
+    news_index = news_sources.NameIndex(names)
+    try:                                         # every provider is isolated: one being down never stops the others, and the archive keeps earlier items
+        raw_items, provider_status = news_sources.collect(now, state.get("news_providers"))
+        mapped, market_items = news_sources.map_items(raw_items, news_index)
+        fresh_mapped = [i for rows in mapped.values() for i in rows] + market_items
+    except Exception as err:                     # nothing from the news layer may stop the site from publishing
+        print("News providers failed:", err)
+        provider_status, fresh_mapped = {}, []
+    news_archive = news_sources.merge_archive(state.get("news_archive"), [news_sources.compact(i) for i in fresh_mapped], now)
+    news_pool, news_market = {}, []
+    for item in news_archive:
+        (news_pool.setdefault(item["symbol"], []).append(item) if item.get("symbol") else news_market.append(item))
+    ai_scores, ai_meta = news_ai.load_scores(repo_name, load_previous(args.prev, "news_ai.json"))
+    print(f"News: {len(news_archive)} items kept, {len(news_pool)} stocks with news, {len(ai_scores)} AI scores, providers: "
+          + ", ".join(f"{k} {'ok' if v['ok'] else 'down'}" for k, v in provider_status.items()))
     ctx = {"now": now, "today": today, "now_ts": int(now.timestamp()), "delivery": delivery, "deals": deals, "bench": bench,
-           "bars": {}, "news_breaker": Breaker(NEWS_FAILURE_LIMIT), "costs": cost_overrides, "membership": member_dates}
+           "bars": {}, "news_breaker": Breaker(NEWS_FAILURE_LIMIT), "costs": cost_overrides, "membership": member_dates,
+           "news_pool": news_pool, "news_ai": ai_scores}
 
     def safe(entry):
         try:
@@ -600,6 +700,9 @@ def run(args):
     overview = market_overview(config, now, raw_index)
     info = {x["symbol"]: {"market": x["market"], "sector": x["sector"]} for x in records if not x.get("new") and x["sector"] != "Other"}
     conditions = market_view.analyse(config.get("regime"), raw_index, ctx["bars"], info)
+    sector_moves = {s["sector"]: s["d1"] for s in ((conditions.get("IN") or {}).get("sectors") or []) if isinstance(s.get("d1"), (int, float))}
+    for rec in records:
+        apply_news_context(rec, sector_moves)
     ipos = {}
     india, india_ok, india_at, ipo_cache = ipo_gmp.fetch_india(now, state.get("ipo_gmp"), fetch_news=news.fetch_news)
     ipos.update({"india": india, "india_ok": india_ok,
@@ -616,10 +719,27 @@ def run(args):
     live_check = nse_live.check_records(records, live_prices, live_feed.get("as_of"))
     live_mismatch = {r["symbol"] for r in records if (r.get("live_check") or {}).get("status") == "mismatch"}
     watch = [s for s in watch if s not in live_mismatch]
+    learned = learning.load(os.environ.get("GITHUB_REPOSITORY", ""), load_previous(args.prev, "learning.json"), fetch.http_get)
+    for rec in records:
+        rec["outlook"] = learning.outlook(rec, learned)       # what happened after situations like today's, with its range and whether it beat the base rate on later data
     for rec in records:                                    # where each group of figures comes from, when it was read, and whether it is current
         rec["provenance"], rec["provenance_ok"] = provenance.build(rec, ctx["now_ts"])
     not_current = {r["symbol"] for r in records if not r["provenance_ok"]}
-    watch = [s for s in watch if s not in not_current]     # nor on a price series that lacks the newest session: its reading is a session old and would flip back later
+    watch = [s for s in watch if s not in not_current]
+    chart_failures = len(carried) + len(errors)
+    news_errors = sum(1 for r in records if (r.get("news") or {}).get("error"))
+    fresh_fundamentals = sum(1 for r in records if isinstance(r.get("fundamentals_at"), (int, float)) and ctx["now_ts"] - r["fundamentals_at"] <= 3 * 86400)
+    health, quarantined = data_learning.observe(state.get("data_health"), now, records, {
+        "Yahoo price charts": (chart_failures <= max(2, 0.05 * len(records)), f"{chart_failures} of {len(records)} stocks failed to load"),
+        "NSE end-of-day file": (bool(closes) and max(closes) >= fetch.expected_session(ctx["now_ts"] - 3600), f"newest session {max(closes) if closes else 'none'}"),
+        "NSE live prices": (bool(live_feed.get("ok")), live_feed.get("error") or "no usable snapshot"),
+        "Yahoo fundamentals": (fresh_fundamentals >= 0.9 * len(records), f"{fresh_fundamentals} of {len(records)} read in the last 3 days"),
+        "Headline search": (news_errors <= 0.5 * len(records), f"{news_errors} of {len(records)} searches failed"),
+        "Learned table": (bool(learned) and learning_age_ok(learned, now), "the weekly learning table is missing or old")})
+    for rec in records:
+        if rec["symbol"] in quarantined:
+            rec["quarantine"] = quarantined[rec["symbol"]]
+    watch = [s for s in watch if s not in quarantined]     # nor on a price series that lacks the newest session: its reading is a session old and would flip back later
     news_on = bool(alert_cfg.get("news", True))     # headlines in the alerts; no tone is ever worked out from them
     sides = {s: dict(v) for s, v in state.get("alert_sides", {}).items() if isinstance(v, dict)}
     items = []
@@ -733,10 +853,13 @@ def run(args):
         rec["dividend_check"] = dividends.cross_check(rec.get("dividend"), rec.get("price"), (quotes.get(rec["symbol"]) or {}).get("dividend_rate"))
     analysis_index = catalog.update(now, state.get("analysis_index"), wide_list, quotes, analyse, ctx, args.prev, load_previous, Path(args.out), lists_fn=add_lists, curated_records=records,
                                     fundamentals_fn=lambda symbol: fundamentals.fetch_fundamentals(quote_session, symbol),
-                                    statements_fn=lambda symbol: statements.fetch_statements(quote_session, symbol, ctx["now_ts"]))
+                                    statements_fn=lambda symbol: statements.fetch_statements(quote_session, symbol, ctx["now_ts"]),
+                                    outlook_fn=lambda record: (apply_news_context(record, sector_moves), learning.outlook(record, learned))[1])
+    health = data_learning.fold_sources(health, now, {"NSE live block deals": (bool(live_deals.get("ok")), live_deals.get("error") or ""),
+                                                         "NSE official events": (bool((official_events or {}).get("ok")), (official_events or {}).get("error") or "")})
     status = status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy, official_events, live_deals, live_feed, live_check)
     data = {"version": 1, "generated_at": now.isoformat(timespec="seconds"), "market": overview, "conditions": conditions,
-            "status": status, "accuracy": accuracy, "live_check": live_check, "evidence": evidence.summarise(records), "backtest_method": {"costs": costs.describe(cost_overrides), "notes": BACKTEST_NOTES}, "events": events_data, "ipos": ipos,
+            "status": status, "accuracy": accuracy, "live_check": live_check, "learning": learning.summary(learned), "news_intel": news_dashboard(records, news_pool, news_market, names, sector_moves, provider_status, ai_scores, ai_meta, news_archive, now), "data_health": data_learning.summary(health, quarantined), "evidence": evidence.summarise(records), "backtest_method": {"costs": costs.describe(cost_overrides), "notes": BACKTEST_NOTES}, "events": events_data, "ipos": ipos,
             "stocks": [catalog.lite(x) for x in records], "errors": [{"symbol": e["symbol"], "error": e["error"]} for e in errors],
             "alerts": alert_log, "track_record": track_record,
             "exchange_data": {"delivery_dates": sorted(delivery)[-3:], "note": "NSE delivery data and bulk/block deals. The exchange order book (bid/ask depth) is not published for free."}}
@@ -744,12 +867,20 @@ def run(args):
                  "fundamentals": fund_cache, "ipo_gmp": ipo_cache, "alert_log": alert_log,
                  "alert_sides": sides, "universe_sync": sync_state, "analysis_index": analysis_index, "wide_universe": wide_cache, "wide_cursor": wide_cursor, "mover_seen": mover_seen, "index_seen": index_seen,
                  "briefs_sent": {k: v for k, v in briefs_sent.items() if v == today_ist}, "nse_sources": nse, "news_alert_history": {s: v for s, v in news_history.items() if v}, "deal_seen": deal_seen,
-                 "live_deals": {k: v for k, v in live_deals.items() if k != "deals"}, "eod_close": closes, "nse_live": {k: v for k, v in live_feed.items() if k != "prices"}, "statements": statements_cache, "event_news": event_cache, "official": official_events, "ledger_pending": pending, "reply_queue": queue, "notified_outcomes": notified}
+                 "live_deals": {k: v for k, v in live_deals.items() if k != "deals"}, "eod_close": closes, "nse_live": {k: v for k, v in live_feed.items() if k != "prices"}, "statements": statements_cache, "news_providers": provider_status, "news_archive": news_archive, "data_health": health, "event_news": event_cache, "official": official_events, "ledger_pending": pending, "reply_queue": queue, "notified_outcomes": notified}
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    build_id = manifest.new_build_id(time.time())
+    data["build_id"] = build_id
     (out / "data.json").write_text(json.dumps(data, allow_nan=False, separators=(",", ":")), encoding="utf-8")
     (out / "state.json").write_text(json.dumps(new_state, allow_nan=False, separators=(",", ":")), encoding="utf-8")
+    if ai_scores:                                # the scores the build used, kept so a failed read of the data branch next run still has them
+        (out / "news_ai.json").write_text(json.dumps({"v": 1, "model": (ai_meta or {}).get("model"), "generated_at": (ai_meta or {}).get("generated_at"), "scores": ai_scores},
+                                                     allow_nan=False, separators=(",", ":")), encoding="utf-8")
+    if learned:                                  # kept in the published site so a failed read of the data branch next run still has the latest table
+        (out / "learning.json").write_text(json.dumps(learned, allow_nan=False, separators=(",", ":")), encoding="utf-8")
+    manifest.write(out, build_id, data.get("generated_at"))             # last: it lists every file of this build
     print(f"Wrote {out / 'data.json'} ({(out / 'data.json').stat().st_size // 1024} KB)")
     return 0
 

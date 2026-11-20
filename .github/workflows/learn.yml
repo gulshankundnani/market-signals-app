@@ -1,0 +1,39 @@
+name: Learn from the past
+
+# Once a week the app re-learns, from five years of prices of the tracked NSE stocks, how often the price was higher after situations like today's,
+# tests that on later data, logs today's forecasts, scores the ones whose time has come, and publishes the result on the 'data' branch
+# (learning/outlook-table.json). The 10-minute "Update signals" run reads that file. Nothing here changes a reading, a threshold or an alert.
+# Start it by hand with Actions > Learn from the past > Run workflow.
+
+on:
+  schedule:
+    - cron: "17 5 * * 0"       # Sundays, 10:47 IST, away from the busy :00 minute
+  workflow_dispatch:
+
+permissions:
+  contents: write              # lets the run append to the 'data' branch; the main branch is never changed
+
+concurrency:
+  group: learn
+  cancel-in-progress: false
+
+jobs:
+  learn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test
+        run: python -m unittest discover -s tests -t .
+
+      - name: Learn and publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -m engine.learn --out learning_out --publish
