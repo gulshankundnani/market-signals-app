@@ -97,6 +97,7 @@ def _round(value, digits):
 
 FUND_KEYS = ("roe", "roa", "debt_to_equity", "profit_margin", "operating_margin", "ebitda_margin", "revenue_growth", "earnings_growth", "payout_ratio",
              "ebitda", "ev_ebitda", "ev_revenue", "price_to_sales", "peg", "free_cash_flow", "current_ratio", "revenue")
+TECH_KEYS = ("rsi", "macd_hist", "sma20", "sma50", "sma200", "atr", "momentum126")      # what the table's technical filters need
 NEAR = 0.05          # the same 5% as the "Near 52-week high / low" lists of the curated stocks
 
 
@@ -124,6 +125,9 @@ def index_row(stock, q, entry, record):
             "analysed_at": (entry or {}).get("at") if record else None,
             "pe": _round(q.get("pe"), 2), "forward_pe": _round(q.get("forward_pe"), 2), "pb": _round(q.get("pb"), 2), "eps": _round(q.get("eps"), 2),
             "book_value": _round(q.get("book_value"), 2), "dividend_yield": _round(q.get("dividend_yield"), 4),
+            "ind": {k: _round(v, 3) for k, v in ((record or {}).get("indicators") or {}).items() if k in TECH_KEYS and isinstance(v, (int, float))},
+            "pressure": ((record or {}).get("pressure") or {}).get("label"),
+            "patterns": [[p["name"], p.get("bias")] for p in (record or {}).get("patterns") or [] if isinstance(p, dict) and p.get("name")],
             "fund": {k: v for k, v in ((record or {}).get("fundamentals") or {}).items() if k in FUND_KEYS and isinstance(v, (int, float))},
             "lists": list(dict.fromkeys(quote_lists(q) + [n for n in (record or {}).get("lists", []) if n != "Other"]))}
 

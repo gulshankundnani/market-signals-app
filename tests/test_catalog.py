@@ -181,3 +181,15 @@ class FundamentalsCatchUpTests(unittest.TestCase):
         self.assertEqual(len(catalog.pick(WIDE, QUOTES, index, NOW, fund_version=2)), 5)
         index["S0.NS"]["fv"] = 2
         self.assertNotIn("S0.NS", [s["symbol"] for s in catalog.pick(WIDE, QUOTES, index, NOW, fund_version=2)])
+
+
+class TechnicalFieldTests(unittest.TestCase):
+    def test_index_row_carries_the_technicals_the_filters_use(self):
+        q = {"price": 100.0}
+        record = {"short": {}, "long": {}, "indicators": {"rsi": 28.123456, "macd_hist": -0.5, "sma200": 90.0, "hi252": 150.0, "junk": 1, "sma50": None},
+                  "pressure": {"label": "Buying pressure"}, "patterns": [{"name": "Hammer", "bias": "bullish", "note": "x"}]}
+        row = catalog.index_row({"symbol": "A.NS", "name": "A", "market": "IN"}, q, {"at": "t"}, record)
+        self.assertEqual(row["ind"], {"rsi": 28.123, "macd_hist": -0.5, "sma200": 90.0})      # only the fields the filters use, none that are missing
+        self.assertEqual((row["pressure"], row["patterns"]), ("Buying pressure", [["Hammer", "bullish"]]))
+        plain = catalog.index_row({"symbol": "B.NS", "name": "B", "market": "IN"}, q, None, None)
+        self.assertEqual((plain["ind"], plain["pressure"], plain["patterns"]), ({}, None, []))

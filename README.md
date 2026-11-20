@@ -391,6 +391,11 @@ Then open http://127.0.0.1:8765/. Python 3.10+ and Node 18+ are the only require
   average counts as the full +1 or -1). A stock sitting on an average therefore scores near zero and its reading cannot flip
   between two extremes when the price ticks across the line.
 * **Long-term (months to years):** price against the 200-day average, golden/death cross, 6-month return, 52-week position and volatility.
+* **Technical filters** (a panel under the list chips on the Signals page, working on every listed stock that has been analysed): RSI (oversold, neutral,
+  overbought), price above or below the 20, 50 and 200-day averages, MACD above or below its signal line, 6-month return, position in the 52-week range
+  (top 10%, middle, bottom 10%), buying or selling pressure, daily swing (ATR as a percent of price) and any pattern on the latest candles (any bullish, any
+  bearish, or one of 26 named ones). Every filter that is set must be true, they combine with the lists, sectors, Reading filter and search, and the header
+  says how many stocks are hidden because they have no technical data yet. Each is a plain statement about the indicator values, not a recommendation.
 * **Search is a "like" match, not an exact one:** case, punctuation and word order do not matter ("bajaj auto", "auto bajaj", "bajaj-auto"), a word can be
   typed in part ("hdfc ba"), "&" and "and" are the same ("m&m"), and each word matches the start of a name or symbol word, or sits inside the name
   (3 letters or more). A symbol is only matched from its start, so "tcs" finds TCS and nothing that merely contains those letters. With the default order,

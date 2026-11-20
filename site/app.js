@@ -81,7 +81,7 @@
     error: null,
     tab: 'signals',
     others: [], shards: new Map(), shown: {}, catalog: 'loading', catalogInfo: null, sig: '',
-    filters: Object.assign({ market: 'ALL', horizon: 'short', signal: 'ALL', list: 'ALL', sector: 'ALL', sort: 'score', view: 'overview' }, store.get('filters', {})),
+    filters: Object.assign({ market: 'ALL', horizon: 'short', signal: 'ALL', list: 'ALL', sector: 'ALL', tech: {}, sort: 'score', view: 'overview' }, store.get('filters', {})),
     q: '',
     watch: new Set(store.get('watch', [])),
     lists: store.get('lists', {}),
@@ -164,7 +164,8 @@
   const slimStock = (r) => ({ ...r, lists: r.lists || [], tags: [], news: { fresh: [] }, slim: true,
     short: r.short || { label: null, score: null }, long: r.long || { label: null, score: null },
     dividend_yield: r.dividend_yield,
-    fundamentals: { market_cap: r.cap, pe: r.pe, forward_pe: r.forward_pe, pb: r.pb, eps: r.eps, book_value: r.book_value, ...(r.fund || {}) }, indicators: { hi252: r.high52, lo252: r.low52 } });
+    fundamentals: { market_cap: r.cap, pe: r.pe, forward_pe: r.forward_pe, pb: r.pb, eps: r.eps, book_value: r.book_value, ...(r.fund || {}) }, indicators: { ...(r.ind || {}), hi252: r.high52, lo252: r.low52 },
+    pressure: r.pressure ? { label: r.pressure } : null, patterns: (r.patterns || []).map(([name, bias]) => ({ name, bias })) });
   async function loadCatalog(prefetched) {
     S.catalog = 'loading';
     if ($('#chips')) updateSignals();
@@ -388,7 +389,35 @@
     return key.name.startsWith(q) || key.compact.startsWith(compact) ? 1 : 2;
   }
 
-  function visibleStocks(skipSignal) {
+  /* Technical filters. Each one is decided from the stock's own indicator values; a stock without them (not analysed yet) never passes an active one. */
+  const PATTERN_NAMES = ['Doji', 'Hammer', 'Shooting star', 'Bullish engulfing', 'Bearish engulfing', 'Morning star', 'Evening star', 'Three white soldiers', 'Three black crows',
+    'Bullish harami', 'Bearish harami', 'Inside day', 'Golden cross', 'Death cross', 'MACD bullish cross', 'MACD bearish cross', '20-day breakout', '20-day breakdown',
+    'Near 52-week high', 'Near 52-week low', 'Gap up', 'Gap down', 'Tight range', 'Higher highs and lows', 'Lower highs and lows', 'Volume surge'];
+  const indOf = (s) => s.indicators || {};
+  const aboveAvg = (s, key, want) => (isNum(indOf(s)[key]) && isNum(s.price) ? (want === 'above' ? s.price > indOf(s)[key] : s.price < indOf(s)[key]) : false);
+  const rangePos = (s) => (isNum(indOf(s).hi252) && isNum(indOf(s).lo252) && indOf(s).hi252 > indOf(s).lo252 ? (s.price - indOf(s).lo252) / (indOf(s).hi252 - indOf(s).lo252) : null);
+  const TECH_FILTERS = [
+    ['rsi', 'RSI', [['low', 'Oversold (under 30)'], ['mid', 'Neutral (30 to 70)'], ['high', 'Overbought (over 70)']],
+      (s, v) => { const r = indOf(s).rsi; return isNum(r) && (v === 'low' ? r < 30 : v === 'high' ? r > 70 : r >= 30 && r <= 70); }],
+    ['sma200', 'Price vs 200-day average', [['above', 'Above'], ['below', 'Below']], (s, v) => aboveAvg(s, 'sma200', v)],
+    ['sma50', 'Price vs 50-day average', [['above', 'Above'], ['below', 'Below']], (s, v) => aboveAvg(s, 'sma50', v)],
+    ['sma20', 'Price vs 20-day average', [['above', 'Above'], ['below', 'Below']], (s, v) => aboveAvg(s, 'sma20', v)],
+    ['macd', 'MACD', [['up', 'Above its signal line'], ['down', 'Below its signal line']], (s, v) => isNum(indOf(s).macd_hist) && (v === 'up' ? indOf(s).macd_hist > 0 : indOf(s).macd_hist < 0)],
+    ['mom', '6-month return', [['up', 'Positive'], ['down', 'Negative']], (s, v) => isNum(indOf(s).momentum126) && (v === 'up' ? indOf(s).momentum126 > 0 : indOf(s).momentum126 < 0)],
+    ['pos', 'Position in 52-week range', [['high', 'Top 10%'], ['mid', 'Middle'], ['low', 'Bottom 10%']],
+      (s, v) => { const x = rangePos(s); return x !== null && (v === 'high' ? x >= 0.9 : v === 'low' ? x <= 0.1 : x > 0.1 && x < 0.9); }],
+    ['pressure', 'Buying or selling pressure', [['buy', 'Buying pressure'], ['sell', 'Selling pressure']],
+      (s, v) => !!s.pressure && s.pressure.label.startsWith(v === 'buy' ? 'Buying' : 'Selling')],
+    ['swing', 'Daily swing (ATR as % of price)', [['low', 'Calm (under 1.5%)'], ['mid', 'Moderate'], ['high', 'Wide (over 3.5%)']],
+      (s, v) => { const a = indOf(s).atr; if (!isNum(a) || !isNum(s.price) || !s.price) return false; const x = (a / s.price) * 100; return v === 'low' ? x < 1.5 : v === 'high' ? x > 3.5 : x >= 1.5 && x <= 3.5; }],
+    ['pattern', 'Pattern on the latest candles', [['bullish', 'Any bullish pattern'], ['bearish', 'Any bearish pattern']].concat(PATTERN_NAMES.map((n) => [n, n])),
+      (s, v) => (s.patterns || []).some((p) => (v === 'bullish' || v === 'bearish' ? p.bias === v : p.name === v))],
+  ];
+  const activeTech = () => TECH_FILTERS.filter(([key]) => S.filters.tech && S.filters.tech[key]);
+  const hasTech = (s) => (s.slim ? !!s.analysed : !!s.indicators);
+  const techPass = (s) => activeTech().every(([key, , , test]) => test(s, S.filters.tech[key]));
+
+  function visibleStocks(skipSignal, skipTech) {
     const f = S.filters;
     const query = normText(S.q);
     let tokens = query.split(' ').filter(Boolean);
@@ -402,6 +431,7 @@
       else if (f.signal === 'HOLD' && label !== 'Hold') return false;
       else if (f.signal === 'SELL' && side(label) !== 'sell') return false;
       if (tokens.length && !matchesQuery(s, tokens, fuzzy)) return false;
+      if (!skipTech && !techPass(s)) return false;
       return true;
     });
     let rows = pass(false);
@@ -617,9 +647,10 @@
     const rows = visibleStocks();
     const fuzzy = S.fuzzy;                 // a later call below recomputes S.fuzzy
     const f = S.filters;
-    const signature = [f.market, f.list, f.sector, f.signal, S.q].join('|');
+    const signature = [f.market, f.list, f.sector, f.signal, S.q, JSON.stringify(f.tech || {})].join('|');
     if (signature !== S.sig) { S.sig = signature; S.shown = {}; }        // a new search or filter starts again at the first page
     const hidden = f.signal === 'ALL' ? 0 : visibleStocks(true).filter((s) => !s[f.horizon].label).length;
+    const hiddenTech = activeTech().length ? visibleStocks(false, true).filter((s) => !hasTech(s)).length : 0;
     const info = S.catalogInfo;
     const status = S.catalog === 'loading' ? h('p', { class: 'muted small notice' }, 'Loading every other listed stock… the table shows the main list for now.')
       : S.catalog === 'failed' ? h('p', { class: 'small notice warnline' }, 'The full list of listed stocks could not be loaded, so only the main list is shown. ',
@@ -627,13 +658,14 @@
         : info && info.analysed < info.count * 0.98 ? h('p', { class: 'muted small notice' }, `${info.analysed.toLocaleString()} of ${info.count.toLocaleString()} other listed stocks are analysed so far. The rest show their quote only and fill in over the next few hours.`) : null;
     const head = h('div', { class: 'row small muted', style: 'justify-content:space-between;margin-bottom:6px' },
       h('span', null, `${rows.length} stock${rows.length === 1 ? '' : 's'} · ${f.horizon === 'short' ? 'weeks view' : 'months-to-years view'} reading`,
-        hidden ? ` · ${hidden.toLocaleString()} without a reading yet hidden by the Reading filter` : '', fuzzy ? ` · no exact match for "${S.q.trim()}", showing close matches` : ''),
+        hidden ? ` · ${hidden.toLocaleString()} without a reading yet hidden by the Reading filter` : '',
+        hiddenTech ? ` · ${hiddenTech.toLocaleString()} without technical data hidden by the technical filters` : '', fuzzy ? ` · no exact match for "${S.q.trim()}", showing close matches` : ''),
       f.list.startsWith('C:') ? h('button', { type: 'button', class: 'chip', onclick: () => {
         if (!confirm(`Delete the list "${f.list.slice(2)}"? The stocks are not deleted.`)) return;
         delete S.lists[f.list.slice(2)]; store.set('lists', S.lists); f.list = 'ALL'; saveFilters(); updateSignals();
       } }, 'Delete this list') : null);
     if (!rows.length) {
-      const clear = () => { f.market = 'ALL'; f.list = 'ALL'; f.sector = 'ALL'; f.signal = 'ALL'; S.q = ''; saveFilters(); render(); };
+      const clear = () => { f.market = 'ALL'; f.list = 'ALL'; f.sector = 'ALL'; f.signal = 'ALL'; f.tech = {}; S.q = ''; saveFilters(); render(); };
       results.replaceChildren(...[status, head, h('div', { class: 'empty' },
         f.list === 'WATCH' && !S.q ? 'Your watchlist is empty. Tap the star next to a stock to add it.'
           : S.catalog === 'loading' && S.q ? 'Nothing found in the main list yet. Every other listed stock is still loading.' : 'No stocks match these filters. ',
@@ -650,6 +682,26 @@
     return h('label', { class: 'field' }, label, el);
   }
 
+  function techPanel(open) {
+    const f = S.filters;
+    f.tech = f.tech || {};
+    const n = activeTech().length;
+    const choose = (key, label, options) => h('label', { class: 'field' }, label,
+      h('select', { onchange: (e) => { if (e.target.value) f.tech[key] = e.target.value; else delete f.tech[key]; saveFilters(); renderTech(); updateSignals(); } },
+        [['', 'Any']].concat(options).map(([v, text]) => h('option', { value: v, selected: v === (f.tech[key] || '') }, text))));
+    return h('details', { class: 'card techfilters', open: open ? 'open' : null },
+      h('summary', null, 'Technical filters', n ? h('span', { class: 'tag', style: 'margin-left:8px' }, `${n} on`) : null),
+      h('div', { class: 'row', style: 'margin-top:8px' }, TECH_FILTERS.map(([key, label, options]) => choose(key, label, options))),
+      h('p', { class: 'muted small', style: 'margin:6px 0 0' }, 'Every filter you set must be true for a stock to show. Each one reads the stock\'s indicator values; a stock that is not analysed yet has none, so it is hidden while a technical filter is on. ',
+        n ? h('button', { type: 'button', class: 'chip', onclick: () => { f.tech = {}; saveFilters(); renderTech(); updateSignals(); } }, 'Clear technical filters') : null));
+  }
+  function renderTech() {
+    const box = $('#techbox');
+    if (!box) return;
+    const open = !!(box.firstChild && box.firstChild.open);
+    box.replaceChildren(techPanel(open));
+  }
+
   function viewSignals() {
     const f = S.filters;
     const search = h('input', { type: 'search', placeholder: 'Name or symbol', value: S.q, 'aria-label': 'Search stocks', oninput: (e) => { S.q = e.target.value; updateSignals(); } });
@@ -663,8 +715,8 @@
           onclick: () => { f.horizon = hz; saveFilters(); render(); } }, hz === 'short' ? 'Short-term' : 'Long-term')))),
       select('Columns', f.view, VIEWS, (v) => { f.view = v; saveFilters(); updateSignals(); }),
       h('button', { type: 'button', class: 'chip', title: 'Download the stocks shown as a spreadsheet file', onclick: exportCsv }, 'Export CSV')));
-    const root = h('div', null, bar, h('div', { id: 'chips' }), h('div', { id: 'results' }));
-    queueMicrotask(updateSignals);
+    const root = h('div', null, bar, h('div', { id: 'chips' }), h('div', { id: 'techbox' }), h('div', { id: 'results' }));
+    queueMicrotask(() => { renderTech(); updateSignals(); });
     return root;
   }
 
