@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
-from . import dividends, evidence, fundamentals
+from . import dividends, evidence, fundamentals, provenance, statements
 
 SHARDS = 64
 PER_RUN = 60
@@ -43,7 +43,9 @@ def lite(record):
     shard and the page loads it when the stock is opened. This keeps data.json, which every visit downloads, small."""
     news = record.get("news") or {}
     dividend = record.get("dividend")
-    return {**{k: v for k, v in record.items() if k not in ("spark_sma50", "live", "levels")},
+    statements = record.get("statements")
+    return {**{k: v for k, v in record.items() if k not in ("spark_sma50", "live", "levels", "provenance")},
+            "statements": {k: v for k, v in statements.items() if k not in ("quarterly", "annual")} if isinstance(statements, dict) else statements,
             "dividend": {k: v for k, v in dividend.items() if k != "history"} if isinstance(dividend, dict) else dividend,
             "spark": (record.get("spark") or [])[-2:],
             "news": {"fresh": news.get("fresh", []), "items": [], "error": news.get("error")},
@@ -155,7 +157,7 @@ def _index_row(stock, q, entry, record):
             "lists": list(dict.fromkeys(quote_lists(q) + [n for n in (record or {}).get("lists", []) if n != "Other"]))}
 
 
-def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, log=print, lists_fn=None, curated_records=(), fundamentals_fn=None):
+def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, log=print, lists_fn=None, curated_records=(), fundamentals_fn=None, statements_fn=None):
     """Analyse this run's slice, rewrite the shards and the index. Returns the analysis index to keep in the saved state.
 
     analyse(entry, ctx) is the same function the curated list uses. One bad stock never stops the run."""
@@ -185,6 +187,11 @@ def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, l
                 old = (shards.get(shard_of(symbol), {}).get(symbol) or {}).get("fundamentals") or {}
                 fresh = fundamentals_fn(symbol)
                 record["fundamentals"] = fresh if fresh and fresh.get("market_cap") is not None else (old or fresh or {})
+                old_record = shards.get(shard_of(symbol), {}).get(symbol) or {}
+                record["fundamentals_at"] = int(now.timestamp()) if record["fundamentals"] is fresh else old_record.get("fundamentals_at")
+                if statements_fn:
+                    held = old_record.get("statements")
+                    record["statements"] = held if held and not statements.due_record(held, int(now.timestamp())) else (statements_fn(symbol) or held or {})
     for symbol, record, error in results:
         if record is not None:
             try:
@@ -195,6 +202,7 @@ def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, l
             index[symbol] = {"at": stamp, "ok": False, "error": error}
             continue
         record["dividend_check"] = dividends.cross_check(record.get("dividend"), record.get("price"), (quotes.get(symbol) or {}).get("dividend_rate"))
+        record["provenance"], record["provenance_ok"] = provenance.build(record, int(now.timestamp()))
         if lists_fn:
             lists_fn([record])                          # the lists (Oversold, Low debt and so on) the curated stocks get
         shards[shard_of(symbol)][symbol] = record

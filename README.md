@@ -1,6 +1,6 @@
 # Stock Signals
 
-A free, installable web app that shows Buy / Hold / Sell signals for Indian (NSE) and US stocks,
+A free, installable web app that shows Buy / Hold / Sell signals for Indian (NSE) stocks,
 with news, buying and selling pressure, dividends, risk, IPOs and a backtest for every stock.
 It runs on GitHub only: GitHub Actions refreshes the data every 15 minutes, GitHub Pages hosts the site.
 
@@ -10,18 +10,17 @@ It is not investment advice. Signals come from fixed rules on free, delayed data
 
 | Feature | Source | Notes |
 |---|---|---|
-| Prices, signals, patterns, risk, backtest | Yahoo Finance (free), cross-checked against the NSE end-of-day file (India) and Cboe delayed-quote history (US) | Prices can be up to 15 minutes late. The cross-check covers completed sessions; see Price accuracy below |
+| Prices, signals, patterns, risk, backtest | Yahoo Finance (free), cross-checked against the NSE end-of-day file | Prices can be up to 15 minutes late. The cross-check covers completed sessions; see Price accuracy below |
 | News | Google News | Shown as published, with source and age. No good-or-bad tone is worked out from the words. The stock comes first: a headline is attached to a stock only if it is clearly about the company: the full name, a ticker that is not an ordinary word, or a single name word together with business wording (shares, results, Q2, dividend). Stories about people or sports that share a name, rating headlines that name a bank only as the one giving the rating, lists and roundups, and headlines about more than one listed company are ignored. A headline is "fresh", and can be sent as an alert, for 6 hours |
 | Buying / selling pressure | Volume (Chaikin Money Flow, up-volume share) | A proxy. The exchange order book is not published for free |
 | NSE delivery % and bulk/block deals | NSE end-of-day files | India only, updated after each trading day |
 | Upcoming events | Yahoo Finance calendar, plus estimates from each stock's own dividend history | Results dates, ex-dividend dates and dividend payment dates. Each is labelled "unconfirmed" (Yahoo's figure) or "estimated". Recent splits come from price history |
 | Dividends | Actual payments from Yahoo | Frequency, amount, 12-month and recurring yield, specials, overdue payments |
 | Fundamentals and peers | Yahoo quoteSummary | Refreshed once a day. Shows "unavailable" when missing |
-| New listings | NSE equity list and Nasdaq/NYSE symbol list | Added to the "New listings" list on their own. Signals start after about 60 trading days |
+| New listings | NSE equity list | Added to the "New listings" list on their own. Signals start after about 60 trading days |
 | India IPOs | Investorgain's public IPO table (robots.txt allows it), read at most once an hour | Open, close, allotment and listing dates, price band, lot size, subscription, grey-market premium (GMP), estimated listing price and profit or loss per lot. Past IPOs show the actual listing price and gain |
 | GMP cross-check | Google News headlines that name the IPO and quote a premium | Flags "news agrees" or "news differs". GMP is an unofficial rumour and can be wrong |
-| US IPO calendar | Nasdaq | Date, price range, size |
-| Market conditions, breadth, sectors | Computed from the index (Nifty 50, S&P 500), its volatility index and the stocks in this app's list | Seven simple checks worth +1, 0 or -1 each, advancers and decliners, share of stocks above their 20/50/200-day averages, sector moves over 1, 5 and 20 days. Breadth and sectors cover this app's list, not the whole exchange |
+| Market conditions, breadth, sectors | Computed from the index (Nifty 50), its volatility index and the stocks in this app's list | Seven simple checks worth +1, 0 or -1 each, advancers and decliners, share of stocks above their 20/50/200-day averages, sector moves over 1, 5 and 20 days. Breadth and sectors cover this app's list, not the whole exchange |
 | Lists | Computed daily | Government-backed, high dividend, low debt, low volatility, momentum, oversold, near 52-week high, near 52-week low, delivery buying, sectors |
 
 ## What is not automatic
@@ -33,7 +32,7 @@ It is not investment advice. Signals come from fixed rules on free, delayed data
   robots.txt disallows. This project does not try to get around either, so Investorgain is the only
   source for Indian IPO dates and GMP. If its page layout changes, the parser returns nothing instead of
   guessing and the app keeps showing the last good data with a warning.
-* Order book depth, real-time ticks, and insider or bulk-deal data for the US.
+* The US market: US stocks, the S&P 500 list, the US IPO calendar and the US close brief were removed. Global indexes (S&P 500, Nasdaq, US VIX, 10-year yield) are still shown as market context.
 * Alerts when the app is closed need the optional Telegram setup (see Alerts below).
 
 ## Set it up (about 10 minutes)
@@ -227,14 +226,14 @@ repeated.
 
 ## Every-stock coverage, briefs and index alerts
 
-* **Full analysis (readings, backtests):** the 200 Nifty 200 stocks (plus Groww) and 41 US stocks in `config/universe.json`. Refresh the list with
+* **Full analysis (readings, backtests):** the 200 Nifty 200 stocks (plus Groww) in `config/universe.json`. Refresh the list with
   `python tools/update_universe.py`; existing entries are never changed.
   **The list also updates itself:** once a day from 10:00 IST (`engine/universe_sync.py`) the app reads the NSE's Nifty 200 list and adds any
   stock it does not yet analyse (no cap), kept in the saved state, so `config/universe.json` is not rewritten. Nothing is ever removed.
   A failed or refused download is retried after an hour, never worked around.
-* **Every other listed stock:** all ~2,170 other NSE equity-series stocks and the rest of the S&P 500 (`engine/wide.py`) get live quotes in
-  batches of 100, factual **mover** alerts (a move of 8% India / 6% US or more, a volume surge of 3x average on a 2%+ move, a new 52-week high
-  or low; liquid stocks). **Penny and small stocks are included** with higher bars (12% India / 10% US, or 5x volume on a 5%+ move, no 52-week alerts), an
+* **Every other listed stock:** all ~2,170 other NSE equity-series stocks (`engine/wide.py`) get live quotes in
+  batches of 100, factual **mover** alerts (a move of 8% or more, a volume surge of 3x average on a 2%+ move, a new 52-week high
+  or low; liquid stocks). **Penny and small stocks are included** with higher bars (12%, or 5x volume on a 5%+ move, no 52-week alerts), an
   average-turnover floor so a handful of trades cannot raise an alert, a "small stock" label, and at most 3 of a run's mover alerts; their own headlines looked up **stock by stock** in a rotating slice of 50 per run (stocks that just moved
   first), so the list is covered every few hours. Deals and official event dates cover every NSE stock.
 * **Every listed stock is in the table** (`engine/catalog.py`). The dashboard loads only `data.json` (the curated list) and a small `index.json`
@@ -260,8 +259,7 @@ repeated.
   group company ("NTPC Green") is not matched to its parent ("NTPC").
 * **Index alerts:** moves past 1, 2 and 3 percent, 52-week highs and lows, and volatility indexes past a level, for the main NSE indexes (while
   the market is open) and the global ones (once per session).
-* **Briefs:** India pre-open (09:08 to 09:40 IST), post-close (16:00 to 19:30) and institutional flows (18:30 to 22:00), and the US close
-  (02:45 to 06:00 IST), each sent once per day from the exchange's own figures. Not sent when the data is not there.
+* **Briefs:** India pre-open (09:08 to 09:40 IST), post-close (16:00 to 19:30) and institutional flows (18:30 to 22:00), each sent once per day from the exchange's own figures. Not sent when the data is not there.
 * **Short alert wording:** indicator lines are abbreviated (P>20D, 50D<200D, RSI 61 normal) with a key; the site keeps the full wording.
 * **Survivorship bias:** still not resolved and never claimed to be. Free data has no delisted prices or point-in-time index membership. If
   you have such files, `tools/survivorship_probe.py` tests them with the same rules, apart from the published figures.
@@ -276,19 +274,15 @@ tracked or not, as soon as they appear. Only the 122 tracked stocks (plus new li
 
 Details and evidence: `docs/audit-followup-2026-11-16.md`.
 
-* `python tools/verify_market_data.py --volume` checks the deployed prices (and NSE volumes) against the NSE end-of-day file and the
-  Cboe history, same session only. Not-yet-published references give UNVERIFIED, never a pass or a fail.
-* `python tools/check_production.py --cache signals-v34` reads what the deployed site published (data freshness, the NSE feed and US IPO
-  status as the Actions run saw them, stale handling, the service-worker cache name) and prints PASS, FAIL or UNVERIFIED for each. It cannot read
+* `python tools/verify_market_data.py --volume` checks the deployed prices (and NSE volumes) against the NSE end-of-day file, same session only. Not-yet-published references give UNVERIFIED, never a pass or a fail.
+* `python tools/check_production.py --cache signals-v37` reads what the deployed site published (data freshness, the NSE feed
+  as the Actions run saw it, stale handling, the service-worker cache name) and prints PASS, FAIL or UNVERIFIED for each. It cannot read
   the Actions logs, which need a login, so "error logged" stays UNVERIFIED unless you read the run log yourself.
 * `python tools/strategy_report.py` measures the two rules against buy-and-hold (drawdown, downside deviation, Sharpe, Sortino,
-  Calmar, exposure, holding period, bull/bear/sideways) separately for NSE and US stocks, with dividends included for both.
-* `python tools/build_membership.py` refreshes the S&P 500 addition dates used to keep a backtest from using years before a stock
-  joined the index. Survivorship bias is not removed and is never claimed to be.
-* US IPO calendar: Nasdaq refuses automated requests (HTTP 403). The failure is logged, retried only every 6 hours, and an old list
-  is shown as stale with its original date, never as current.
+  Calmar, exposure, holding period, bull/bear/sideways) for NSE stocks, with dividends included.
+* Survivorship bias is not removed and is never claimed to be.
 * Event dates: Indian dates are checked against the NSE's own announcement feeds (confirmed, different official date, or
-  unverified with a link and the last check time); US dates are never confirmed.
+  unverified with a link and the last check time).
 
 ## Events tab
 
@@ -342,21 +336,58 @@ Each stock's page also has an "Upcoming events" section and lists any splits of 
 ## Price accuracy
 
 Yahoo is the main price source, so the build checks it against an independent one on every run: the **NSE's official
-end-of-day file** for Indian stocks (the exchange's own closing price) and **Cboe's public delayed-quote history** for US
-stocks. The closing prices of the last completed sessions are compared date by date. Within 0.5% is a match, 0.5% to 2% a
+end-of-day file** (the exchange's own closing price). The closing prices of the last completed sessions are compared date by date. Within 0.5% is a match, 0.5% to 2% a
 small difference, and more than 2% a disagreement. A stock whose prices disagree gets a warning on its page and **no new
 alerts** until the sources agree again. The Market tab shows the result for each source: stocks checked, how many match,
 median and largest difference, and the latest session compared.
 
 * This verifies completed sessions. The live price during the session comes from Yahoo alone: the NSE blocks scripted
   access to live prices, and no other free source offers them.
-* Cboe's robots.txt cannot be read by this project, so its feed is used gently: one request at a time with a pause, a
-  dozen stocks per run, once per day per stock, stopping at the first "slow down" answer. Stocks it does not cover are
-  shown as not covered, never as matching.
+* A price feed that ends a session before the NSE file (the file has a newer date than Yahoo's series) is marked **behind**: it gets no new
+  alerts and no tracked readings until it catches up. A clock check does the same when the feed lacks the session that must be complete by now
+  (Yahoo's daily series was seen to miss the just-finished session from midnight IST until about 08:30 IST). The NSE file history is
+  topped up with the newest sessions on every run (it was once frozen on the day it first filled, which hid this).
+
+## Feature map and data provenance
+
+| Capability | Where | Status |
+|---|---|---|
+| Daily OHLCV | Yahoo daily bars (5 years) feed every indicator, backtest and level; cross-checked against the NSE end-of-day file | Yes. The bars are used, not republished |
+| Historical financial statements | `engine/statements.py`: quarterly (8) and yearly (6) revenue, operating income, EBITDA, net income, diluted EPS, plus yearly equity, debt and cash flow, from Yahoo's fundamentals time series | Yes, shown on the Fundamentals tab of a stock |
+| Automatic quarterly results ingestion | The same module reads statements a few stocks per run: never read -> now; newest quarter older than 100 days (results due) -> every 2 days; otherwise weekly. A failed read keeps the earlier figures | Yes (curated stocks every run, the others as they are analysed) |
+| Technical indicators | `engine/signals.py`; checked against independent code and TA-Lib | Yes |
+| Fundamental quality and valuation score | Fixed bands on profit margin, revenue growth, debt, return on equity and P/E against the sector median (`site/ipo.js`), on every stock's Fundamentals tab | Yes, worded as "Stronger / Mixed / Weaker fundamentals" |
+| Breakout and momentum scanners | Lists "Breakouts" (closed above the 20-day high), "Momentum leaders", "Near 52-week high/low", "Oversold", pattern and technical filters | Yes |
+| Combined ranking engine | Stock screens: goal, horizon (short, long or both), risk, market -> ranked stocks from readings, fundamentals, dividends, volatility | Yes |
+| Dashboard, alerts, historical performance | Signals, Market (alerts, data status, price accuracy), Track record, evidence strip | Yes |
+
+**Horizon:** Short-term (weeks view), Long-term (months-to-years view) or Both. With Both the table shows both readings; a stock counts as
+bullish or bearish only when the two views agree, anything else is mixed, and the score is the average. The screens blend 50/50.
+
+**Source, timestamp and freshness on every figure.** Each full stock record carries `provenance` (`engine/provenance.py`): per group of figures
+(price, indicators, closing-price cross-check, live cross-check, fundamentals, statements, dividends, headlines) the source, the data date, the
+time it was read, its age and a state: current, ageing, not current, verified, disputed, not cross-checked or unknown. The stock page shows it as
+"Data sources and freshness". `provenance_ok` is false when the price or indicators are not current (the series lacks the session that must be
+complete by now, or the NSE file or live snapshot disputes it); the table then says "data not current" and no alert or tracked reading is made on that
+stock. Fundamentals carry the period they describe (`most_recent_quarter`) as well as when they were read.
+
+## Second sources for prices and indicators
+
+| What | First source | Second source | Result when last tested |
+|---|---|---|---|
+| Completed-session close (EOD analysis) | Yahoo daily bars | NSE UDiFF end-of-day file (about 16:30 IST), with the full bhavcopy as fallback (about 23:55 IST, also carries delivery data) | Closes and volumes identical to Yahoo on 75 stock-sessions; the two NSE files agree on 13,782 rows |
+| Live price (biggest movers) | Yahoo | NSE live snapshot (`engine/nse_live.py`): the NSE's own gainers and losers lists, about 150 stocks per run, two requests | 30 stocks on 2026-11-20 about 14:50 IST: median difference 0.05%, largest 0.48% |
+| Technical indicators | `engine/signals.py` | `tools/verify_indicators.py` (independent code) and `tools/verify_talib.py` (TA-Lib) | SMA, RSI, MACD, ATR agree with TA-Lib to about 1e-13 on 15 stocks |
+| Fundamentals and dividends | Yahoo | none: NSE and BSE data APIs refuse scripts and no free official source was found for Indian fundamentals | Shown as Yahoo reports them, never described as verified |
+
+A live price more than 3% away from the NSE snapshot gets no mover alert and no new alert on that stock; 1% to 3% is shown as a small difference.
+The snapshot lists only the biggest movers, so most stocks have no live check and show none. `engine/nse_live.py` pauses itself after a refusal
+(HTTP 401 or 403) and never works around it. Libraries such as pandas, NumPy, VectorBT and Backtesting.py are not used by the app (it runs on
+the Python standard library); TA-Lib is a development check only.
 
 ## Market tab and data status
 
-The Market tab shows market conditions for India and the United States (seven plain checks on the main index: price against
+The Market tab shows market conditions for India (seven plain checks on the main index: price against
 its 20 and 50-day averages, the 50 against the 200-day average, the 20-day move, trend strength (ADX), breadth and the
 volatility index), index cards with a 30-day line, breadth, sector moves, alerts and world headlines. These describe how
 the market is behaving now. They are not forecasts and not calls on any stock. Each block carries a small source tag:
@@ -407,13 +438,13 @@ Then open http://127.0.0.1:8765/. Python 3.10+ and Node 18+ are the only require
 * **Release checks:** `docs/release-checklist.md` lists every check to do before a push, and `python tools/qa_sweep.py <build folder>` runs the data and file
   ones (unique symbols, readings equal in every file, plausible ratios, dividend sums, size budgets) and exits 1 on a failure.
 * **Which stocks are covered:** every stock on the NSE main board (EQ series, plus the BE and BZ series, many of them penny stocks, shown with their series), the
-  NSE SME platform (Emerge) and the S&P 500, as long as Yahoo has a quote for it (about 3,100 in all). Companies listed only on the BSE are not covered: the BSE
+  NSE SME platform (Emerge), as long as Yahoo has a quote for it (about 2,400 in all). Companies listed only on the BSE are not covered: the BSE
   publishes no list the app can read, so there is nothing to build the list from. A search that finds nothing says so.
 * **The chip counts match the table:** a count on a category or sector chip is the number of stocks you would see if you picked it, with the market, Reading,
   technical filters and search that are on already applied. A "Filters on:" row above the table lists every filter that is on (market, Reading, search,
   each technical filter), each with a ✕ to remove it. Filters are remembered in the browser, so one set last time still applies when you come back.
 * **Layout of the Signals page:** on a screen 1100 px wide or more, the categories (lists and screens) are a column on the left of the table and the sectors
-  a column on the right, both staying in view as you scroll; India and the US sit side by side from 1560 px and stack below that. On a phone or small
+  a column on the right, both staying in view as you scroll. On a phone or small
   window they are the two horizontal strips above the table, as before.
 * **Technical filters** (a panel under the list chips on the Signals page, working on every listed stock that has been analysed): RSI (oversold, neutral,
   overbought), price above or below the 20, 50 and 200-day averages, MACD above or below its signal line, 6-month return, position in the 52-week range
@@ -443,3 +474,6 @@ Then open http://127.0.0.1:8765/. Python 3.10+ and Node 18+ are the only require
 * **Volatility risk level:** 2 x the 14-day average true range below the price. Prices can gap past it.
 
 Never invest money you cannot afford to lose.
+
+### Stale prices and the track record
+A call is only recorded when its reference price traded on the day of the alert. Two guards: a price series that ends before the day of its own last trade is fetched again and, if it still lags, no call is recorded at that price (`series_lag`); and any call whose price never traded on its alert day is settled as "void" (not entered), not as a failure. The v3 results (9 of 20 stops and 1 target on stale prices) are kept in the record but not counted.

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from .fetch import FetchError
 
-VERSION = 2          # raised when fields are added, so answers cached by an older version are fetched again
+VERSION = 3          # raised when fields are added, so answers cached by an older version are fetched again
 MODULES = "summaryDetail,defaultKeyStatistics,financialData,assetProfile,price,calendarEvents"
 URL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules=" + MODULES
 
@@ -43,6 +43,8 @@ def parse_summary(payload):
         return {}
     debt = _raw(result, "financialData", "debtToEquity")
     return {
+        "most_recent_quarter": _day(((result.get("defaultKeyStatistics") or {}).get("mostRecentQuarter"))),
+        "last_fiscal_year_end": _day(((result.get("defaultKeyStatistics") or {}).get("lastFiscalYearEnd"))),
         "sector": _raw(result, "assetProfile", "sector"),
         "industry": _raw(result, "assetProfile", "industry"),
         "market_cap": _raw(result, "price", "marketCap") or _raw(result, "summaryDetail", "marketCap"),

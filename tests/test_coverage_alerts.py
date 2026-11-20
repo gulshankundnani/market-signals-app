@@ -17,10 +17,6 @@ class UniverseTests(unittest.TestCase):
     SP = ('<table id="constituents"><tr><th>Symbol</th><th>Security</th><th>GICS Sector</th></tr>'
           '<tr><td><a>AAPL</a></td><td>Apple Inc.</td><td>Information Technology</td></tr><tr><td><a>BRK.B</a></td><td>Berkshire Hathaway</td><td>Financials</td></tr></table>')
 
-    def test_sp500_table(self):
-        self.assertEqual(wide.parse_sp500(self.SP), {"AAPL": {"name": "Apple Inc.", "sector": "Information Technology"}, "BRK-B": {"name": "Berkshire Hathaway", "sector": "Financials"}})
-        self.assertEqual(wide.parse_sp500(""), {})
-
     def test_short_names_drop_the_legal_suffix(self):
         self.assertEqual(wide.short_name("Billionbrains Garage Ventures Limited"), "Billionbrains Garage Ventures")
         self.assertEqual(wide.short_name("Apple Inc."), "Apple")
@@ -28,8 +24,8 @@ class UniverseTests(unittest.TestCase):
         self.assertEqual(wide.short_name("Limited"), "Limited")
 
     def test_the_wide_list_leaves_out_the_curated_stocks(self):
-        out = wide.build_universe({"TCS.NS": "Tata Consultancy Services Limited", "GROWW.NS": "Billionbrains Garage Ventures Limited"}, {"AAPL": {"name": "Apple Inc."}}, {"TCS.NS"})
-        self.assertEqual([(s["symbol"], s["market"]) for s in out], [("GROWW.NS", "IN"), ("AAPL", "US")])
+        out = wide.build_universe({"TCS.NS": "Tata Consultancy Services Limited", "GROWW.NS": "Billionbrains Garage Ventures Limited"}, {"TCS.NS"})
+        self.assertEqual([(s["symbol"], s["market"]) for s in out], [("GROWW.NS", "IN")])
 
     def test_refresh_once_a_day_and_keep_the_old_list_if_a_source_fails(self):
         csv_text = "SYMBOL,NAME OF COMPANY, SERIES,DATE OF LISTING\nGROWW,Billionbrains Garage Ventures Limited, EQ,12-Nov-2025\n"
@@ -37,29 +33,25 @@ class UniverseTests(unittest.TestCase):
 
         def fetch(url):
             calls.append(url)
-            return csv_text.encode() if "EQUITY_L" in url else self.SP.encode()
+            return csv_text.encode()
 
         wide_list, cache = wide.load_universe(None, NOW_IN_MORNING, set(), fetch, lambda s: None)
-        self.assertEqual(len(wide_list), 3)
+        self.assertEqual([s["symbol"] for s in wide_list], ["GROWW.NS"])
         wide.load_universe(cache, NOW_IN_MORNING.replace(hour=5), set(), fetch, lambda s: None)
-        self.assertEqual(len(calls), 3, "a fresh list is not fetched again")   # the NSE equity list, the NSE SME list and the S&P 500
+        self.assertEqual(len(calls), 2, "a fresh list is not fetched again")   # the NSE equity list and the NSE SME list
 
         def broken(url):
             raise FetchError("down")
 
         again, kept = wide.load_universe(cache, NOW_IN_MORNING.replace(day=19), set(), broken, lambda s: None)
-        self.assertEqual(len(again), 3)
+        self.assertEqual(len(again), 1)
         self.assertEqual(kept, cache)
 
-        def us_down(url):
-            if "wikipedia" in url:
-                raise FetchError("down")
-            return csv_text.encode()
-
-        mixed, _ = wide.load_universe(cache, NOW_IN_MORNING.replace(day=19), set(), us_down, lambda s: None)
-        self.assertEqual(sorted({s["market"] for s in mixed}), ["IN", "US"])                 # the old US list is kept while the new Indian one is used
-        _, partial_cache = wide.load_universe(cache, NOW_IN_MORNING.replace(day=19), set(), us_down, lambda s: None)
-        self.assertEqual(partial_cache["fetched_at"], cache["fetched_at"], "a partial refresh is not stamped as done, so it is retried next run")
+    def test_an_old_cached_list_drops_any_non_indian_stock(self):
+        cache = {"fetched_at": NOW_IN_MORNING.isoformat(timespec="seconds"), "v": wide.LIST_VERSION,
+                 "list": [{"symbol": "AAPL", "name": "Apple", "market": "US"}, {"symbol": "GROWW.NS", "name": "G", "market": "IN"}]}
+        out, _ = wide.load_universe(cache, NOW_IN_MORNING, set(), lambda u: b"", lambda s: None)
+        self.assertEqual([s["symbol"] for s in out], ["GROWW.NS"])
 
 
 class QuoteTests(unittest.TestCase):
@@ -280,10 +272,6 @@ class BriefTests(unittest.TestCase):
         self.assertEqual(sessions.due_windows(evening, {"in_postclose": "2026-11-17"}, ("IN",)), ["in_flows"])
         saturday = datetime(2026, 11, 21, 3, 45, tzinfo=timezone.utc)
         self.assertEqual(sessions.due_windows(saturday, {}, ("IN",)), [])
-        us = datetime(2026, 11, 17, 22, 0, tzinfo=timezone.utc)                       # 03:30 IST Wednesday
-        self.assertEqual(sessions.due_windows(us, {}, ("US",)), ["us_close"])
-        sunday_ist = datetime(2026, 11, 22, 22, 0, tzinfo=timezone.utc)               # Monday 03:30 IST: the US was shut on Sunday
-        self.assertEqual(sessions.due_windows(sunday_ist, {}, ("US",)), [])
 
     def test_preopen_parsing_keeps_equity_series_with_enough_turnover(self):
         def row(symbol, pct, price, turnover, series="EQ"):

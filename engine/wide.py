@@ -20,23 +20,20 @@ from datetime import datetime, timedelta
 from . import discover, news
 from .fetch import FetchError, http_get
 
-SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 QUOTE_URL = "https://query1.finance.yahoo.com/v7/finance/quote?symbols={symbols}"
 REFRESH_HOURS = 20
-LIST_VERSION = 3          # raised when the list's content rules change (version 2: the BE and BZ series are included), so a cached older list is rebuilt
+LIST_VERSION = 4          # raised when the list's content rules change (version 2: the BE and BZ series are included), so a cached older list is rebuilt
 BATCH = 100
 NEWS_PER_RUN = 50
 NEWS_WORKERS = 6
 MOVERS_PER_RUN = 8
 SEEN_HOURS = 36
 # Thresholds are plain statements of size, not judgements: nothing here says a move is good or bad.
-THRESHOLDS = {"IN": {"move": 8.0, "min_price": 10.0, "min_avg_volume": 50_000, "min_cap": 5e9},
-              "US": {"move": 6.0, "min_price": 5.0, "min_avg_volume": 300_000, "min_cap": 2e9}}
+THRESHOLDS = {"IN": {"move": 8.0, "min_price": 10.0, "min_avg_volume": 50_000, "min_cap": 5e9}}
 # Penny and small stocks (below the price, volume or size floors above) are included, with higher bars because they move a lot every day and a
 # little volume can move them. They still need some real trading: the average daily turnover must reach the floor, so a stock that hardly
 # trades cannot raise an alert with a handful of shares. They are labelled "small stock" and limited to MAX_SMALL_PER_RUN of the run's alerts.
-SMALL = {"IN": {"move": 12.0, "volume_move": 5.0, "min_avg_volume": 10_000, "min_turnover": 5e5},
-         "US": {"move": 10.0, "volume_move": 5.0, "min_avg_volume": 50_000, "min_turnover": 5e4}}
+SMALL = {"IN": {"move": 12.0, "volume_move": 5.0, "min_avg_volume": 10_000, "min_turnover": 5e5}}
 SMALL_VOLUME_RATIO = 4.0
 MAX_SMALL_PER_RUN = 3
 VOLUME_RATIO = 3.0
@@ -49,21 +46,6 @@ def _cells(row):
     return [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", c)).strip() for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, flags=re.S)]
 
 
-def parse_sp500(html):
-    """{ticker (Yahoo style): {"name", "sector"}} from Wikipedia's S&P 500 constituents table."""
-    table = re.search(r'<table[^>]*id="constituents"[^>]*>(.*?)</table>', html or "", flags=re.S)
-    out, header = {}, None
-    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", table.group(1) if table else "", flags=re.S):
-        cells = _cells(row)
-        if header is None:
-            if "Symbol" in cells and "Security" in cells:
-                header = (cells.index("Symbol"), cells.index("Security"), cells.index("GICS Sector") if "GICS Sector" in cells else None)
-            continue
-        if len(cells) > max(i for i in header if i is not None) and cells[header[0]]:
-            out[cells[header[0]].replace(".", "-")] = {"name": cells[header[1]], "sector": cells[header[2]] if header[2] is not None else None}
-    return out
-
-
 def short_name(name):
     """A company's name without its legal suffix, for a news query: 'Billionbrains Garage Ventures Limited' becomes 'Billionbrains Garage Ventures'."""
     previous = None
@@ -73,11 +55,10 @@ def short_name(name):
     return name or (original or "")
 
 
-def build_universe(nse_names, sp500, curated, series=None, listed=None):
-    """The wide list: [{"symbol", "name", "market"}] for every NSE and S&P 500 stock that is not in the curated list. series: {symbol: "BE"|"BZ"}."""
+def build_universe(nse_names, curated, series=None, listed=None):
+    """The wide list: [{"symbol", "name", "market"}] for every NSE stock that is not in the curated list. series: {symbol: "BE"|"BZ"}."""
     skip, series, listed = set(curated), series or {}, listed or {}
     wide = [{"symbol": s, "name": n, "market": "IN", **({"series": series[s]} if s in series else {}), **({"listed": listed[s]} if s in listed else {})} for s, n in sorted(nse_names.items()) if s not in skip]
-    wide += [{"symbol": s, "name": v["name"], "market": "US"} for s, v in sorted(sp500.items()) if s not in skip]
     return wide
 
 
@@ -90,8 +71,8 @@ def load_universe(state, now, curated, fetcher=http_get, log=print):
     except (TypeError, ValueError):
         fresh = False
     if fresh and cache.get("list") and cache.get("v") == LIST_VERSION:
-        return [s for s in cache["list"] if s["symbol"] not in set(curated)], cache
-    nse, sp, series, sme, listed = {}, {}, {}, {}, {}
+        return [s for s in cache["list"] if s["symbol"] not in set(curated) and s.get("market") == "IN"], cache
+    nse, series, sme, listed = {}, {}, {}, {}
     try:
         text = fetcher(discover.NSE_LIST_URL).decode("utf-8", "replace")
         nse, series = discover.nse_company_names(text), discover.nse_series(text)
@@ -108,22 +89,14 @@ def load_universe(state, now, curated, fetcher=http_get, log=print):
                 nse[symbol], series[symbol] = name, "SME"
     except FetchError as err:
         log(f"Wide universe: the NSE equity list failed ({str(err)[-60:]})")
-    try:
-        sp = parse_sp500(fetcher(SP500_URL).decode("utf-8", "replace"))
-    except FetchError as err:
-        log(f"Wide universe: the S&P 500 list failed ({str(err)[-60:]})")
     previous = cache.get("list") or []
-    wide = build_universe(nse, sp, curated, series, listed) if (nse or sp) else []
+    wide = build_universe(nse, curated, series, listed) if nse else []
     kept_sme = [s for s in previous if s.get("series") == "SME" and not any(w["symbol"] == s["symbol"] for w in wide)] if nse and not sme else []
     wide += kept_sme                                 # an SME list that failed to load does not drop the SME stocks already known
-    if not nse:                                      # keep the old Indian list rather than lose it
-        wide = [s for s in previous if s["market"] == "IN"] + [s for s in wide if s["market"] == "US"]
-    if not sp:
-        wide = [s for s in wide if s["market"] == "IN"] + [s for s in previous if s["market"] == "US"]
-    if not (nse or sp) or not wide:
-        return [s for s in previous if s["symbol"] not in set(curated)], cache
-    log(f"Wide universe: {sum(1 for s in wide if s['market'] == 'IN')} NSE and {sum(1 for s in wide if s['market'] == 'US')} US stocks beyond the curated list")
-    complete = bool(nse) and bool(sp)
+    if not nse or not wide:                          # keep the old Indian list rather than lose it
+        return [s for s in previous if s["symbol"] not in set(curated) and s["market"] == "IN"], cache
+    log(f"Wide universe: {len(wide)} NSE stocks beyond the curated list")
+    complete = bool(nse)
     # a partial refresh is used now but not stamped as done, so the missing source is asked for again on the next run
     return wide, {"fetched_at": now.isoformat(timespec="seconds") if complete else cache.get("fetched_at"), "list": wide, "v": LIST_VERSION}
 

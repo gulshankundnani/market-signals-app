@@ -5,7 +5,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 USER_AGENT = "Mozilla/5.0 (compatible; stock-signals/1.0)"
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={range}&interval=1d&events=div"
@@ -93,6 +93,7 @@ def clean_chart(payload, symbol, min_bars=MIN_BARS):
             "exchange": meta.get("fullExchangeName"),
             "name": meta.get("longName") or meta.get("shortName"),
             "market_time": meta.get("regularMarketTime"),
+            "gmtoffset": offset,
             "session_start": ((meta.get("currentTradingPeriod") or {}).get("regular") or {}).get("start"),
             "session_end": ((meta.get("currentTradingPeriod") or {}).get("regular") or {}).get("end"),
         },
@@ -120,20 +121,68 @@ def trim_last_bar(bars):
     return {k: list(v[:-1]) for k, v in bars.items()}
 
 
+def series_lags(chart):
+    """True when Yahoo's daily series ends before the day of its own last trade: the newest session's bar is missing from the series.
+
+    Seen in the track record: calls recorded after a close carried the previous session's close as their price, in whole runs at a time
+    (for example 8 of 10 Indian calls in one run, 5 of 5 US calls in another), while the exchange had already traded and closed."""
+    bars, meta = chart["bars"], chart["meta"]
+    traded = meta.get("market_time")
+    if not bars["d"] or not isinstance(traded, (int, float)):
+        return False
+    traded_day = datetime.fromtimestamp(traded + (meta.get("gmtoffset") or 0), timezone.utc).strftime("%Y-%m-%d")
+    return bars["d"][-1] < traded_day
+
+
+IST_OFFSET = 19800
+INDIA_FINAL_MINUTE = 16 * 60          # 15:30 close plus half an hour for the day's bar to be final
+
+
+def expected_session(now_ts):
+    """ISO date of the newest NSE session that should be complete in Yahoo's series at now_ts (weekdays only; an exchange holiday
+    makes this one day too new, which only pauses new readings for that day and is the safe direction).
+
+    Needed because Yahoo's daily series was seen to miss the just-finished session for hours after the local day rolled over (00:00 IST
+    to about 08:30 IST), and Yahoo's own metadata cannot be trusted to say so: the clock can."""
+    local = datetime.fromtimestamp(now_ts + IST_OFFSET, timezone.utc)
+    day = local.date()
+    if local.weekday() >= 5 or local.hour * 60 + local.minute < INDIA_FINAL_MINUTE:
+        day -= timedelta(days=1)
+    while day.weekday() >= 5:
+        day -= timedelta(days=1)
+    return day.isoformat()
+
+
 def fetch_chart(symbol, range_="5y", min_bars=MIN_BARS, short_retries=1):
-    """Download and clean one stock's history. A too-short answer is retried once after a pause."""
+    """Download and clean one stock's history. A too-short answer is retried once after a pause.
+
+    A series that lags its own last trade is fetched once more with a changed URL (so no cache can answer it). If it still lags, the result is
+    returned with chart["lagging"] = True so the caller does not record a call at its stale price."""
     url = CHART_URL.format(symbol=urllib.parse.quote(symbol), range=range_)
+    chart = None
     for attempt in range(short_retries + 1):
         try:
             payload = json.loads(http_get(url))
         except (ValueError, UnicodeDecodeError) as err:
             raise FetchError(f"{symbol}: bad JSON ({err})")
         try:
-            return clean_chart(payload, symbol, min_bars)
+            chart = clean_chart(payload, symbol, min_bars)
+            break
         except ShortSeriesError:
             if attempt >= short_retries:
                 raise
             time.sleep(2)
+    chart["lagging"] = series_lags(chart)
+    if chart["lagging"]:
+        time.sleep(2)
+        try:
+            again = clean_chart(json.loads(http_get(url + f"&_={int(time.time())}")), symbol, min_bars)
+            again["lagging"] = series_lags(again)
+            if len(again["bars"]["d"]) >= len(chart["bars"]["d"]):
+                chart = again
+        except (ValueError, UnicodeDecodeError, FetchError):
+            pass
+    return chart
 
 
 class YahooSession:

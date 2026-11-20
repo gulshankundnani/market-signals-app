@@ -27,7 +27,7 @@ class CompareTests(unittest.TestCase):
     def test_only_dates_both_sources_have_are_compared_and_none_means_unverified(self):
         result = verify.compare(bars([("d1", 100.0), ("d9", 1.0)]), {"d1": 100.0, "d2": 5.0})
         self.assertEqual((result["n"], result["status"]), (1, "match"))
-        self.assertIsNone(verify.compare(bars([("d1", 100.0)]), {"d5": 100.0}))
+        self.assertIsNone(verify.compare(bars([("d9", 100.0)]), {"d5": 100.0}))
         self.assertIsNone(verify.compare(bars([("d1", 100.0)]), {}))
 
     def test_only_the_latest_sessions_are_compared(self):
@@ -54,93 +54,29 @@ class SummariseTests(unittest.TestCase):
         self.assertEqual(s["source"], "NSE end-of-day file")
 
     def test_nothing_verified_gives_no_percentages(self):
-        s = verify.summarise({"A": None}, "US")
+        s = verify.summarise({"A": None}, "IN")
         self.assertEqual((s["verified"], s["agreement_pct"], s["median_diff_pct"], s["as_of"]), (0, None, None, None))
 
 
 class CrossCheckTests(unittest.TestCase):
     def test_each_market_uses_its_own_source_and_carried_or_unknown_stocks_are_skipped(self):
-        records = [{"symbol": "AAA.NS", "market": "IN"}, {"symbol": "BBB.NS", "market": "IN"}, {"symbol": "UUU", "market": "US"},
+        records = [{"symbol": "AAA.NS", "market": "IN"}, {"symbol": "BBB.NS", "market": "IN"},
                    {"symbol": "OLD.NS", "market": "IN", "carried": True}, {"symbol": "ZZZ", "market": "US"}]
-        all_bars = {s: bars([("d1", 100.0), ("d2", 100.0)]) for s in ("AAA.NS", "BBB.NS", "UUU", "OLD.NS", "ZZZ")}
+        all_bars = {s: bars([("d1", 100.0), ("d2", 100.0)]) for s in ("AAA.NS", "BBB.NS", "OLD.NS", "ZZZ")}
         india = {"d1": {"AAA": 100.0, "BBB": 150.0}, "d2": {"AAA": 100.0, "BBB": 150.0}}
-        us = {"UUU": {"d1": 100.0, "d2": 100.0}}
-        per_symbol, summary = verify.cross_check(records, all_bars, india, us)
+        per_symbol, summary = verify.cross_check(records, all_bars, india)
         self.assertEqual(per_symbol["AAA.NS"]["status"], "match")
         self.assertEqual(per_symbol["BBB.NS"]["status"], "mismatch")
-        self.assertEqual(per_symbol["UUU"]["source"], "Cboe delayed-quote history")
         self.assertNotIn("OLD.NS", per_symbol)
         self.assertNotIn("ZZZ", per_symbol)
         self.assertEqual((summary["IN"]["verified"], summary["IN"]["mismatch"]), (2, 1))
-        self.assertEqual((summary["US"]["stocks"], summary["US"]["verified"], summary["US"]["unverified"]), (2, 1, 1))
+        self.assertNotIn("US", summary)
 
     def test_trusted_drops_only_the_disputed_stocks(self):
         per_symbol = {"A": {"status": "match"}, "B": {"status": "mismatch"}, "C": {"status": "minor"}}
         self.assertEqual(verify.trusted(["A", "B", "C", "D"], per_symbol), ["A", "C", "D"])
 
 
-class CboeTests(unittest.TestCase):
-    def test_parsing_keeps_the_latest_sessions_and_skips_bad_rows(self):
-        rows = [{"date": f"2026-11-{n:02d}", "close": 100 + n} for n in range(1, 21)]
-        rows += [{"date": "2026-11-21", "close": 0}, {"date": "2026-11-22"}, {"close": 5}, {"date": "2026-11-23", "close": "x"}]
-        out = verify.parse_cboe_history({"data": rows}, keep=24)
-        self.assertEqual(len(out), 20)
-        self.assertEqual(out["2026-11-20"], 120.0)
-        self.assertEqual(verify.parse_cboe_history({"data": rows}, keep=10), {f"2026-11-{n:02d}": 100.0 + n for n in range(11, 21)})
-        for junk in (None, {}, {"data": None}, [], "x"):
-            self.assertEqual(verify.parse_cboe_history(junk), {})
-
-    def test_the_symbol_form_matches_cboes(self):
-        self.assertEqual(verify._cboe_symbol("BRK-B"), "BRK.B")
-        self.assertEqual(verify._cboe_symbol("aapl"), "AAPL")
-
-    def test_each_stock_is_fetched_once_a_day_gently_and_in_batches(self):
-        calls, pauses = [], []
-
-        def fetcher(symbol):
-            calls.append(symbol)
-            return {"2026-11-12": 1.0} if symbol != "BAD" else {}
-
-        symbols = ["AAA", "BAD", "CCC", "DDD", "EEE"]
-        first = verify.sync_us({}, "2026-11-16", symbols, fetcher, per_run=3, sleep=pauses.append)
-        self.assertEqual(calls, ["AAA", "BAD", "CCC"], "at most per_run stocks in one run")
-        self.assertEqual(len(pauses), 2, "a pause between requests, none before the first")
-        self.assertEqual(sorted(first["closes"]), ["AAA", "CCC"])
-        self.assertEqual(first["no_data"], ["BAD"])
-        second = verify.sync_us(first, "2026-11-16", symbols, fetcher, per_run=3, sleep=pauses.append)
-        self.assertEqual(calls[3:], ["DDD", "EEE"], "the next run picks up the rest")
-        self.assertEqual(sorted(second["closes"]), ["AAA", "CCC", "DDD", "EEE"])
-        again = verify.sync_us(second, "2026-11-16", symbols, fetcher, sleep=pauses.append)
-        self.assertEqual((again, len(calls)), (second, 5), "nothing more to fetch the same day")
-
-    def test_a_rate_limit_stops_the_round_at_once_and_keeps_what_was_gathered(self):
-        calls = []
-
-        def fetcher(symbol):
-            calls.append(symbol)
-            if symbol == "CCC":
-                raise verify.RateLimited("429")
-            return {"2026-11-12": 1.0}
-
-        out = verify.sync_us({}, "2026-11-16", ["AAA", "BBB", "CCC", "DDD"], fetcher, sleep=lambda s: None)
-        self.assertEqual(calls, ["AAA", "BBB", "CCC"], "no request after the limit")
-        self.assertEqual(sorted(out["closes"]), ["AAA", "BBB"])
-        self.assertNotIn("CCC", out["refreshed"])
-        nothing = verify.sync_us({}, "2026-11-16", ["AAA"], lambda s: (_ for _ in ()).throw(verify.RateLimited("429")), sleep=lambda s: None)
-        self.assertEqual(nothing, {})
-
-    def test_yesterdays_history_is_used_until_a_stock_is_refreshed(self):
-        old = {"day": "2026-11-15", "closes": {"AAA": {"2026-11-12": 1.0}}, "no_data": [], "refreshed": ["AAA"]}
-        out = verify.sync_us(old, "2026-11-16", ["AAA"], lambda s: (_ for _ in ()).throw(verify.RateLimited("429")), sleep=lambda s: None)
-        self.assertEqual(out, old, "rate limited before anything new: the old copy stays, so there is no gap")
-        out = verify.sync_us(old, "2026-11-16", ["AAA"], lambda s: {"2026-11-13": 2.0}, sleep=lambda s: None)
-        self.assertEqual(out["closes"]["AAA"], {"2026-11-13": 2.0})
-        self.assertEqual(out["day"], "2026-11-16")
-
-    def test_junk_in_the_saved_copy_is_ignored(self):
-        for junk in (None, "x", [], {"closes": None, "no_data": None, "refreshed": None}):
-            out = verify.sync_us(junk, "2026-11-16", ["AAA"], lambda s: {"d": 1.0}, sleep=lambda s: None)
-            self.assertEqual(out["closes"], {"AAA": {"d": 1.0}})
 
 
 class NseClosesTests(unittest.TestCase):
@@ -180,3 +116,53 @@ class NseClosesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BehindTests(unittest.TestCase):
+    def test_a_series_older_than_the_official_file_is_behind(self):
+        result = verify.compare(bars([("d1", 100.0), ("d2", 101.0)]), {"d1": 100.0, "d2": 101.0, "d3": 102.0})
+        self.assertEqual((result["status"], result["official_last"], result["yahoo_last"]), ("behind", "d3", "d2"))
+
+    def test_behind_series_have_no_alerts_and_no_calls(self):
+        self.assertEqual(verify.trusted(["A", "B", "C"], {"A": {"status": "behind"}, "B": {"status": "match"}}), ["B", "C"])
+        from engine import tracking
+        item = {"kind": "signal", "symbol": "A", "horizon": "short", "side": "buy", "announced": "x"}
+        self.assertEqual(tracking.make_calls([item], {"A": {"symbol": "A", "quality": {"status": "behind"}}}, 1), [])
+
+
+class FrozenHistoryTests(unittest.TestCase):
+    def test_a_full_history_still_picks_up_newer_sessions(self):
+        from datetime import date
+        from engine import exchange
+        held = {f"2026-11-{d:02d}": {"A": 1.0} for d in (6, 9, 10, 11, 12, 13)}
+        fetched = []
+        def fetcher(day):
+            fetched.append(day.isoformat())
+            return (day.isoformat(), {"A": {"close": 2.0}}) if day.isoformat() in ("2026-11-16", "2026-11-17") else None
+        out = exchange.sync_closes(held, date(2026, 11, 18), ["A"], fetcher=fetcher)
+        self.assertIn("2026-11-17", out)
+        self.assertIn("2026-11-16", out)
+        self.assertNotIn("2026-11-05", fetched)
+
+
+class UdiffTests(unittest.TestCase):
+    TEXT = ("TradDt,BizDt,Sgmt,Src,FinInstrmTp,FinInstrmId,ISIN,TckrSymb,SctySrs,OpnPric,HghPric,LwPric,ClsPric,TtlTradgVol\n"
+            "2026-11-19,2026-11-19,CM,NSE,STK,1,INE1,TCS,EQ,2367.00,2385.60,2327.70,2342.70,2471096\n"
+            "2026-11-19,2026-11-19,CM,NSE,STK,2,INE2,SGBJUN28,GB,1,1,1,13039.87,743\n"
+            "2026-11-19,2026-11-19,CM,NSE,STK,3,INE3,BAD,EQ,1,1,1,,5\n")
+
+    def test_only_eq_rows_with_a_close_are_read(self):
+        from engine import exchange
+        day, rows = exchange.parse_udiff(self.TEXT)
+        self.assertEqual(day, "2026-11-19")
+        self.assertEqual(list(rows), ["TCS"])
+        self.assertEqual((rows["TCS"]["close"], rows["TCS"]["volume"]), (2342.70, 2471096.0))
+        self.assertEqual(exchange.parse_udiff(""), (None, {}))
+
+    def test_the_full_bhavcopy_is_the_fallback(self):
+        from datetime import date
+        from unittest import mock
+        from engine import exchange
+        with mock.patch.object(exchange, "fetch_udiff", return_value=None), mock.patch.object(exchange, "fetch_bhavcopy", return_value=("d", {"A": {}})) as full:
+            self.assertEqual(exchange.fetch_eod(date(2026, 11, 19)), ("d", {"A": {}}))
+            full.assert_called_once()

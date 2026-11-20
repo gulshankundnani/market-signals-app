@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 
 from .fetch import FetchError, http_get
 
+UDIFF_URL = "https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{yyyymmdd}_F_0000.csv.zip"
 BHAVCOPY_URL = "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{ddmmyyyy}.csv"
 DEAL_URLS = {
     "bulk": "https://nsearchives.nseindia.com/content/equities/bulk.csv",
@@ -53,6 +54,42 @@ def parse_bhavcopy(text):
     return day, out
 
 
+def parse_udiff(text):
+    """Returns (iso_date, {symbol: {"close", "volume", "open", "high", "low"}}) for EQ-series stocks in the NSE's UDiFF end-of-day file.
+
+    This file appears about 16:30 IST, seven hours before the full bhavcopy with delivery data (about 23:55 IST); on 2026-11-19 its closes and
+    volumes were identical to the full file's on all 13,782 EQ rows over five days."""
+    out, day = {}, None
+    for row in _rows(text):
+        if row.get("SctySrs") != "EQ" or not row.get("TckrSymb"):
+            continue
+        close = _number(row.get("ClsPric", ""))
+        if not close or close <= 0:
+            continue
+        day = day or row.get("TradDt") or None
+        out[row["TckrSymb"]] = {"close": close, "volume": _number(row.get("TtlTradgVol", "")), "open": _number(row.get("OpnPric", "")),
+                                "high": _number(row.get("HghPric", "")), "low": _number(row.get("LwPric", ""))}
+    return day, out
+
+
+def fetch_udiff(day):
+    """One trading day from the UDiFF file. None on holidays, when not yet published, or when the answer is not the expected zip."""
+    import zipfile
+    try:
+        raw = http_get(UDIFF_URL.format(yyyymmdd=day.strftime("%Y%m%d")), retries=2)
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            text = archive.read(archive.namelist()[0]).decode("utf-8", "replace")
+    except (FetchError, zipfile.BadZipFile, KeyError, IndexError):
+        return None
+    iso, rows = parse_udiff(text)
+    return (iso, rows) if iso and rows else None
+
+
+def fetch_eod(day):
+    """The day's official closes: the UDiFF file first (earliest), the full bhavcopy if that is missing."""
+    return fetch_udiff(day) or fetch_bhavcopy(day)
+
+
 def fetch_bhavcopy(day):
     """Download one trading day. Returns None on holidays or when not yet published."""
     url = BHAVCOPY_URL.format(ddmmyyyy=day.strftime("%d%m%Y"))
@@ -64,43 +101,45 @@ def fetch_bhavcopy(day):
     return (iso, rows) if iso and rows else None
 
 
-def sync_delivery(history, today, symbols, fetcher=fetch_bhavcopy):
-    """Add missing recent trading days to history {iso_date: {symbol: [pct, trades]}}.
+def _catch_up(history, today, want, fetcher, store, max_days):
+    """Fill {iso_date: ...} with the newest published days, then back-fill until `want` days are held.
 
-    Walks back over weekdays until WANT_DATES days are held, fetching only days not yet stored.
-    Returns the updated history, trimmed to KEEP_DATES days and to the symbols we track.
-    """
+    Every weekday newer than the newest day already held is tried on every run (not-yet-published and holidays simply return None).
+    Stopping as soon as `want` days were held froze the history on the day it first filled: the cross-check then kept comparing old
+    sessions only and could never see a newer one (it was stuck on 2026-11-13 while 2026-11-19 had been published)."""
+    today_iso = today.strftime("%Y-%m-%d")
+    newest = max((d for d in history if d <= today_iso), default=None)
+    day = today
+    for _ in range(max_days):
+        iso = day.strftime("%Y-%m-%d")
+        if day.weekday() < 5 and iso not in history:
+            held = len([d for d in history if d <= today_iso])
+            if held < want or (newest is not None and iso > newest):
+                fetched = fetcher(day)
+                if fetched:
+                    history[fetched[0]] = store(fetched[1])
+        day -= timedelta(days=1)
+    return history
+
+
+def sync_delivery(history, today, symbols, fetcher=fetch_bhavcopy):
+    """Add missing recent trading days to history {iso_date: {symbol: [pct, trades]}}, newest first, then back-fill to WANT_DATES days.
+    Returns the updated history, trimmed to KEEP_DATES days and to the symbols we track."""
     wanted = set(symbols)
     history = {d: dict(v) for d, v in history.items()}
-    day, looked = today, 0
-    while len([d for d in history if d <= today.strftime("%Y-%m-%d")]) < WANT_DATES and looked < 18:
-        looked += 1
-        if day.weekday() < 5 and day.strftime("%Y-%m-%d") not in history:
-            fetched = fetcher(day)
-            if fetched:
-                iso, rows = fetched
-                history[iso] = {s: [r["deliv_pct"], r["trades"]] for s, r in rows.items() if s in wanted}
-        day -= timedelta(days=1)
+    _catch_up(history, today, WANT_DATES, fetcher, lambda rows: {s: [r["deliv_pct"], r["trades"]] for s, r in rows.items() if s in wanted}, 18)
     for old in sorted(history)[:-KEEP_DATES]:
         del history[old]
     return history
 
 
-def sync_closes(history, today, symbols, fetcher=fetch_bhavcopy, want=6):
+def sync_closes(history, today, symbols, fetcher=fetch_eod, want=6):
     """Official closing prices {iso_date: {symbol: close}} for the latest sessions, from the NSE end-of-day file.
 
-    Fetches only days not held yet (at most `want` days are kept up to date) and trims to the symbols we track."""
+    Every run looks for sessions newer than the newest one held, and back-fills to `want` days; trims to the symbols we track."""
     wanted = set(symbols)
     history = {d: dict(v) for d, v in (history or {}).items() if isinstance(v, dict)}
-    day, looked = today, 0
-    while len([d for d in history if d <= today.strftime("%Y-%m-%d")]) < want and looked < 14:
-        looked += 1
-        if day.weekday() < 5 and day.strftime("%Y-%m-%d") not in history:
-            fetched = fetcher(day)
-            if fetched:
-                iso, rows = fetched
-                history[iso] = {s: r["close"] for s, r in rows.items() if s in wanted and r.get("close")}
-        day -= timedelta(days=1)
+    _catch_up(history, today, want, fetcher, lambda rows: {s: r["close"] for s, r in rows.items() if s in wanted and r.get("close")}, 14)
     for old in sorted(history)[:-10]:
         del history[old]
     return history

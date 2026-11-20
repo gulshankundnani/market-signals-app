@@ -15,7 +15,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from . import digest, event_news, events, market as market_view, verify
-from . import catalog, evidence, universe_sync, alerts, backtest, costs, deals_live, sessions, wide, discover, membership as index_membership, official, dividends, exchange, fetch, fundamentals, ipo, ipo_gmp, ledger, news, patterns, risk, signals, tracking
+from . import catalog, evidence, nse_live, provenance, statements, universe_sync, alerts, backtest, costs, deals_live, sessions, wide, discover, membership as index_membership, official, dividends, exchange, fetch, fundamentals, ipo_gmp, ledger, news, patterns, risk, signals, tracking
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKERS = 6
@@ -105,7 +105,7 @@ BACKTEST_NOTES = [
 ]
 
 
-def run_backtests(ind, n, market="US", overrides=None, dividends=None, min_start=0):
+def run_backtests(ind, n, market="IN", overrides=None, dividends=None, min_start=0):
     if n < 260:
         return None
     out = {}
@@ -191,6 +191,7 @@ def analyse(entry, ctx):
         "tags": [] if relabelled else entry.get("tags", []), "new": is_new, "listed": entry.get("listed"),
         "currency": chart["meta"]["currency"], "exchange": chart["meta"]["exchange"],
         "price": r(price), "change_pct": r(change, 2), "as_of": live_bars["d"][-1], "stale": age_days > STALE_DAYS,
+        "series_lag": bool(chart.get("lagging")) or live_bars["d"][-1] < fetch.expected_session(ctx["now_ts"]),      # the price series misses the newest session, so no call is recorded at this price
         "bars": n,
         "provisional": provisional, "confirmed_as_of": bars["d"][i],
         "short": signal_block(short_detail, ind, i, "short"),
@@ -250,6 +251,8 @@ def add_lists(records):
             lists.append("Low volatility")
         if (ind.get("momentum126") or 0) >= 0.15 and ind.get("sma200") and rec["price"] > ind["sma200"]:
             lists.append("Momentum leaders")
+        if any(p.get("name") == "20-day breakout" for p in rec.get("patterns") or []):
+            lists.append("Breakouts")                  # closed above the 20-day high today (a scanner, not a forecast)
         if ind.get("rsi") is not None and ind["rsi"] < 30:
             lists.append("Oversold")
         if ind.get("hi252") and rec["price"] >= 0.95 * ind["hi252"]:
@@ -308,7 +311,7 @@ def send_formatted(token, chat, text, reply_to=None):
     return ok, message_id
 
 
-def status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy=None, official_events=None, live_deals=None):
+def status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy=None, official_events=None, live_deals=None, nse=None, live_check=None):
     """Plain checks of how healthy this run was, for the status panel: [{"name", "state": ok|warn|info, "detail"}]."""
     checks = []
 
@@ -339,22 +342,25 @@ def status_block(config, records, errors, carried, overview, conditions, ipos, d
         add("Price cross-check", "info", "No second price source could be reached this run")
     else:
         parts, healthy = [], True
-        for market in ("IN", "US"):
+        for market in ("IN",):
             s = (accuracy or {}).get(market)
             if not s:
                 continue
-            name = "India" if market == "IN" else "US"
+            name = "India"
             spread = f" (median difference {s['median_diff_pct']:.3f}%)" if isinstance(s.get("median_diff_pct"), (int, float)) else " (nothing to compare yet)"
             parts.append(f"{name}: {s['match']} of {s['verified']} match {s['source']} within 0.5%{spread}"
                          + (f", {s['mismatch']} disagree" if s["mismatch"] else "") + (f", {s['unverified']} not covered" if s["unverified"] else ""))
             healthy = healthy and s["mismatch"] == 0 and (s["agreement_pct"] or 0) >= 95
         add("Price cross-check", "ok" if healthy else "warn", "; ".join(parts))
     add("NSE delivery data", "ok" if latest else "info", f"Latest day {latest}" if latest else "Not loaded")
-    # Production evidence that does not need the Actions logs: what the two refusal-prone sources did in THIS run.
-    us = (ipos or {}).get("us_status")
-    if us:
-        add("US IPO calendar", "ok" if us["state"] == "current" else "warn",
-            "Loaded this run" if us["state"] == "current" else f"{us['state'].capitalize()}: {us.get('error') or 'no answer'}; last success {us.get('last_success') or 'never'}")
+    if nse is not None:
+        if nse.get("ok") and live_check:
+            add("NSE live prices", "ok" if live_check["mismatch"] == 0 else "warn",
+                f"{live_check['match']} of {live_check['compared']} movers match Yahoo within 1% (median difference {live_check['median_diff_pct']}%, largest {live_check['max_diff_pct']}%), snapshot {live_check['as_of']}")
+        elif nse.get("ok"):
+            add("NSE live prices", "info", "Snapshot read, but none of its stocks are in the main list or it is not current")
+        else:
+            add("NSE live prices", "warn", f"{nse.get('error') or 'no answer'}; last success {(nse.get('fetched_at') or 'never')}")
     if live_deals is not None:
         add("NSE live block deals", "ok" if live_deals.get("ok") else "warn",
             f"{len(live_deals.get('deals', []))} today, read {live_deals.get('fetched_at')}" if live_deals.get("ok")
@@ -442,48 +448,10 @@ def build_universe(config, registry, limit):
     stocks += [{"symbol": e["symbol"], "name": e["name"], "market": e["market"], "sector": "New listings",
                 "tags": ["new"], "new": True, "listed": e["listed"]} for e in registry if e["symbol"] not in known]
     if limit:
-        picked = [s for s in stocks if s["market"] == "IN"][: limit // 2] + [s for s in stocks if s["market"] == "US"][: limit - limit // 2]
+        picked = [s for s in stocks if s["market"] == "IN"][:limit]
         new = [s for s in stocks if s.get("new")][:2]
         stocks = picked + [s for s in new if s not in picked]
     return stocks
-
-
-US_IPO_MAX_AGE_DAYS = 7
-
-
-def carry_us_ipos(ipos, previous, now):
-    """Stamp a fresh US IPO list with its time. If the calendar failed to load, keep the last list that did (up to a week
-    old) but never present it as current: every carried record is marked stale, records whose date has passed say so, and
-    ipos["us_status"] says what failed, when the list last loaded and how old it is."""
-    previous = previous or {}
-    status = {"state": "current", "last_success": None, "original_date": None, "age_days": 0, "last_attempt": now.isoformat(timespec="seconds"),
-              "error": ipos.get("us_error"), "page_url": ipo.PAGE_URL}
-    if ipos.get("us_ok"):
-        ipos["us_fetched_at"] = now.isoformat(timespec="seconds")
-        status["last_success"] = status["original_date"] = ipos["us_fetched_at"]
-        ipos["us_status"] = status
-        return ipos
-    old, stamp = previous.get("us"), previous.get("us_fetched_at") or ((previous.get("us_status") or {}).get("last_success"))
-    try:
-        age_days = (now - datetime.fromisoformat(stamp)).days if stamp else None
-    except (TypeError, ValueError):
-        age_days = None
-    status["last_success"] = stamp
-    status["original_date"] = stamp[:10] if stamp else None
-    status["age_days"] = age_days
-    if old and age_days is not None and 0 <= age_days <= US_IPO_MAX_AGE_DAYS:
-        today = now.date()
-        carried = []
-        for deal in old:
-            when = ipo.deal_date(deal.get("date"))
-            carried.append({**deal, "stale": True, "date_passed": bool(when and when < today)})
-        ipos["us"], ipos["us_carried"], ipos["us_fetched_at"] = carried, True, stamp
-        status["state"] = "stale"
-    else:
-        ipos["us"] = []
-        status["state"] = "unavailable"
-    ipos["us_status"] = status
-    return ipos
 
 
 def carry_forward(errors, previous, today):
@@ -573,7 +541,7 @@ def run(args):
     state = load_previous(args.prev, "state.json")
 
     config["stocks"], sync_state, synced = universe_sync.sync(now, state.get("universe_sync"), config["stocks"])
-    registry, us_list = discover.discover(state, today)
+    registry = discover.discover(state, today)
     universe = build_universe(config, registry, args.limit)
     print(f"{len(universe)} stocks ({sum(1 for s in universe if s.get('new'))} new listings)")
 
@@ -614,11 +582,13 @@ def run(args):
     records = sorted(records + carried, key=lambda x: x["symbol"])
 
     fund_cache = fill_fundamentals(records, state, ctx["now_ts"], fetch.YahooSession)
+    for rec in records:
+        rec["fundamentals_at"] = (fund_cache.get(rec["symbol"]) or {}).get("ts")
+    statements_cache = statements.sync(records, state.get("statements"), ctx["now_ts"], fetch.YahooSession)
     news.keep_stock_specific(records)
     india_bases = [x["symbol"][:-3] for x in records if x["symbol"].endswith(".NS")]
     closes = exchange.sync_closes(state.get("eod_close"), today, india_bases)
-    us_cache = verify.sync_us(state.get("us_close"), today.isoformat(), [x["symbol"] for x in records if x.get("market") == "US"])
-    quality, accuracy = verify.cross_check(records, ctx["bars"], closes, (us_cache or {}).get("closes", {}))
+    quality, accuracy = verify.cross_check(records, ctx["bars"], closes)
     for rec in records:
         rec["quality"] = quality.get(rec["symbol"])
     event_cache = event_news.sync(records, state.get("event_news"), now, breaker=Breaker(NEWS_FAILURE_LIMIT))
@@ -630,7 +600,7 @@ def run(args):
     overview = market_overview(config, now, raw_index)
     info = {x["symbol"]: {"market": x["market"], "sector": x["sector"]} for x in records if not x.get("new") and x["sector"] != "Other"}
     conditions = market_view.analyse(config.get("regime"), raw_index, ctx["bars"], info)
-    ipos = carry_us_ipos(ipo.fetch_ipos(now, prev_data.get("ipos")), prev_data.get("ipos"), now)
+    ipos = {}
     india, india_ok, india_at, ipo_cache = ipo_gmp.fetch_india(now, state.get("ipo_gmp"), fetch_news=news.fetch_news)
     ipos.update({"india": india, "india_ok": india_ok,
                  "india_source": {"name": "Investorgain", "url": ipo_gmp.URL, "fetched_at": india_at}})
@@ -639,6 +609,17 @@ def run(args):
     first_run = not prev_data
     watch = alerts.watched_symbols(alert_cfg.get("symbols", []), {x["symbol"] for x in records})
     watch = verify.trusted(watch, quality)     # no alerts on prices the official source disputes
+    lagging = {r["symbol"] for r in records if r.get("series_lag")}
+    watch = [s for s in watch if s not in lagging]
+    live_feed = nse_live.fetch(now, state.get("nse_live"))      # the NSE's own live prices for the biggest movers: a second source for live prices
+    live_prices = nse_live.usable(live_feed)
+    live_check = nse_live.check_records(records, live_prices, live_feed.get("as_of"))
+    live_mismatch = {r["symbol"] for r in records if (r.get("live_check") or {}).get("status") == "mismatch"}
+    watch = [s for s in watch if s not in live_mismatch]
+    for rec in records:                                    # where each group of figures comes from, when it was read, and whether it is current
+        rec["provenance"], rec["provenance_ok"] = provenance.build(rec, ctx["now_ts"])
+    not_current = {r["symbol"] for r in records if not r["provenance_ok"]}
+    watch = [s for s in watch if s not in not_current]     # nor on a price series that lacks the newest session: its reading is a session old and would flip back later
     news_on = bool(alert_cfg.get("news", True))     # headlines in the alerts; no tone is ever worked out from them
     sides = {s: dict(v) for s, v in state.get("alert_sides", {}).items() if isinstance(v, dict)}
     items = []
@@ -655,7 +636,10 @@ def run(args):
     # a stock listed less than a year ago has no 52-week range, only its life so far: no 52-week alerts for it
     young = {s["symbol"] for s in wide_list if s.get("listed") and (today - date.fromisoformat(s["listed"])).days < 365}
     young |= {x["symbol"] for x in records if x.get("new") or (x.get("bars") is not None and x["bars"] < 252)}
-    mover_events = wide.mover_events(quotes, market_of, open_now, young)
+    disputed = nse_live.disputed(quotes, live_prices)
+    if disputed:
+        print(f"NSE live prices disagree by more than 3% with Yahoo for {len(disputed)} stocks: {', '.join(sorted(disputed)[:10])}; no mover alerts for them")
+    mover_events = wide.mover_events({s: q for s, q in quotes.items() if s not in disputed}, market_of, open_now, young)
     ipo_levels = {}                                # recently listed stocks and their listing-day range
     for x in records:
         lv = wide.ipo_levels(ctx["completed_bars"].get(x["symbol"]) if ctx.get("completed_bars") else ctx["bars"].get(x["symbol"]), x.get("listed"), today) if x.get("listed") else None
@@ -711,9 +695,6 @@ def run(args):
             body = sessions.postclose_brief(indices, up, down, extremes, flows, today_label, sessions.parse_deals(payload, today_label), todays) if indices else []
         elif window == "in_flows" and flows.get("date") == today_label:
             body = [f"Net flows today: FII/FPI {flows.get('FII/FPI', 0):+,.0f} cr, DII {flows.get('DII', 0):+,.0f} cr"]
-        elif window == "us_close" and "US" not in open_now:
-            up, down, extremes = wide.top_moves(quotes, market_of, "US")
-            body = sessions.us_close_brief((overview or {}).get("watch"), up, down, extremes)
         if body:
             item = sessions.brief_item(window, body, now_ts)
             brief_items.append(item)
@@ -751,18 +732,19 @@ def run(args):
     for rec in records:                    # Yahoo's indicated annual dividend, as an independent check on the amounts worked out from the payments
         rec["dividend_check"] = dividends.cross_check(rec.get("dividend"), rec.get("price"), (quotes.get(rec["symbol"]) or {}).get("dividend_rate"))
     analysis_index = catalog.update(now, state.get("analysis_index"), wide_list, quotes, analyse, ctx, args.prev, load_previous, Path(args.out), lists_fn=add_lists, curated_records=records,
-                                    fundamentals_fn=lambda symbol: fundamentals.fetch_fundamentals(quote_session, symbol))
-    status = status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy, official_events, live_deals)
+                                    fundamentals_fn=lambda symbol: fundamentals.fetch_fundamentals(quote_session, symbol),
+                                    statements_fn=lambda symbol: statements.fetch_statements(quote_session, symbol, ctx["now_ts"]))
+    status = status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy, official_events, live_deals, live_feed, live_check)
     data = {"version": 1, "generated_at": now.isoformat(timespec="seconds"), "market": overview, "conditions": conditions,
-            "status": status, "accuracy": accuracy, "evidence": evidence.summarise(records), "backtest_method": {"costs": costs.describe(cost_overrides), "notes": BACKTEST_NOTES}, "events": events_data, "ipos": ipos,
+            "status": status, "accuracy": accuracy, "live_check": live_check, "evidence": evidence.summarise(records), "backtest_method": {"costs": costs.describe(cost_overrides), "notes": BACKTEST_NOTES}, "events": events_data, "ipos": ipos,
             "stocks": [catalog.lite(x) for x in records], "errors": [{"symbol": e["symbol"], "error": e["error"]} for e in errors],
             "alerts": alert_log, "track_record": track_record,
             "exchange_data": {"delivery_dates": sorted(delivery)[-3:], "note": "NSE delivery data and bulk/block deals. The exchange order book (bid/ask depth) is not published for free."}}
-    new_state = {"seen_alerts": seen, "delivery": delivery, "us_symbols": us_list, "new_listings": registry,
+    new_state = {"seen_alerts": seen, "delivery": delivery, "new_listings": registry,
                  "fundamentals": fund_cache, "ipo_gmp": ipo_cache, "alert_log": alert_log,
                  "alert_sides": sides, "universe_sync": sync_state, "analysis_index": analysis_index, "wide_universe": wide_cache, "wide_cursor": wide_cursor, "mover_seen": mover_seen, "index_seen": index_seen,
                  "briefs_sent": {k: v for k, v in briefs_sent.items() if v == today_ist}, "nse_sources": nse, "news_alert_history": {s: v for s, v in news_history.items() if v}, "deal_seen": deal_seen,
-                 "live_deals": {k: v for k, v in live_deals.items() if k != "deals"}, "eod_close": closes, "us_close": us_cache, "event_news": event_cache, "official": official_events, "ledger_pending": pending, "reply_queue": queue, "notified_outcomes": notified}
+                 "live_deals": {k: v for k, v in live_deals.items() if k != "deals"}, "eod_close": closes, "nse_live": {k: v for k, v in live_feed.items() if k != "prices"}, "statements": statements_cache, "event_news": event_cache, "official": official_events, "ledger_pending": pending, "reply_queue": queue, "notified_outcomes": notified}
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

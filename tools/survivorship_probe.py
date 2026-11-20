@@ -63,7 +63,7 @@ def probe(bars, market, overrides=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--market", choices=("IN", "US"), default="US", help="cost model to use (default US)")
+    parser.add_argument("--market", choices=("IN",), default="IN", help="cost model to use")
     parser.add_argument("--folder", default=str(FOLDER))
     args = parser.parse_args(argv)
     files = sorted(Path(args.folder).glob("*.csv"))

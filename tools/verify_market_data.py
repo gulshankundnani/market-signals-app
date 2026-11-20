@@ -1,10 +1,10 @@
 """Repeatable check of the deployed app's prices (and NSE volumes) against official end-of-day data.
 
-    python tools/verify_market_data.py                      # the live site, 10 NSE + 10 US stocks
+    python tools/verify_market_data.py                      # the live site, 10 NSE stocks
     python tools/verify_market_data.py --data site/data.json --json report.json
     python tools/verify_market_data.py --symbols RELIANCE.NS AAPL --volume
 
-References: the NSE's daily bhavcopy file for Indian stocks and the Cboe delayed-quote history for US stocks, both independent
+References: the NSE's daily bhavcopy file for Indian stocks, independent
 of Yahoo Finance, which is where the app gets its prices. Each stock is compared on the same trading session only. When the
 reference for that session is not published yet the result is UNVERIFIED, not PASSED or FAILED. Run it again later.
 """
@@ -24,7 +24,6 @@ from engine import exchange, fetch, verification, verify          # noqa: E402
 
 SITE = "https://marketsignals-app.github.io/market-signals-app/data.json"
 DEFAULT_IN = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "ITC.NS", "SBIN.NS", "LT.NS", "BHARTIARTL.NS", "HINDUNILVR.NS"]
-DEFAULT_US = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "JPM", "XOM", "WMT"]
 
 
 def load_app_data(source):
@@ -62,7 +61,7 @@ def nse_reference(days=14):
 def run(args):
     data = load_app_data(args.data)
     stocks = {s["symbol"]: s for s in data["stocks"]}
-    wanted = args.symbols or DEFAULT_IN + DEFAULT_US
+    wanted = args.symbols or DEFAULT_IN
     india = [s for s in wanted if s.endswith(".NS")]
     us = [s for s in wanted if not s.endswith(".NS")]
     rows, volume_rows = [], []
@@ -85,17 +84,6 @@ def run(args):
                                                                   provisional=bool(rec.get("provisional")) and d == rec["as_of"]))
                 time.sleep(0.4)
 
-    for symbol in us:
-        rec = stocks.get(symbol)
-        if not rec:
-            continue
-        time.sleep(2.5)                                    # Cboe asks clients to go gently
-        history = verify.fetch_cboe_history(symbol)
-        views = {"source": verify.SOURCES["US"], "dates": sorted(history), "closes": dict(history),
-                 "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
-        row_rec = {**rec, "generated_at": data.get("generated_at"), "previous_close": (rec.get("spark") or [None, None])[-2]}
-        rows += [verification.verify_price(row_rec, views, "latest"), verification.verify_price(row_rec, views, "previous")]
-
     print(f"App data generated {data.get('generated_at')}; checked {datetime.now(timezone.utc).isoformat(timespec='seconds')}")
     print("%-14s %-9s %-11s %10s %11s %9s %8s  %-10s %s" % ("symbol", "session", "date", "app", "reference", "diff", "diff %", "status", "note"))
     for r in rows:
@@ -116,7 +104,7 @@ def run(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data", default=SITE, help="URL or path of the data.json to check (default: the live site)")
-    parser.add_argument("--symbols", nargs="*", help="symbols to check (default: 10 NSE and 10 US stocks)")
+    parser.add_argument("--symbols", nargs="*", help="symbols to check (default: 10 NSE stocks)")
     parser.add_argument("--volume", action="store_true", help="also compare the last three NSE volumes with the NSE final volume")
     parser.add_argument("--json", help="write the full result to this file")
     return run(parser.parse_args(argv))

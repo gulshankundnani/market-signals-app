@@ -32,7 +32,6 @@ class CheckTests(unittest.TestCase):
     def test_an_old_deployment_without_the_new_blocks_is_unverified_not_passed(self):
         out = by(cp.check({"generated_at": "2026-11-16T11:50:00+00:00", "events": {"items": [event(official_url=None)]}, "ipos": {}}, NOW))
         self.assertEqual(out["NSE feed from Actions"][0], cp.UNVERIFIED)
-        self.assertEqual(out["US IPO status"][0], cp.UNVERIFIED)
         self.assertEqual(out["Official source URLs"][0], cp.UNVERIFIED)
 
     def test_a_working_feed_passes_only_if_confirmed_events_carry_the_official_record(self):
@@ -48,23 +47,6 @@ class CheckTests(unittest.TestCase):
         self.assertEqual((out["NSE feed from Actions"][0], out["Event statuses"][0]), (cp.UNVERIFIED, cp.PASS))
         cheating = by(cp.check(data(refused, [event(verification="CONFIRMED")]), NOW))
         self.assertEqual(cheating["Event statuses"][0], cp.FAIL)
-
-    def test_stale_ipo_handling_needs_every_carried_record_marked_and_the_dates_and_link_present(self):
-        us = {"state": "stale", "error": "HTTP 403 Access Denied", "last_success": "2026-11-14T11:05:13+00:00", "original_date": "2026-11-14",
-              "page_url": "https://www.nasdaq.com/market-activity/ipos", "last_attempt": "2026-11-16T11:50:00+00:00"}
-        ok = by(cp.check(data(us=us, us_records=[{"name": "A", "stale": True}], blocked="2026-11-16T17:50:00+00:00"), NOW))
-        self.assertEqual(ok["US IPO stale handling"][0], cp.PASS)
-        self.assertEqual(ok["Six-hour retry pause"][0], cp.PASS)
-        self.assertEqual(ok["Error logging"][0], cp.UNVERIFIED)           # the Actions log cannot be read from outside
-        unmarked = by(cp.check(data(us=us, us_records=[{"name": "A"}]), NOW))
-        self.assertEqual(unmarked["US IPO stale handling"][0], cp.FAIL)
-        missing = by(cp.check(data(us={**us, "page_url": None}, us_records=[{"name": "A", "stale": True}]), NOW))
-        self.assertEqual(missing["US IPO stale handling"][0], cp.FAIL)
-
-    def test_a_pause_that_has_already_ended_is_not_evidence_of_suppression(self):
-        us = {"state": "stale", "error": "HTTP 403", "last_success": "x", "original_date": "d", "page_url": "u", "last_attempt": "a"}
-        out = by(cp.check(data(us=us, us_records=[{"stale": True}], blocked="2026-11-16T08:00:00+00:00"), NOW))
-        self.assertEqual(out["Six-hour retry pause"][0], cp.UNVERIFIED)
 
     def test_freshness_and_service_worker(self):
         old = by(cp.check(data(generated="2026-11-16T08:00:00+00:00"), NOW))

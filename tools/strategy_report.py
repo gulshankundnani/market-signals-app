@@ -154,7 +154,7 @@ def markdown(report):
              "Fixed rules, never tuned, tested against buy-and-hold on up to 5 years of Yahoo daily prices, dividends included for both, "
              "assumed trading costs (see `engine/costs.py`). Today's stock list: survivorship bias is NOT removed (see README). "
              "Past results do not predict future results.", ""]
-    for market in ("IN", "US"):
+    for market in ("IN",):
         for rule in ("short", "long"):
             s = report["summary"].get(f"{market}/{rule}")
             if not s:
@@ -186,7 +186,7 @@ def main(argv=None):
     overrides = json.loads(cost_path.read_text(encoding="utf-8")) if cost_path.exists() else {}
     maps = {m: regimes(fetch.fetch_chart(sym, "5y", 250)["bars"]) for m, sym in BENCH.items()}
     jobs = []
-    for market in ("IN", "US"):
+    for market in ("IN",):
         stocks = [s for s in universe["stocks"] if s[2] == market]
         jobs += [(s[0], market) for s in (stocks[:args.limit] if args.limit else stocks)]
     rows, failed = [], []
@@ -203,7 +203,7 @@ def main(argv=None):
         for part in pool.map(work, jobs):
             rows += part
     summary = {}
-    for market in ("IN", "US"):
+    for market in ("IN",):
         for rule in ("short", "long"):
             sel = [r for r in rows if r["market"] == market and r["rule"] == rule]
             if sel:

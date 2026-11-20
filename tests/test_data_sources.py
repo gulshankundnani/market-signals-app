@@ -6,7 +6,7 @@ import urllib.error
 from datetime import date
 from unittest.mock import patch
 
-from engine import alerts, build, discover, exchange, ipo
+from engine import alerts, build, discover, exchange
 from engine.fetch import FetchError
 
 BHAV = """SYMBOL, SERIES, DATE1, PREV_CLOSE, OPEN_PRICE, HIGH_PRICE, LOW_PRICE, LAST_PRICE, CLOSE_PRICE, AVG_PRICE, TTL_TRD_QNTY, TURNOVER_LACS, NO_OF_TRADES, DELIV_QTY, DELIV_PER
@@ -110,21 +110,6 @@ class DiscoverTests(unittest.TestCase):
         self.assertEqual([f["symbol"] for f in found], ["NEWCO.NS"])
         self.assertEqual(found[0]["listed"], "2026-11-10")
 
-    def test_us_directory_filters(self):
-        symbols = discover.us_symbols(NASDAQ_LISTED, OTHER_LISTED)
-        self.assertEqual(sorted(symbols), ["GOOD", "NYSEA"])
-
-    def test_us_directory_bad_header(self):
-        self.assertEqual(discover.parse_us_directory("nope|nada\nx|y", "Symbol", "Test Issue", "ETF"), {})
-        self.assertEqual(discover.parse_us_directory("", "Symbol", "Test Issue", "ETF"), {})
-
-    def test_us_first_run_only_records(self):
-        self.assertEqual(discover.us_new_listings({"AAA": "A"}, [], self.TODAY), [])
-
-    def test_us_new_symbols_detected(self):
-        found = discover.us_new_listings({"AAA": "A Inc", "BBB": "B Inc"}, ["AAA"], self.TODAY)
-        self.assertEqual([f["symbol"] for f in found], ["BBB"])
-
     def test_registry_expires_and_caps(self):
         old = {"symbol": "OLD", "name": "Old", "market": "US", "listed": "2025-01-01"}
         fresh = {"symbol": "NEW", "name": "New", "market": "US", "listed": "2026-11-01"}
@@ -135,20 +120,16 @@ class DiscoverTests(unittest.TestCase):
         def offline(url, **kwargs):
             raise FetchError("down")
 
-        state = {"new_listings": [{"symbol": "KEEP.NS", "name": "Keep", "market": "IN", "listed": "2026-11-01"}], "us_symbols": ["AAA"]}
-        registry, us_list = discover.discover(state, self.TODAY, fetch=offline)
+        state = {"new_listings": [{"symbol": "KEEP.NS", "name": "Keep", "market": "IN", "listed": "2026-11-01"}]}
+        registry = discover.discover(state, self.TODAY, fetch=offline)
         self.assertEqual([e["symbol"] for e in registry], ["KEEP.NS"])
-        self.assertEqual(us_list, ["AAA"])
 
     def test_discover_end_to_end(self):
         def fake(url, **kwargs):
-            if "EQUITY_L" in url:
-                return EQUITY_L.encode()
-            return (NASDAQ_LISTED if "nasdaqlisted" in url else OTHER_LISTED).encode()
+            return EQUITY_L.encode()
 
-        registry, us_list = discover.discover({"us_symbols": ["GOOD"]}, self.TODAY, fetch=fake)
-        self.assertEqual({e["symbol"] for e in registry}, {"NEWCO.NS", "NYSEA"})
-        self.assertEqual(us_list, ["GOOD", "NYSEA"])
+        registry = discover.discover({}, self.TODAY, fetch=fake)
+        self.assertEqual({e["symbol"] for e in registry}, {"NEWCO.NS"})
 
 
 def record(name, short, long_, alert_items=()):
@@ -406,83 +387,9 @@ class TelegramTests(unittest.TestCase):
         full_run.assert_not_called()
 
 
-class IpoTests(unittest.TestCase):
-    def test_price_range(self):
-        self.assertEqual(ipo._price_range("10.00-12.00"), (10.0, 12.0))
-        self.assertEqual(ipo._price_range("$10.00"), (10.0, 10.0))
-        self.assertEqual(ipo._price_range("$10.00 - $12.00"), (10.0, 12.0))
-        self.assertEqual(ipo._price_range(""), (None, None))
-        self.assertEqual(ipo._price_range(None), (None, None))
-        self.assertEqual(ipo._price_range("TBD"), (None, None))
-
-    def test_parse_calendar(self):
-        payload = {"data": {
-            "priced": {"rows": [{"proposedTickerSymbol": "NARA", "companyName": "Narragansett", "proposedSharePrice": "10.00",
-                                 "sharesOffered": "9,098,800", "pricedDate": "11/02/2026", "dollarValueOfSharesOffered": "$90,988,000"}]},
-            "upcoming": {"upcomingTable": {"rows": [{"proposedTickerSymbol": "UPC", "companyName": "Upcoming Inc", "proposedSharePrice": "14.00-16.00",
-                                                     "sharesOffered": "5,000,000", "expectedPriceDate": "11/20/2026"}, {"companyName": ""}]}},
-            "filed": {"rows": None},
-        }}
-        deals = ipo.parse_calendar(payload)
-        self.assertEqual([d["status"] for d in deals], ["upcoming", "priced"])
-        self.assertEqual(deals[0]["price_low"], 14.0)
-        self.assertEqual(deals[0]["price_high"], 16.0)
-        self.assertEqual(deals[1]["shares"], 9098800.0)
-        self.assertEqual(deals[1]["amount"], 90988000.0)
-
-    def test_parse_calendar_junk(self):
-        self.assertEqual(ipo.parse_calendar(None), [])
-        self.assertEqual(ipo.parse_calendar({"data": None}), [])
 
 
 if __name__ == "__main__":
     unittest.main()
 
 
-class UsIpoRefreshTests(unittest.TestCase):
-    """The Nasdaq calendar refuses automated requests (HTTP 403 from its CDN). That must be logged, must not be retried on every
-    run, and must never be worked around."""
-    NOW = __import__("datetime").datetime(2026, 11, 16, 12, 0, tzinfo=__import__("datetime").timezone.utc)
-
-    def run_fetch(self, previous=None, side_effect=None):
-        from unittest import mock
-        from engine import news
-        logs = []
-        with mock.patch.object(ipo, "http_get", side_effect=side_effect) as asked, mock.patch.object(news, "fetch_news", return_value=[]):
-            out = ipo.fetch_ipos(self.NOW, previous, log=logs.append)
-        return out, logs, asked
-
-    def test_a_refusal_is_logged_with_its_reason_and_starts_a_pause(self):
-        from engine.fetch import FetchError
-        out, logs, asked = self.run_fetch(side_effect=FetchError("https://api.nasdaq.com/api/ipo/calendar: HTTP Error 403: Forbidden"))
-        self.assertFalse(out["us_ok"])
-        self.assertIn("403", out["us_error"])
-        self.assertEqual(asked.call_count, 1, "a refused source is not asked again for the next month")
-        self.assertTrue(any("failed" in line and "403" in line for line in logs))
-        self.assertEqual(out["us_blocked_until"], "2026-11-16T18:00:00+00:00")
-
-    def test_during_the_pause_the_source_is_not_asked_at_all(self):
-        out, logs, asked = self.run_fetch(previous={"us_blocked_until": "2026-11-16T18:00:00+00:00"}, side_effect=AssertionError("must not be called"))
-        self.assertEqual(asked.call_count, 0)
-        self.assertFalse(out["us_ok"])
-        self.assertEqual(out["us_blocked_until"], "2026-11-16T18:00:00+00:00")
-        self.assertTrue(any("skipped" in line for line in logs))
-
-    def test_after_the_pause_it_is_asked_again(self):
-        payload = json.dumps({"data": {"upcoming": {"upcomingTable": {"rows": [{"companyName": "Acme", "proposedTickerSymbol": "ACME", "proposedSharePrice": "10-12", "expectedPriceDate": "11/20/2026"}]}}}})
-        out, logs, asked = self.run_fetch(previous={"us_blocked_until": "2026-11-16T11:00:00+00:00"}, side_effect=lambda *a, **k: payload.encode())
-        self.assertEqual(asked.call_count, 2)
-        self.assertTrue(out["us_ok"])
-        self.assertIsNone(out["us_error"])
-        self.assertIsNone(out["us_blocked_until"])
-
-    def test_failure_descriptions(self):
-        self.assertEqual(ipo.describe_failure(Exception("x: HTTP Error 403: Forbidden"))[1], True)
-        self.assertEqual(ipo.describe_failure(Exception("x: HTTP Error 429: Too Many Requests")), ("HTTP 429: too many requests", False))
-        self.assertEqual(ipo.describe_failure(ValueError("bad")), ("the answer was not valid JSON", False))
-
-    def test_deal_dates(self):
-        import datetime as dt
-        self.assertEqual(ipo.deal_date("11/19/2026"), dt.date(2026, 11, 19))
-        self.assertIsNone(ipo.deal_date("TBD"))
-        self.assertIsNone(ipo.deal_date(None))

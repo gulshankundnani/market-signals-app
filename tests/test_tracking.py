@@ -245,3 +245,35 @@ class TrackStepTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StalePriceTests(unittest.TestCase):
+    def chart(self, last_day, traded_ts, offset=19800):
+        return {"bars": {"d": ["2026-11-13", last_day]}, "meta": {"market_time": traded_ts, "gmtoffset": offset}}
+
+    def test_series_missing_the_latest_session_is_lagging(self):
+        from engine import fetch
+        traded = 1794854298 - 8 * 3600                    # 2026-11-16 10:38 UTC, after the Indian session
+        self.assertTrue(fetch.series_lags(self.chart("2026-11-13", traded)))
+        self.assertFalse(fetch.series_lags(self.chart("2026-11-16", traded)))
+        self.assertFalse(fetch.series_lags({"bars": {"d": ["2026-11-13"]}, "meta": {}}))
+
+    def test_no_call_is_recorded_at_a_lagging_price(self):
+        rec = {"symbol": "A", "series_lag": True}
+        self.assertEqual(tracking.make_calls([{"kind": "signal", "symbol": "A", "horizon": "short", "side": "buy", "announced": "x"}], {"A": rec}, 1), [])
+
+
+class ExpectedSessionTests(unittest.TestCase):
+    def at(self, y, m, d, hh, mm):
+        from datetime import datetime, timezone
+        return int(datetime(y, m, d, hh, mm, tzinfo=timezone.utc).timestamp())
+
+    def test_the_newest_session_that_should_be_complete(self):
+        from engine import fetch
+        cases = [((2026, 11, 18, 18, 36), "2026-11-18"),   # 00:06 IST on the 19th: the 18th is the newest closed session (where the stale calls began)
+                 ((2026, 11, 19, 3, 0), "2026-11-18"),     # 08:30 IST, before the 19th has traded
+                 ((2026, 11, 19, 10, 30), "2026-11-19"),   # 16:00 IST, the 19th is final
+                 ((2026, 11, 21, 5, 0), "2026-11-20"),     # Saturday
+                 ((2026, 11, 23, 2, 0), "2026-11-20")]     # Monday 07:30 IST, before the open
+        for when, expected in cases:
+            self.assertEqual(fetch.expected_session(self.at(*when)), expected, when)

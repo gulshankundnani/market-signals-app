@@ -4,8 +4,8 @@
   const REFRESH_MS = 5 * 60 * 1000;
   const CURRENCY = { INR: '₹', USD: '$' };
   const FREQ_CODE = { Monthly: 'M', Quarterly: 'Q', 'Half-yearly': 'H', Yearly: 'Y' };
-  const FIXED_LISTS = ['Government-backed', 'High dividend', 'Low debt', 'Low volatility', 'Momentum leaders',
-    'Strong long-term trend', 'Strong delivery buying', 'Oversold', 'Near 52-week high', 'Near 52-week low', 'New listings', 'US mega cap'];
+  const FIXED_LISTS = ['Government-backed', 'High dividend', 'Low debt', 'Low volatility', 'Momentum leaders', 'Breakouts',
+    'Strong long-term trend', 'Strong delivery buying', 'Oversold', 'Near 52-week high', 'Near 52-week low', 'New listings'];
 
   /* ---------- helpers ---------- */
   const $ = (sel, el = document) => el.querySelector(sel);
@@ -62,6 +62,22 @@
   const safeUrl = (url) => (typeof url === 'string' && url.startsWith('https://') ? url : null);
   const side = (label) => (label === 'Buy' || label === 'Strong Buy' ? 'buy' : label === 'Sell' || label === 'Strong Sell' ? 'sell' : 'hold');
 
+  /* The horizon choice: weeks view, months-to-years view, or both. With both, a reading counts as bullish or bearish only when the two views agree,
+     and anything else is mixed; the score is the average of the two. */
+  const hzList = (hz) => (hz === 'both' ? ['short', 'long'] : [hz]);
+  const horizonName = (hz) => (hz === 'short' ? 'weeks view' : hz === 'long' ? 'months-to-years view' : 'weeks and months-to-years views');
+  const readingSide = (s, hz) => {
+    const labels = hzList(hz).map((k) => (s[k] || {}).label).filter((l) => l && l !== 'N/A');
+    if (labels.length < hzList(hz).length) return null;
+    const sides = new Set(labels.map(side));
+    return sides.size === 1 ? [...sides][0] : 'hold';
+  };
+  const readingScore = (s, hz) => {
+    const v = hzList(hz).map((k) => (s[k] || {}).score).filter((x) => typeof x === 'number' && Number.isFinite(x));
+    return v.length === hzList(hz).length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+  };
+  const badges = (s, hz) => hzList(hz).map((k) => badge(s[k]));
+
   /* What each label is shown as. The stored labels stay Buy/Hold/Sell so filters and records keep working. */
   const LABEL_TEXT = { 'Strong Buy': 'Strongly aligned bullish', Buy: 'Aligned bullish', Hold: 'Mixed', Sell: 'Aligned bearish', 'Strong Sell': 'Strongly aligned bearish',
     Subscribe: 'Strong readings', Avoid: 'Weak readings', Neutral: 'Mixed' };
@@ -81,11 +97,11 @@
     error: null,
     tab: 'signals',
     others: [], shards: new Map(), shown: {}, catalog: 'loading', catalogInfo: null, sig: '',
-    filters: Object.assign({ market: 'ALL', horizon: 'short', signal: 'ALL', list: 'ALL', sector: 'ALL', tech: {}, sort: 'score', view: 'overview' }, store.get('filters', {})),
+    filters: Object.assign({ market: 'ALL', horizon: 'short', signal: 'ALL', list: 'ALL', sector: 'ALL', tech: {}, sort: 'score', view: 'overview' }, store.get('filters', {}), { market: 'ALL' }),
     q: '',
     watch: new Set(store.get('watch', [])),
     lists: store.get('lists', {}),
-    profile: Object.assign({ goal: 'balanced', horizon: 'long', risk: 'medium', market: 'ALL' }, store.get('profile', {})),
+    profile: Object.assign({ goal: 'balanced', horizon: 'long', risk: 'medium', market: 'ALL' }, store.get('profile', {}), { market: 'ALL' }),
     calc: Object.assign({ capital: 100000, risk: 1 }, store.get('calc', {})),
     notify: store.get('notify', false),
     ipoName: '',
@@ -236,7 +252,7 @@
     label.textContent = `Updated ${ago(minutes)}` + (minutes > 180 && !late ? ' (updates pause when markets are closed)' : '');
   }
 
-  /* India opens at 03:45 UTC and the US closes at 21:00 UTC, Monday to Friday. */
+  /* India opens at 03:45 UTC and the updates run until 21:00 UTC, Monday to Friday. */
   const STALE_MINUTES = 45;
   function marketsOpenNow(now = new Date()) {
     const day = now.getUTCDay();
@@ -270,7 +286,7 @@
 
   /* ---------- help text: a "?" next to each section heading opens a plain-language note ---------- */
   const HELP = [
-    [/^(India \(NSE\)|United States)$/, 'Every stock in this market for the time frame you chose. The label says how many of the fixed indicator rules point the same way: aligned bullish (most point up), mixed (they disagree) or aligned bearish (most point down). The number is the indicator alignment, from −100 to +100. It describes current conditions. It is not a forecast or a recommendation.'],
+    [/^India \(NSE\)$/, 'Every stock in this market for the time frame you chose. The label says how many of the fixed indicator rules point the same way: aligned bullish (most point up), mixed (they disagree) or aligned bearish (most point down). The number is the indicator alignment, from −100 to +100. It describes current conditions. It is not a forecast or a recommendation.'],
     [/^Stock screens$/, 'A short ranked list built from your answers (goal, time frame, risk, market). It filters by readings, fundamentals and risk. It is a screen to study, not personal advice.'],
     [/^Market conditions$/, 'How each market is behaving now, from seven simple checks on its main index. Each check is worth +1, 0 or −1 and the reason is shown. This describes the market. It is not a forecast and not a call on any stock.'],
     [/market conditions$/, 'The seven check scores added up, from −7 to +7. +5 or more is strongly bullish conditions, +2 to +4 bullish, −1 to +1 sideways, −2 to −4 bearish and −5 or less strongly bearish. The bar shows where today sits.'],
@@ -279,13 +295,11 @@
     [/ breadth$/, 'Advancers rose today and decliners fell. The percentages show how many stocks are above their 20, 50 and 200-day averages. When most stocks are above their averages the move is broad. New 20-day highs and lows count stocks closing above or below the last 20 days\' range.'],
     [/ sectors$/, 'The average move of the stocks in each sector over 1, 5 and 20 trading days, every stock counted the same. The last column is how many stocks are in the sector in this app\'s list.'],
     [/^Upcoming events$/, 'Dates that matter to holders: when results are expected, the ex-dividend date (buy before it to receive the dividend), the dividend payment date, and splits or bonus issues when a prominent news outlet has reported them. Each date shows its sources: YAHOO (a date from Yahoo Finance), NEWS (a headline from a prominent outlet, shown below it) or ESTIMATED (worked out from past payments), and AGREED when two sources give the same date. Companies confirm their dates by notice to the exchange, so check it before acting.'],
-    [/^Price accuracy$/, 'Yahoo is the main price source, so its closing prices on the last few completed sessions are compared with an independent source: the official NSE end-of-day file for India, and the Cboe delayed-quote history for the US. "Match" means within 0.5%. A stock that differs by more than 2% is flagged and gets no new alerts until the sources agree. This checks completed sessions only. The live price during the session has no free independent source.'],
+    [/^Price accuracy$/, 'Yahoo is the main price source, so its closing prices on the last few completed sessions are compared with an independent source: the official NSE end-of-day file. "Match" means within 0.5%. A stock that differs by more than 2% is flagged and gets no new alerts until the sources agree. This checks completed sessions only. The live price during the session has no free independent source. A price feed that ends a session before the NSE file is marked as behind and gets no new alerts or tracked readings until it catches up.'],
     [/^Recent alerts$/, 'The latest alerts the app has raised: a change in a stock\'s reading, a fresh headline about the stock, or a price reaching its reference or risk level. Use "View analysis" to open the stock.'],
     [/^World and market news/, 'Headlines about markets, interest rates, oil, geopolitics and the economy, from outside news sources. They are not checked by this app.'],
     [/^India IPOs, dates and grey-market premium/, 'Open and upcoming India IPOs with their dates, price band, lot size and subscription. Grey-market premium (GMP) is an unofficial rumour of where the shares may list, and it can be wrong. The listing price and profit or loss are illustrations only.'],
-    [/^Recently listed stocks/, 'Stocks that have listed recently, found automatically on the NSE and Nasdaq/NYSE lists. They need about 60 trading days of history before readings appear.'],
-    [/^US IPO calendar/, 'Upcoming US IPOs from the Nasdaq calendar: the date, price range and size. Financials for companies that have not listed yet are not available here.'],
-    [/^IPO headlines/, 'News headlines that mention IPOs, from outside sources. They are not checked by this app.'],
+    [/^Recently listed stocks/, 'Stocks that have listed recently, found automatically on the NSE list. They need about 60 trading days of history before readings appear.'],
     [/^Check an IPO yourself/, 'Optional. Free sources do not publish an unlisted company\'s financials, so you type the figures here and the same fixed rules check them. It is the one place where you enter data.'],
     [/^IPO checker$/, 'Type in the figures of an IPO from its official documents and the fixed rules turn them into a reading for listing day and for holding long term. The reading is not a recommendation to apply.'],
     [/^Dates, price and grey-market premium$/, 'Optional. Add the dates, price band, lot size and your own grey-market premium figure to see the estimated listing price and profit or loss per lot. The premium is an unofficial rumour and is never used in the reading.'],
@@ -293,7 +307,7 @@
     [/^Track record$/, 'How the app\'s own bullish and bearish readings played out afterwards, as a plain record. It is not a forecast. Figures from fewer than 30 readings are unreliable.'],
     [/^By reading type$/, 'Results grouped by time frame (weeks view, months-to-years view) and direction (bullish, bearish). "Reference reached" means the price got to the reference level before the volatility risk level or the time limit.'],
     [/^By indicator alignment$/, 'The same results grouped by how strong the alignment was when the alert went out. If stronger alignment does not do better, the rules need review.'],
-    [/^By market$/, 'The same results for India and the United States separately.'],
+    [/^By market$/, 'The same results for each market.'],
     [/^Ideas to review$/, 'Observations drawn from the record, for you to judge. The app never changes its own rules.'],
     [/^Which indicators lined up/, 'For each indicator, how readings it supported moved on average compared with readings it opposed. It shows which inputs have been helping.'],
     [/^Latest results$/, 'The most recent readings that ended, with how they ended and the price move.'],
@@ -355,7 +369,7 @@
       const column = extraColumns(f.view).find((c) => 'col:' + c.label === f.sort);
       if (column && column.val) return column.val(s);
     }
-    return s[f.horizon].score;
+    return readingScore(s, f.horizon);
   }
   const defaultDir = (key) => (key === 'name' || key === 'col:Pays' || key === 'col:Last payment' || key === 'col:Pattern' || key === 'col:Pressure' ? 'asc' : 'desc');
   const currentDir = () => S.filters.dir || defaultDir(S.filters.sort);
@@ -454,11 +468,11 @@
   function passesOthers(s, tokens, fuzzy, skipSignal, skipTech) {
     const f = S.filters;
     if (f.market !== 'ALL' && s.market !== f.market) return false;
-    const label = s[f.horizon].label;
+    const reading = readingSide(s, f.horizon);
     if (skipSignal) { /* counted separately */ }
-    else if (f.signal === 'BUY' && side(label) !== 'buy') return false;
-    else if (f.signal === 'HOLD' && label !== 'Hold') return false;
-    else if (f.signal === 'SELL' && side(label) !== 'sell') return false;
+    else if (f.signal === 'BUY' && reading !== 'buy') return false;
+    else if (f.signal === 'HOLD' && reading !== 'hold') return false;
+    else if (f.signal === 'SELL' && reading !== 'sell') return false;
     if (tokens.length && !matchesQuery(s, tokens, fuzzy)) return false;
     return skipTech || techPass(s);
   }
@@ -636,10 +650,10 @@
     }, S.watch.has(s.symbol) ? '★' : '☆');
     const row = h('tr', { class: 'stock', tabindex: '0', 'aria-label': `${s.name} details` },
       h('td', null, star),
-      h('td', { class: 'name' }, h('b', null, s.name), h('span', null, s.symbol, s.new ? ' · new listing' : '', s.stale ? ' · stale price' : '', s.slim && !s.analysed ? ' · quote only' : '', s.series ? ` · ${s.series} series` : '', (s.flags || []).includes('thin') ? ' · thinly traded' : '')),
+      h('td', { class: 'name' }, h('b', null, s.name), h('span', null, s.symbol, s.new ? ' · new listing' : '', s.stale ? ' · stale price' : '', s.provenance_ok === false ? ' · data not current' : '', s.slim && !s.analysed ? ' · quote only' : '', s.series ? ` · ${s.series} series` : '', (s.flags || []).includes('thin') ? ' · thinly traded' : '')),
       h('td', { class: 'num' }, money(s.price, s.currency)),
       h('td', { class: `num ${isNum(s.change_pct) ? (s.change_pct >= 0 ? 'up' : 'down') : ''}` }, signed(s.change_pct)),
-      h('td', null, badge(s[f.horizon]), lagMark(s)),
+      h('td', null, badges(s, f.horizon), lagMark(s)),
       extraColumns(f.view).map((column) => h('td', { class: `${columnClass(column)}${column.cls ? ' ' + column.cls(s) : ''}` }, column.render(s))));
     row.addEventListener('click', () => openDetail(s.symbol, row));
     row.addEventListener('keydown', (e) => { if (e.key === 'Enter') openDetail(s.symbol, row); });
@@ -647,14 +661,14 @@
   }
 
   const PAGE = 150;                       // rows drawn at a time; the sort and filters always cover every stock
-  const MARKET_NAMES = { IN: 'India (NSE)', US: 'United States' };
-  const MARKET_INDEX = { IN: '^NSEI', US: '^GSPC' };
+  const MARKET_NAMES = { IN: 'India (NSE)' };
+  const MARKET_INDEX = { IN: '^NSEI' };
 
   /* One panel per market: a header with buy/hold/sell counts and the index trend, then its table. */
   function marketPanel(code, rows) {
     const horizon = S.filters.horizon;
     const count = { buy: 0, hold: 0, sell: 0 };
-    for (const s of rows) if (s[horizon].label) count[side(s[horizon].label)] += 1;
+    for (const s of rows) { const reading = readingSide(s, horizon); if (reading) count[reading] += 1; }
     const index = ((S.data.market || {}).watch || []).find((w) => w.symbol === MARKET_INDEX[code]);
     const head = h('div', { class: 'panelhead' },
       h('h2', null, MARKET_NAMES[code]),
@@ -688,7 +702,7 @@
     const f = S.filters;
     const signature = [f.market, f.list, f.sector, f.signal, S.q, JSON.stringify(f.tech || {})].join('|');
     if (signature !== S.sig) { S.sig = signature; S.shown = {}; }        // a new search or filter starts again at the first page
-    const hidden = f.signal === 'ALL' ? 0 : visibleStocks(true).filter((s) => !s[f.horizon].label).length;
+    const hidden = f.signal === 'ALL' ? 0 : visibleStocks(true).filter((s) => readingSide(s, f.horizon) === null).length;
     const hiddenTech = activeTech().length ? visibleStocks(false, true).filter((s) => !hasTech(s)).length : 0;
     const extraNote = needsExtra() && S.catalog === 'ready' ? (S.extra === 'failed' ? h('p', { class: 'small notice warnline' }, 'The indicator values of the other stocks could not be loaded, so technical filters and the extra columns only cover the main list. ', h('button', { type: 'button', class: 'chip', onclick: () => { S.extra = null; updateSignals(); } }, 'Try again'))
       : S.extra !== 'ready' ? h('p', { class: 'muted small notice' }, 'Loading indicator values for the other stocks…') : null) : null;
@@ -699,7 +713,7 @@
         : info && info.analysed < info.count * 0.98 ? h('p', { class: 'muted small notice' }, `${info.analysed.toLocaleString()} of ${info.count.toLocaleString()} other listed stocks are analysed so far. The rest show their quote only and fill in over the next few hours.`) : null;
     const READING = { BUY: 'Aligned bullish', HOLD: 'Mixed', SELL: 'Aligned bearish' };
     const on = [];
-    if (f.market !== 'ALL') on.push([f.market === 'IN' ? 'India only' : 'United States only', () => { f.market = 'ALL'; f.list = 'ALL'; f.sector = 'ALL'; }]);
+    if (f.market !== 'ALL') on.push(['India only', () => { f.market = 'ALL'; f.list = 'ALL'; f.sector = 'ALL'; }]);
     if (f.signal !== 'ALL') on.push([`Reading: ${READING[f.signal]}`, () => { f.signal = 'ALL'; }]);
     if (S.q.trim()) on.push([`Search: "${S.q.trim()}"`, () => { S.q = ''; const box = document.querySelector('input[type=search]'); if (box) box.value = ''; }]);
     for (const [key, label, options] of activeTech()) on.push([`${label}: ${(options.find(([v]) => v === f.tech[key]) || [])[1] || f.tech[key]}`, () => { delete f.tech[key]; renderTech(); }]);
@@ -707,7 +721,7 @@
       h('span', { class: 'muted small', style: 'align-self:center' }, 'Filters on:'),
       on.map(([text, undo]) => h('button', { type: 'button', class: 'chip on', title: 'Remove this filter', onclick: () => { undo(); saveFilters(); updateSignals(); } }, `${text} ✕`))) : null;
     const head = h('div', { class: 'row small muted', style: 'justify-content:space-between;margin-bottom:6px' },
-      h('span', null, `${rows.length} stock${rows.length === 1 ? '' : 's'} · ${f.horizon === 'short' ? 'weeks view' : 'months-to-years view'} reading`,
+      h('span', null, `${rows.length} stock${rows.length === 1 ? '' : 's'} · ${horizonName(f.horizon)} reading`,
         hidden ? ` · ${hidden.toLocaleString()} without a reading yet hidden by the Reading filter` : '',
         hiddenTech ? ` · ${hiddenTech.toLocaleString()} without technical data hidden by the technical filters` : '', fuzzy ? ` · no exact match for "${S.q.trim()}", showing close matches` : ''),
       f.list.startsWith('C:') ? h('button', { type: 'button', class: 'chip', onclick: () => {
@@ -719,11 +733,11 @@
       results.replaceChildren(...[status, extraNote, activeBar, head, h('div', { class: 'empty' },
         f.list === 'WATCH' && !S.q ? 'Your watchlist is empty. Tap the star next to a stock to add it.'
           : S.catalog === 'loading' && S.q ? 'Nothing found in the main list yet. Every other listed stock is still loading.'
-          : S.q ? `No stock matches "${S.q.trim()}". This app covers stocks listed on the NSE (main board and SME) and the S&P 500; a company listed only on the BSE is not included. ` : 'No stocks match these filters. ',
+          : S.q ? `No stock matches "${S.q.trim()}". This app covers stocks listed on the NSE (main board and SME) ; a company listed only on the BSE is not included. ` : 'No stocks match these filters. ',
         f.list === 'WATCH' && !S.q ? null : h('button', { type: 'button', class: 'chip', onclick: clear }, 'Clear filters'))].filter(Boolean));
       return;
     }
-    const codes = f.market === 'ALL' ? ['IN', 'US'] : [f.market];
+    const codes = ['IN'];
     results.replaceChildren(...[status, extraNote, activeBar, head, h('div', { class: 'cols' + (codes.length > 1 ? ' two' : '') + (f.view !== 'overview' ? ' wide-view' : '') }, codes.map((code) => marketPanel(code, rows.filter((s) => s.market === code))))].filter(Boolean));
     decorateHelp(results);
   }
@@ -760,12 +774,11 @@
     const search = h('input', { type: 'search', placeholder: 'Name or symbol', value: S.q, 'aria-label': 'Search stocks', oninput: (e) => { S.q = e.target.value; updateSignals(); } });
     const bar = h('div', { class: 'card filterbar' }, h('div', { class: 'row' },
       h('label', { class: 'field' }, 'Search', search),
-      select('Market', f.market, [['ALL', 'All markets'], ['IN', 'India'], ['US', 'United States']], (v) => { f.market = v; f.list = 'ALL'; f.sector = 'ALL'; saveFilters(); updateSignals(); }),
       select('Reading', f.signal, [['ALL', 'Any'], ['BUY', 'Aligned bullish'], ['HOLD', 'Mixed'], ['SELL', 'Aligned bearish']], (v) => { f.signal = v; saveFilters(); updateSignals(); }),
       select('Sort by', f.sort, [['score', 'Indicator alignment'], ['change', 'Day change'], ['dividend', 'Dividend yield'], ['name', 'Name']].concat(['score', 'change', 'dividend', 'name'].includes(f.sort) ? [] : [[f.sort, 'Table column']]), (v) => { f.sort = v; f.dir = defaultDir(v); saveFilters(); updateSignals(); }),
       h('div', { class: 'field' }, 'Horizon', h('div', { class: 'row', style: 'gap:6px' },
-        ['short', 'long'].map((hz) => h('button', { type: 'button', class: 'chip' + (f.horizon === hz ? ' on' : ''), 'aria-pressed': f.horizon === hz ? 'true' : 'false',
-          onclick: () => { f.horizon = hz; saveFilters(); render(); } }, hz === 'short' ? 'Short-term' : 'Long-term')))),
+        ['short', 'long', 'both'].map((hz) => h('button', { type: 'button', class: 'chip' + (f.horizon === hz ? ' on' : ''), 'aria-pressed': f.horizon === hz ? 'true' : 'false',
+          onclick: () => { f.horizon = hz; saveFilters(); render(); } }, hz === 'short' ? 'Short-term' : hz === 'long' ? 'Long-term' : 'Both')))),
       select('Columns', f.view, VIEWS, (v) => { f.view = v; saveFilters(); updateSignals(); }),
       h('button', { type: 'button', class: 'chip', title: 'Download the stocks shown as a spreadsheet file', onclick: exportCsv }, 'Export CSV')));
     const root = h('div', null, evidenceStrip(), bar, h('div', { class: 'signals-layout' },
@@ -895,6 +908,74 @@
       (sig.invalidation || []).length ? h('div', { class: 'small invalid' }, h('b', null, 'What would weaken this: '), sig.invalidation.join('; '), '.') : null);
   }
 
+
+  /* ---------- where every figure comes from, when it was read, and whether it is current ---------- */
+  const STATE_TAG = { fresh: ['buy', 'Current'], verified: ['buy', 'Verified'], aging: ['', 'Ageing'], unverified: ['', 'Not cross-checked'], unknown: ['', 'Unknown'],
+    stale: ['warn', 'Not current'], disputed: ['warn', 'Disputed'] };
+  const GROUP_NAMES = { price: 'Price', indicators: 'Indicators and readings', end_of_day: 'Closing price cross-check', live: 'Live price cross-check',
+    fundamentals: 'Fundamentals (ratios)', statements: 'Quarterly results and statements', dividends: 'Dividends', news: 'Headlines' };
+  const readStamp = (iso) => { const d = iso ? new Date(iso) : null; return d && !Number.isNaN(d.getTime()) ? d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '–'; };
+
+  function provenanceCard(s) {
+    const p = s.provenance;
+    if (!p) return null;
+    const rows = Object.keys(GROUP_NAMES).filter((k) => p[k]).map((k) => {
+      const e = p[k], [cls, text] = STATE_TAG[e.state] || ['', e.state];
+      const age = isNum(e.age_days) ? `${e.age_days} day${e.age_days === 1 ? '' : 's'} old` : '';
+      return h('tr', null, h('td', null, GROUP_NAMES[k]), h('td', { class: 'small' }, e.source), h('td', { class: 'num' }, e.as_of || '–'),
+        h('td', { class: 'num hide-sm' }, readStamp(e.read_at), age ? h('div', { class: 'muted small' }, age) : null),
+        h('td', null, h('span', { class: `tag ${cls}` }, text), e.note ? h('div', { class: 'muted small' }, e.note) : null));
+    });
+    const notCurrent = ['price', 'indicators', 'end_of_day', 'live'].filter((k) => p[k] && ['stale', 'disputed'].includes(p[k].state)).map((k) => GROUP_NAMES[k].toLowerCase());
+    return h('details', { class: 'card wide provenance', open: s.provenance_ok === false },
+      h('summary', null, h('b', null, 'Data sources and freshness '), s.provenance_ok === false ? h('span', { class: 'tag warn' }, 'Some inputs are not current') : h('span', { class: 'tag buy' }, 'Inputs current')),
+      s.provenance_ok === false ? h('p', { class: 'small warnline' }, `The ${notCurrent.join(' and ') || 'inputs'} behind this reading ${notCurrent.length > 1 ? 'are' : 'is'} not current or not confirmed, so treat the reading with care. New alerts and tracked readings for this stock are paused until the data catches up.`) : null,
+      h('div', { style: 'overflow-x:auto' }, h('table', null, h('thead', null, h('tr', null, h('th', null, 'Figures'), h('th', null, 'Source'), h('th', { class: 'num' }, 'Data as of'), h('th', { class: 'num hide-sm' }, 'Read'), h('th', null, 'Status'))), h('tbody', null, rows))),
+      h('p', { class: 'muted small', style: 'margin-bottom:0' }, 'Every group of figures carries its source, the date it describes and the time it was read. No alert is sent and no reading is tracked on a price series that is missing the newest session or that a second source disputes.'));
+  }
+
+  const QUARTER_ROWS = [['revenue', 'Revenue'], ['operating_income', 'Operating income'], ['ebitda', 'EBITDA'], ['net_income', 'Net income'], ['eps', 'Diluted EPS']];
+  const YEAR_ROWS = QUARTER_ROWS.concat([['equity', "Shareholders' equity"], ['total_debt', 'Total debt'], ['operating_cash_flow', 'Operating cash flow'], ['free_cash_flow', 'Free cash flow']]);
+
+  function statementsBlock(s) {
+    const st = s.statements;
+    if (!st || !st.quarterly) return h('p', { class: 'muted small' }, st ? 'The statement figures are loaded when this page opens.' : 'No quarterly results or statements have been read for this stock yet. They are read automatically, a few stocks at a time.');
+    const money = (key, v) => (!isNum(v) ? '–' : key === 'eps' ? number(v, 2) : big(v, st.currency));
+    const table = (period, rowsDef, cols) => {
+      const dates = [...new Set(rowsDef.flatMap(([k]) => ((st[period] || {})[k] || []).map((r) => r.date)))].sort().slice(-cols).reverse();
+      if (!dates.length) return null;
+      return h('div', { style: 'overflow-x:auto' }, h('table', null, h('thead', null, h('tr', null, h('th', null, period === 'quarterly' ? 'Quarter ended' : 'Year ended'), dates.map((d) => h('th', { class: 'num' }, d)))),
+        h('tbody', null, rowsDef.filter(([k]) => (st[period] || {})[k]).map(([k, label]) => h('tr', null, h('td', null, label),
+          dates.map((d) => { const row = (st[period][k] || []).find((r) => r.date === d); return h('td', { class: 'num' }, money(k, row && row.value)); }))))));
+    };
+    const sum = st.summary || {}, change = (o, k) => (isNum((o || {})[k]) ? signed(o[k], 1) : 'no comparable quarter');
+    return h('div', null,
+      sum.latest_quarter ? h('p', { class: 'small' }, h('b', null, `Latest quarter ${sum.latest_quarter}: `), `revenue ${change(sum.qoq, 'revenue')} on the quarter before, net income ${change(sum.qoq, 'net_income')}`,
+        isNum((sum.yoy || {}).revenue) ? `; against the same quarter a year before: revenue ${signed(sum.yoy.revenue, 1)}, net income ${change(sum.yoy, 'net_income')}` : '; no figure for the same quarter a year before, so no yearly change is shown',
+        isNum(sum.net_margin_pct) ? `. Net margin ${sum.net_margin_pct}%.` : '.') : null,
+      st.currency && s.currency && st.currency !== s.currency ? h('p', { class: 'small warnline' }, `These statements are reported in ${st.currency} while the price is in ${s.currency}: do not mix them in ratios.`) : null,
+      h('h4', null, 'By quarter'), table('quarterly', QUARTER_ROWS, 8) || h('p', { class: 'muted small' }, 'No quarterly figures.'),
+      h('h4', null, 'By financial year'), table('annual', YEAR_ROWS, 6) || h('p', { class: 'muted small' }, 'No yearly figures.'),
+      h('p', { class: 'muted small' }, `Source: ${st.source || 'Yahoo Finance'}, read ${readStamp(st.fetched_at)}${st.currency ? `, in ${st.currency}` : ''}. A quarter Yahoo does not list is left blank, never filled in, and no growth rate is worked out across a gap.`));
+  }
+
+  /* Fundamental quality and valuation, scored with the same fixed rules as a new listing (profit margin, revenue growth, debt, return on equity, P/E against
+     the sector's median P/E). A part without data is left out, never counted as zero. */
+  function qualityBlock(s) {
+    const f = s.fundamentals || {};
+    const peers = S.data.stocks.filter((p) => p.sector === s.sector && p.market === s.market && p.symbol !== s.symbol).map((p) => (p.fundamentals || {}).pe);
+    const peerPe = IPO.median(peers);
+    const v = IPO.qualityFromFundamentals(f, peerPe);
+    if (!isNum(v.score)) return h('p', { class: 'muted small' }, 'Not enough fundamentals to score quality and valuation for this stock.');
+    const words = v.score >= 30 ? ['buy', 'Stronger fundamentals'] : v.score <= -20 ? ['warn', 'Weaker fundamentals'] : ['', 'Mixed fundamentals'];
+    const names = { profitability: 'profit margin', growth: 'revenue growth', leverage: 'debt', returns: 'return on equity', valuation: 'valuation against sector P/E' };
+    return h('div', null, h('p', null, h('span', { class: `tag ${words[0]}` }, words[1]), ` score ${v.score > 0 ? '+' : ''}${v.score} on a scale from -100 to +100. `,
+      h('span', { class: 'muted small' }, `Fundamentals as of ${f.most_recent_quarter || 'an unknown date'}, read ${readStamp(((s.provenance || {}).fundamentals || {}).read_at)}.`)),
+      reasonsList(v.reasons),
+      v.missing.length ? h('p', { class: 'muted small' }, 'Not used (no data): ' + v.missing.map((k) => names[k] || k).join(', ') + '.') : null,
+      h('p', { class: 'muted small', style: 'margin-bottom:0' }, "A description of the reported figures against fixed bands, not a forecast or a recommendation. Banks have no debt or EBITDA figure, and the sector P/E is the median of the stocks in this app's list."));
+  }
+
   /* Where the numbers come from and how current they are. */
   function dataNote(s) {
     const lines = [`Prices: free Yahoo Finance data, delayed by up to about 15 minutes. Price date ${s.as_of}.`,
@@ -989,7 +1070,7 @@
   function backtestMethod(s) {
     const m = S.data.backtest_method;
     if (!m) return null;
-    const c = (m.costs || {})[s.market === 'IN' ? 'IN' : 'US'];
+    const c = (m.costs || {}).IN;
     return h('details', { class: 'card wide' }, h('summary', null, 'Assumptions and limits of these tests'),
       c ? h('p', { class: 'small' }, `Costs assumed for this market: ${c.entry_pct}% to buy and ${c.exit_pct}% to sell (${c.round_trip_pct}% for a round trip), including taxes, fees and slippage. These are assumptions: your broker's charges differ.`) : null,
       h('ul', { class: 'clean small' }, (m.notes || []).map((n) => h('li', null, n))));
@@ -1153,8 +1234,8 @@
     return `Past test on this stock (${e.years} years, after costs and with dividends): the rule returned ${signed(e.rule * 100, 0)} against ${signed(e.hold * 100, 0)} for simply holding, so it ${e.beat ? 'beat' : 'lagged'} holding${e.few_trades ? ' (few trades, so little to go on)' : ''}.`;
   };
   const lagMark = (s) => {
-    const e = (s.evidence || {})[S.filters.horizon];
-    return e && !e.beat ? h('span', { class: 'lag', title: pastTest(s, S.filters.horizon) + ' Past results do not predict future ones.' }, ' ▽') : null;
+    const lagged = hzList(S.filters.horizon).filter((hz) => { const e = (s.evidence || {})[hz]; return e && !e.beat; });
+    return lagged.length ? h('span', { class: 'lag', title: lagged.map((hz) => pastTest(s, hz)).join(' ') + ' Past results do not predict future ones.' }, ' ▽') : null;
   };
   const FLAG_TEXT = { thin: ['Thinly traded', 'Small daily turnover: a few trades move the price, so indicators on this stock say little.'], short_history: ['Under a year of prices', 'Long-term checks need about a year of prices, so the months-to-years reading rests on less.'] };
   const flagTags = (s) => (s.flags || []).filter((f) => FLAG_TEXT[f]).map((f) => h('span', { class: 'tag warn', title: FLAG_TEXT[f][1] }, FLAG_TEXT[f][0]));
@@ -1162,7 +1243,7 @@
   function evidenceStrip() {
     const ev = (S.data && S.data.evidence) || {};
     const lines = [];
-    for (const [market, name] of [['IN', 'NSE'], ['US', 'US']]) {
+    for (const [market, name] of [['IN', 'NSE']]) {
       for (const [hz, label] of [['short', 'weeks view'], ['long', 'months-to-years view']]) {
         const x = (ev[market] || {})[hz];
         if (x) lines.push([`${name}, ${label}`, `${x.beat} of ${x.n} stocks (${x.beat_pct}%) beat buy-and-hold; median return ${signed(x.median_rule * 100, 0)} for the rule against ${signed(x.median_hold * 100, 0)} for holding, over about ${x.median_years} years`]);
@@ -1215,7 +1296,7 @@
     const bt = s.backtest || {};
     const r = s.risk;
     const hero = h('div', { class: 'hero' },
-      h('div', { class: 'herotags chips-row' }, h('span', { class: 'tag' }, s.market === 'IN' ? 'India' : 'US'), s.exchange ? h('span', { class: 'tag' }, s.exchange) : null, s.sector ? h('span', { class: 'tag' }, s.sector) : null,
+      h('div', { class: 'herotags chips-row' }, h('span', { class: 'tag' }, 'India'), s.exchange ? h('span', { class: 'tag' }, s.exchange) : null, s.sector ? h('span', { class: 'tag' }, s.sector) : null,
         qualityTag(s), flagTags(s)),
       verdictBlock(s),
       priceMap(s), statsGrid(s), glanceChips(s));
@@ -1226,7 +1307,8 @@
         alertsForStock(s),
         h('div', { class: 'grid wide', id: 'd-signals' }, h('section', { class: 'card' }, signalCard('Short-term view (weeks)', s.short)), h('section', { class: 'card' }, signalCard('Long-term view (months to years)', s.long))),
         dataNote(s),
-        h('div', { class: 'wide' }, qualityLine(s))],
+        h('div', { class: 'wide' }, liveLine(s), qualityLine(s)),
+        provenanceCard(s)],
       technicals: [
         section('Buying and selling pressure', ...pressureBlock(s)),
         positionCalculator(s),
@@ -1235,6 +1317,8 @@
           ['Bad-day average loss', r ? percent(r.expected_shortfall95) : '–'], ['Worst fall (1 year)', r ? percent(r.max_drawdown, 0) : '–'], ['Beta', r ? number(r.beta) : '–']])),
         section('Patterns', (s.patterns || []).length ? (s.patterns).map((p) => h('div', { title: p.note, style: 'margin-bottom:6px' }, h('span', { class: `tag ${p.bias === 'bearish' ? 'warn' : ''}` }, `${p.name} (${p.bias})`), h('span', { class: 'muted small' }, p.note))) : h('p', { class: 'muted small' }, 'No notable pattern on the latest candles.'))],
       fundamentals: [
+        wide(section('Fundamental quality and valuation', qualityBlock(s))),
+        wide(section('Quarterly results and financial statements', statementsBlock(s))),
         wide(section('Fundamentals', fundamentalsBlock(s))),
         wide(section('Dividends', dividendBlock(s))),
         wide(section('Peers in the same sector', peersBlock(s))),
@@ -1272,7 +1356,7 @@
       if (s.stale || s.new || s.bars < 260 || !isNum(s.short.score) || !isNum(s.long.score)) continue;
       const vol = s.risk && s.risk.annual_vol;
       if (!isNum(vol) || vol > maxVol) continue;
-      const blend = p.horizon === 'short' ? 0.7 * s.short.score + 0.3 * s.long.score : 0.3 * s.short.score + 0.7 * s.long.score;
+      const blend = p.horizon === 'short' ? 0.7 * s.short.score + 0.3 * s.long.score : p.horizon === 'both' ? 0.5 * s.short.score + 0.5 * s.long.score : 0.3 * s.short.score + 0.7 * s.long.score;
       if (blend < 15) continue;
       const f = s.fundamentals || {};
       const quality = IPO.qualityFromFundamentals(f, null);
@@ -1297,7 +1381,7 @@
 
   function suggestionCard(pick, rank) {
     const { s } = pick;
-    const why = [`${S.profile.horizon === 'short' ? 'Short' : 'Long'}-term reading: ${labelText(s[S.profile.horizon].label)}`];
+    const why = [S.profile.horizon === 'both' ? `Weeks view: ${labelText(s.short.label)}; months-to-years view: ${labelText(s.long.label)}` : `${S.profile.horizon === 'short' ? 'Short' : 'Long'}-term reading: ${labelText(s[S.profile.horizon].label)}`];
     if (pick.dividend >= 0.02) why.push(`Dividend yield ${percent(pick.dividend, 1)}${pick.s.dividend && pick.s.dividend.payments_per_year ? ' (' + pick.s.dividend.frequency.toLowerCase() + ')' : ''}`);
     if (pick.vol < 0.25) why.push(`Low volatility (${percent(pick.vol, 0)})`);
     if (isNum(pick.growthRaw) && pick.growthRaw > 0.1) why.push(`Revenue growth ${percent(pick.growthRaw, 0)}`);
@@ -1311,7 +1395,7 @@
     if (shortTest && !shortTest.beats_buy_hold_oos) risks.push('the short-term rule has lagged buy-and-hold recently');
     const card = h('div', { class: 'card', tabindex: '0', style: 'cursor:pointer' },
       h('div', { class: 'row', style: 'justify-content:space-between;align-items:center' },
-        h('div', null, h('b', null, `${rank}. ${s.name}`), h('span', { class: 'muted small' }, ` ${s.symbol}`)), badge(s[S.profile.horizon])),
+        h('div', null, h('b', null, `${rank}. ${s.name}`), h('span', { class: 'muted small' }, ` ${s.symbol}`)), badges(s, S.profile.horizon)),
       h('div', null, why.map((w) => h('span', { class: 'tag' }, w))),
       h('p', { class: 'small muted', style: 'margin:6px 0 0' }, 'Main risks: ' + risks.join('; ') + '.'));
     card.addEventListener('click', () => openDetail(s.symbol, card));
@@ -1330,9 +1414,9 @@
     };
     const form = h('div', { class: 'card' }, h('div', { class: 'row' },
       select('My goal', p.goal, [['income', 'Regular income (dividends)'], ['growth', 'Growth'], ['balanced', 'Balanced']], (v) => { p.goal = v; draw(); }),
-      select('Time horizon', p.horizon, [['short', 'Short (weeks)'], ['long', 'Long (months to years)']], (v) => { p.horizon = v; draw(); }),
+      select('Time horizon', p.horizon, [['short', 'Short (weeks)'], ['long', 'Long (months to years)'], ['both', 'Both']], (v) => { p.horizon = v; draw(); }),
       select('Risk I can accept', p.risk, [['low', 'Low (steady stocks)'], ['medium', 'Medium'], ['high', 'High']], (v) => { p.risk = v; draw(); }),
-      select('Market', p.market, [['ALL', 'Both'], ['IN', 'India'], ['US', 'United States']], (v) => { p.market = v; draw(); })),
+      select('Market', p.market, [['ALL', 'Both'], ['IN', 'India']], (v) => { p.market = v; draw(); })),
       h('p', { class: 'muted small', style: 'margin-bottom:0' }, 'A ranked screen using your answers, signals, fundamentals and risk. It is not personal advice. Check the stock page and your own situation before acting.'));
     queueMicrotask(draw);
     return h('div', null, h('h2', null, 'Stock screens'), form, results);
@@ -1352,7 +1436,7 @@
       return h('label', { class: 'field' }, label, fields[key]);
     };
     const sector = h('select', { 'aria-label': 'Sector for peer P/E' }, h('option', { value: '' }, 'Pick a sector'), sectors.map((n) => h('option', { value: n }, n)));
-    const marketSel = h('select', { 'aria-label': 'Market for peer P/E' }, h('option', { value: 'IN' }, 'India'), h('option', { value: 'US' }, 'United States'));
+    const marketSel = h('select', { 'aria-label': 'Market for peer P/E' }, h('option', { value: 'IN' }, 'India'));
     const fillPeer = () => {
       const pes = S.data.stocks.filter((s) => s.sector === sector.value && s.market === marketSel.value).map((s) => (s.fundamentals || {}).pe);
       const m = IPO.median(pes);
@@ -1550,22 +1634,7 @@
   }
 
   function viewIpo() {
-    const ipos = S.data.ipos || { us: [], headlines: [], us_ok: false };
-    const tag = (status) => h('span', { class: 'tag' }, status);
-    const range = (d) => (isNum(d.price_low) ? (d.price_high !== d.price_low ? `$${d.price_low}–$${d.price_high}` : `$${d.price_low}`) : '–');
-    const usTable = ipos.us.length ? h('div', { class: 'card', style: 'padding:0;overflow-x:auto' }, h('table', null,
-      h('thead', null, h('tr', null, h('th', null, 'Company'), h('th', null, 'Status'), h('th', { class: 'num' }, 'Price range'), h('th', { class: 'num hide-sm', title: 'As published on the Nasdaq calendar; it can include an over-allotment option' }, 'Size (per Nasdaq)'), h('th', null, 'Date'))),
-      h('tbody', null, ipos.us.map((d) => h('tr', null, h('td', { class: 'name' }, h('b', null, d.name), h('span', null, `${d.symbol || 'ticker TBD'} ${d.exchange ? '· ' + d.exchange : ''}`)),
-        h('td', null, tag(d.status), d.stale ? h('span', { class: 'tag warn', title: 'From an old copy of the calendar, not current' }, 'Stale') : null), h('td', { class: 'num' }, range(d)), h('td', { class: 'num hide-sm' }, big(d.amount, 'USD')),
-        h('td', null, d.date || '–', d.date_passed ? h('span', { class: 'tag warn', title: 'The date on the old list has already passed' }, 'Date passed') : null)))))) :
-      h('div', { class: 'empty card' }, ipos.us_ok ? 'No US IPOs on the calendar right now.' : 'No current US IPO list is available (see the notice above).');
-    const st = ipos.us_status;
-    const usNotice = st && st.state !== 'current' ? h('div', { class: 'card staleipo', role: 'alert' },
-      h('b', null, st.state === 'stale' ? 'This US IPO list is STALE, not current. ' : 'There is no current US IPO list. '),
-      st.error ? `Why: ${st.error}. ` : '',
-      st.last_success ? `Last successful refresh: ${st.last_success.slice(0, 16).replace('T', ' ')} UTC${isNum(st.age_days) ? ` (${st.age_days} day${st.age_days === 1 ? '' : 's'} ago)` : ''}. The records below are from that day (original data date ${st.original_date}) and may have changed. ` : 'It has not loaded successfully for a long time. ',
-      st.last_attempt ? `Last attempt: ${st.last_attempt.slice(0, 16).replace('T', ' ')} UTC. ` : '',
-      h('a', { href: st.page_url, target: '_blank', rel: 'noopener' }, 'Check the live Nasdaq calendar')) : null;
+    const ipos = S.data.ipos || { headlines: [] };
     const fresh = S.data.stocks.filter((s) => s.new).sort((a, b) => String(b.listed).localeCompare(String(a.listed)));
     const freshTable = fresh.length ? h('div', { class: 'card', style: 'padding:0;overflow-x:auto' }, h('table', null,
       h('thead', null, h('tr', null, h('th', null, 'Stock'), h('th', { class: 'num' }, 'Price'), h('th', null, 'Listed'), h('th', null, 'Signal'), h('th', null, 'Fundamentals check'))),
@@ -1580,10 +1649,7 @@
     queueMicrotask(drawTracker);
     return h('div', null,
       indiaIpoSection(ipos),
-      h('h2', null, 'Recently listed stocks (added automatically)'), h('p', { class: 'muted small' }, 'New listings found on the NSE list and the Nasdaq/NYSE symbol list are added on their own. Signals need about 60 trading days of history, and fundamentals appear once the company reports.'), freshTable,
-      h('h2', null, 'US IPO calendar'), h('p', { class: 'muted small' }, 'From the Nasdaq calendar. Financials for companies that have not listed yet are not available here: use the optional checker at the bottom with figures from the prospectus.'),
-      usNotice, usTable,
-      h('h2', null, 'IPO headlines'), h('div', { class: 'card' }, newsList(ipos.headlines, true)),
+      h('h2', null, 'Recently listed stocks (added automatically)'), h('p', { class: 'muted small' }, 'New listings found on the NSE list are added on their own. Signals need about 60 trading days of history, and fundamentals appear once the company reports.'), freshTable,
       h('h2', null, 'Check an IPO yourself (optional)'),
       h('p', { class: 'muted small' }, 'Everything above updates by itself. Use this only for an IPO that is not in the table above, or to score a company\'s financials: it is the one place you type figures.'),
       ipoChecker(), h('h3', null, 'My IPO tracker'), h('div', { id: 'ipoTracker' }));
@@ -1663,7 +1729,7 @@
     const when = o.fetched_at ? `last read ${o.fetched_at.slice(0, 16).replace('T', ' ')} UTC` : 'not read successfully yet';
     return h('p', { class: `small ${o.ok ? 'muted' : 'warnline'}`, role: o.ok ? null : 'status' },
       o.ok ? `Indian dates are checked against the NSE's own announcement feeds (${when}): ${o.confirmed} confirmed, ${o.conflicts} with a different official date, ${o.unverified} unverified.`
-        : `The NSE announcement feed could not be read (${o.error || 'no answer'}), so no date is confirmed; ${when}. US dates have no official machine-readable feed, so they are never confirmed here.`);
+        : `The NSE announcement feed could not be read (${o.error || 'no answer'}), so no date is confirmed; ${when}. `);
   }
 
   function eventItem(e, withStock) {
@@ -1757,7 +1823,7 @@
         h('label', { class: 'field' }, h('span', null, 'Search'), h('input', { type: 'search', placeholder: 'Name or symbol', value: f.q, 'aria-label': 'Search events',
           oninput: (ev) => { f.q = ev.target.value; clearTimeout(draw.timer); draw.timer = setTimeout(() => { draw(); const box = root.querySelector('input[type=search]'); if (box) { box.focus(); box.setSelectionRange(f.q.length, f.q.length); } }, 250); } })),
         h('label', { class: 'field' }, h('span', null, 'Market'), h('select', { onchange: (ev) => { f.market = ev.target.value; draw(); } },
-          [['ALL', 'All markets'], ['IN', 'India'], ['US', 'United States']].map(([v, text]) => h('option', { value: v, selected: v === f.market }, text)))),
+          [['ALL', 'All markets'], ['IN', 'India']].map(([v, text]) => h('option', { value: v, selected: v === f.market }, text)))),
         h('label', { class: 'field' }, h('span', null, 'My watchlist only'), h('input', { type: 'checkbox', checked: f.mine, onchange: (ev) => { f.mine = ev.target.checked; draw(); } })),
         null));
 
@@ -1836,19 +1902,34 @@
       h('p', { class: 'muted small', style: 'padding:0 12px 8px;margin:6px 0 0' }, 'Average move of the stocks in each sector, every stock counted the same.'));
   }
 
-  function accuracyCard(accuracy) {
-    const rows = ['IN', 'US'].map((k) => (accuracy || {})[k]).filter(Boolean);
+  function accuracyCard(accuracy, live) {
+    const rows = ['IN'].map((k) => (accuracy || {})[k]).filter(Boolean);
     if (!rows.length) return null;
     const pct = (v, d = 3) => (isNum(v) ? `${v.toFixed(d)}%` : '–');
     return h('div', null, h('h2', null, 'Price accuracy ', src('DERIVED')),
-      h('div', { class: 'grid' }, rows.map((s) => h('div', { class: 'card' },
-        h('h3', { style: 'margin:0 0 4px' }, `${s.market === 'IN' ? 'India' : 'United States'}: ${s.source}`),
+      h('div', { class: 'grid' }, live ? h('div', { class: 'card' },
+        h('h3', { style: 'margin:0 0 4px' }, 'India live prices: NSE live snapshot'),
+        h('div', { class: `regime ${live.mismatch ? 'down' : 'up'}` }, `${live.match} of ${live.compared} match`),
+        kv([['Stocks compared (biggest movers)', String(live.compared)], ['Match within 1%', String(live.match)], ['Differ 1% to 3%', String(live.minor)],
+          ['Differ more than 3%', String(live.mismatch)], ['Median difference', pct(live.median_diff_pct)], ['Largest difference', pct(live.max_diff_pct, 2)],
+          ['Snapshot time', live.as_of ? String(live.as_of).slice(0, 16).replace('T', ' ') + ' IST' : '–']]),
+        h('p', { class: 'muted small', style: 'margin-bottom:0' }, 'The NSE lists only its biggest movers, so most stocks have no live check. A mover more than 3% away from the NSE price gets no alert.')) : null, rows.map((s) => h('div', { class: 'card' },
+        h('h3', { style: 'margin:0 0 4px' }, `India: ${s.source}`),
         h('div', { class: `regime ${s.mismatch ? 'down' : 'up'}` }, isNum(s.agreement_pct) ? `${s.agreement_pct.toFixed(1)}% match` : 'Not checked'),
         kv([['Stocks checked', `${s.verified} of ${s.stocks}`], ['Match within 0.5%', String(s.match)], ['Differ 0.5% to 2%', String(s.minor)],
-          ['Differ more than 2%', String(s.mismatch)], ['Median difference', pct(s.median_diff_pct)], ['Largest difference', pct(s.max_diff_pct, 2)],
+          ['Differ more than 2%', String(s.mismatch)], ['Feed a session behind', String(s.behind || 0)], ['Median difference', pct(s.median_diff_pct)], ['Largest difference', pct(s.max_diff_pct, 2)],
           ['Latest session compared', s.as_of || '–'], ['Not covered', String(s.unverified)]]),
         s.worst && s.worst.length ? h('p', { class: 'muted small', style: 'margin-bottom:0' }, 'Largest differences: ', s.worst.map((w) => `${w.symbol} ${w.max_diff_pct}%`).join(', ')) : null))),
-      h('p', { class: 'muted small' }, 'The Yahoo closing prices on the last completed sessions are compared with the source named above. Live prices during the session are Yahoo only: no free independent source exists.'));
+      h('p', { class: 'muted small' }, 'The Yahoo closing prices on the last completed sessions are compared with the source named above. Live prices during the session are Yahoo, checked against the NSE live snapshot for the biggest movers only.'));
+  }
+
+  function liveLine(s) {
+    const l = s.live_check;
+    if (!l) return null;
+    const when = l.as_of ? ` (snapshot ${String(l.as_of).slice(11, 16)} IST)` : '';
+    if (l.status === 'match') return h('div', { class: 'muted small' }, h('span', { class: 'tag buy' }, 'Live price checked'), ` against the NSE live snapshot: ${l.diff_pct > 0 ? '+' : ''}${l.diff_pct}%${when}`);
+    if (l.status === 'minor') return h('div', { class: 'muted small' }, h('span', { class: 'tag' }, 'Live price differs a little'), ` from the NSE live snapshot by ${l.diff_pct}%${when}. Read a moment apart on a moving price.`);
+    return h('div', { class: 'muted small' }, h('span', { class: 'tag warn' }, 'Live price disagrees'), ` with the NSE live snapshot by ${l.diff_pct}%${when}. New alerts for this stock are paused.`);
   }
 
   function qualityLine(s) {
@@ -1857,6 +1938,7 @@
     const detail = `largest difference ${q.max_diff_pct}% over ${q.n} session${q.n === 1 ? '' : 's'}`;
     if (q.status === 'match') return h('div', { class: 'muted small' }, h('span', { class: 'tag buy' }, 'Cross-checked'), ` against ${q.source}: ${detail}`);
     if (q.status === 'minor') return h('div', { class: 'muted small' }, h('span', { class: 'tag' }, 'Small difference'), ` against ${q.source}: ${detail}`);
+    if (q.status === 'behind') return h('div', { class: 'muted small' }, h('span', { class: 'tag warn' }, 'Price is a session behind'), ` ${q.source} already has the session of ${q.official_last}; the price feed ends on ${q.yahoo_last}. New alerts and tracked readings for this stock are paused until the feed catches up.`);
     return h('div', { class: 'muted small' }, h('span', { class: 'tag warn' }, 'Prices disagree'), ` with ${q.source}: ${detail}. New alerts for this stock are paused.`);
   }
 
@@ -1873,7 +1955,7 @@
   function viewMarket() {
     const m = S.data.market || { watch: [], news: [] };
     const conditions = S.data.conditions || {};
-    const markets = ['IN', 'US'].filter((k) => conditions[k]);
+    const markets = ['IN'].filter((k) => conditions[k]);
     const cards = m.watch.map((w) => h('div', { class: 'card' }, h('div', { class: 'muted small' }, w.name),
       h('div', { style: 'font-size:20px;font-weight:700' }, number(w.price, w.price > 1000 ? 0 : 2)),
       h('div', { class: moveClass(w.change_pct) }, `${signed(w.change_pct)} today`),
@@ -1894,7 +1976,7 @@
           h('div', { class: 'muted small' }, ago(Math.max(0, Math.round((Date.now() / 1000 - a.ts) / 60))), ' ',
             a.symbol && (S.data.stocks.some((s) => s.symbol === a.symbol) || S.others.some((s) => s.symbol === a.symbol)) ? h('button', { type: 'button', class: 'chip', onclick: (e) => openDetail(a.symbol, e.currentTarget) }, 'View analysis') : null)))))] : null,
       h('h2', null, 'World and market news ', src('EXTERNAL')), h('div', { class: 'card' }, newsList(m.news, true)),
-      accuracyCard(S.data.accuracy),
+      accuracyCard(S.data.accuracy, S.data.live_check),
       statusCard(S.data.status),
       h('p', { class: 'muted small' }, (S.data.exchange_data || {}).note || ''));
   }
@@ -2007,7 +2089,7 @@
     return h('div', null,
       h('h2', null, 'Track record'),
       scoreboard(t, min),
-      h('p', { class: 'muted small' }, `${t.calls_total} readings recorded under the current rules: ${t.resolved} settled, ${t.open} open.${t.older_model_calls ? ` ${t.older_model_calls} more from earlier versions of the rules are kept in the record but not counted here.` : ''} A past record, not a forecast.`),
+      h('p', { class: 'muted small' }, `${t.calls_total} readings recorded under the current rules: ${t.resolved} settled, ${t.open} open.${t.void ? ` ${t.void} more were set aside as not entered (the reference price never traded on the day of the alert), so they are neither successes nor failures.` : ''}${t.older_model_calls ? ` ${t.older_model_calls} more from earlier versions of the rules are kept in the record but not counted here.` : ''} A past record, not a forecast.`),
       groupCards(t),
       recent.length ? [h('h3', null, 'Latest results'), table(['Reading', 'Result', 'Move', 'Dates'], recent)] : null,
       open.length ? h('details', { class: 'card opencalls', open: !o.n }, h('summary', null, `Open readings (${t.open}${t.open > open.length ? `, latest ${open.length} listed` : ''})`),

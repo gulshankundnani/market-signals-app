@@ -410,3 +410,29 @@ class SummaryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VoidReferenceTests(unittest.TestCase):
+    def bars(self, rows):
+        return {"d": [r[0] for r in rows], "o": [r[1] for r in rows], "h": [r[2] for r in rows], "l": [r[3] for r in rows], "c": [r[4] for r in rows]}
+
+    def call(self, price):
+        return {"id": "x", "date": "2026-11-16", "price": price, "stop": price * 0.95, "target": price * 1.1, "side": "buy", "horizon": "short", "expiry_days": 5}
+
+    def test_stale_reference_is_void_not_a_stop(self):
+        bars = self.bars([("2026-11-16", 272, 273, 260, 262), ("2026-11-17", 262, 268, 259, 259)])
+        out = ledger.evaluate_call(self.call(287.4), bars)
+        self.assertEqual(out["outcome"], "void")
+        self.assertIsNone(out["return_pct"])
+
+    def test_traded_reference_is_judged_as_before(self):
+        bars = self.bars([("2026-11-16", 100, 103, 98, 101), ("2026-11-17", 100, 101, 90, 91)])
+        self.assertEqual(ledger.evaluate_call(self.call(100), bars)["outcome"], "stop")
+
+    def test_void_is_not_counted_in_the_summary(self):
+        led = ledger.Ledger(tempfile.mkdtemp())
+        c = {**self.call(287.4), "symbol": "A", "model": ledger.MODEL, "ts": 1, "market": "IN"}
+        led.calls["x"] = c
+        led.add_outcome({"type": "outcome", "id": "x", "resolved_date": "2026-11-17", "outcome": "void", "return_pct": None, "days_held": 0})
+        s = ledger.summarise(led, 1794854298)
+        self.assertEqual((s["resolved"], s["void"], s["open"]), (0, 1, 0))

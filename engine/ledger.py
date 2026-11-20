@@ -19,8 +19,10 @@ from statistics import median
 
 from . import signals
 
-MODEL = "v3"          # v2: score components change smoothly with the price instead of in hard steps
+MODEL = "v4"          # v2: score components change smoothly with the price instead of in hard steps
                       # v3: readings use completed daily candles only, and missing volume is no longer read as zero
+                      # v4: a call whose reference price never traded on its announcement day is "void", not a failure (v3 counted such stale-price calls as stops)
+REFERENCE_TOLERANCE = 0.002
 EXPIRY_DAYS = {"short": 20, "long": 120}      # trading days before a call counts as expired
 MIN_SAMPLE = 30                               # below this, percentages are shown as unreliable
 MIN_GROUP = 10                                # smallest group compared in the component insights
@@ -72,6 +74,13 @@ def evaluate_call(call, bars):
     if start >= len(dates):
         return None
     entry, stop, target = call["price"], call["stop"], call["target"]
+    announced = start - 1
+    if announced >= 0 and dates[announced] == call["date"] and not (lows[announced] * (1 - REFERENCE_TOLERANCE) <= entry <= highs[announced] * (1 + REFERENCE_TOLERANCE)):
+        # The reference price never traded on the day of the announcement (a stale quote, or a gap), so nobody could have entered at it.
+        # Judging the call against later prices would count a loss that came before any entry; it is set aside as "void", not as a failure.
+        return {"type": "outcome", "id": call["id"], "resolved_date": dates[start] if start < len(dates) else call["date"], "outcome": "void",
+                "exit_price": None, "return_pct": None, "days_held": 0, "max_gain_pct": None, "max_loss_pct": None,
+                "note": "reference price did not trade on the announcement day"}
     buy = call["side"] == "buy"
     sign = 1 if buy else -1
     expiry = call.get("expiry_days") or EXPIRY_DAYS.get(call["horizon"], 20)
@@ -174,7 +183,7 @@ class Ledger:
             outcome = evaluate_call(call, bars)
             if outcome is None:
                 continue
-            outcome["excess_pct"] = excess_return(call, outcome, (benchmarks or {}).get(call.get("market")))
+            outcome["excess_pct"] = None if outcome["return_pct"] is None else excess_return(call, outcome, (benchmarks or {}).get(call.get("market")))
             if self.add_outcome(outcome):
                 resolved.append((call, outcome))
         return resolved
@@ -300,7 +309,8 @@ def summarise(ledger, now_ts):
     Only calls made by the current rule version are counted. Calls from earlier versions stay in the record, untouched, and
     keep being resolved, but mixing versions would blend results from different rules into one success rate."""
     current = {cid for cid, c in ledger.calls.items() if c.get("model") in (None, MODEL)}
-    rows = [{"call": ledger.calls[cid], "outcome": out} for cid, out in ledger.outcomes.items() if cid in current]
+    voids = sum(1 for cid, out in ledger.outcomes.items() if cid in current and out["outcome"] == "void")
+    rows = [{"call": ledger.calls[cid], "outcome": out} for cid, out in ledger.outcomes.items() if cid in current and out["outcome"] != "void"]
     rows.sort(key=lambda r: (r["outcome"]["resolved_date"], r["call"]["id"]))
     overall = group_stats(rows)
     cutoff = utc_date(now_ts - 90 * 86400)
@@ -330,7 +340,7 @@ def summarise(ledger, now_ts):
     open_calls = sorted((c for c in ledger.open_calls() if c["id"] in current), key=lambda c: c["ts"], reverse=True)
     return {
         "generated_at": datetime.fromtimestamp(now_ts, timezone.utc).isoformat(timespec="seconds"),
-        "model": MODEL, "min_sample": MIN_SAMPLE, "calls_total": len(current), "older_model_calls": len(ledger.calls) - len(current), "open": len(open_calls), "resolved": len(rows),
+        "model": MODEL, "min_sample": MIN_SAMPLE, "calls_total": len(current), "older_model_calls": len(ledger.calls) - len(current), "open": len(open_calls), "resolved": len(rows), "void": voids,
         "expiry_days": EXPIRY_DAYS, "overall": overall, "last_90_days": last90, "by_group": by_group, "by_score_band": by_band,
         "by_market": by_market, "components": insights, "suggestions": notes,
         "recent": [recent_row(r) for r in reversed(rows[-RECENT:])],

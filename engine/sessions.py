@@ -1,4 +1,4 @@
-"""Index alerts and the pre-open, post-close and US-close briefs.
+"""Index alerts and the pre-open, post-close and institutional-flow briefs.
 
 Everything here is a plain statement of what the exchange published: an index's move, the pre-open indicative prices, the day's
 biggest movers, foreign and domestic institutional net flows, deals. No reading, forecast or tone is added. Each source is one request
@@ -25,8 +25,7 @@ NEAR_EXTREME = 0.999
 # window id: (market, first minute, last minute of the IST day, weekdays allowed 0=Mon)
 WINDOWS = {"in_preopen": ("IN", 9 * 60 + 8, 9 * 60 + 40, (0, 1, 2, 3, 4)),
            "in_postclose": ("IN", 16 * 60, 19 * 60 + 30, (0, 1, 2, 3, 4)),
-           "in_flows": ("IN", 18 * 60 + 30, 22 * 60, (0, 1, 2, 3, 4)),
-           "us_close": ("US", 2 * 60 + 45, 6 * 60, (1, 2, 3, 4, 5))}
+           "in_flows": ("IN", 18 * 60 + 30, 22 * 60, (0, 1, 2, 3, 4))}
 
 
 class Source:
@@ -129,7 +128,7 @@ def index_alerts(events, seen, now_ts):
     return lines, items, seen
 
 
-def due_windows(now, sent, markets=("IN", "US")):
+def due_windows(now, sent, markets=("IN",)):
     """The brief ids whose time window is open now and that have not been sent today (IST date)."""
     local = now.astimezone(IST)
     minute, day, weekday = local.hour * 60 + local.minute, local.strftime("%Y-%m-%d"), local.weekday()
@@ -227,21 +226,7 @@ def postclose_brief(indices, movers_up, movers_down, extremes, flows, today_labe
     return lines
 
 
-def us_close_brief(watch, movers_up, movers_down, extremes):
-    lines = []
-    shown = [f"{w['name']} {w['change_pct']:+.1f}%" for w in watch or [] if w.get("change_pct") is not None and w.get("symbol") in ("^GSPC", "^IXIC", "^DJI", "^VIX", "^RUT")]
-    if shown:
-        lines.append("Closes: " + ", ".join(shown))
-    if movers_up:
-        lines.append("Top gainers: " + _stock_list(movers_up))
-    if movers_down:
-        lines.append("Top losers: " + _stock_list(movers_down))
-    if extremes:
-        lines.append(f"At 52-week high: {extremes[0]}, at 52-week low: {extremes[1]}")
-    return lines
-
-
-TITLES = {"in_preopen": "India pre-open brief", "in_postclose": "India post-close brief", "in_flows": "India institutional flows", "us_close": "US close brief"}
+TITLES = {"in_preopen": "India pre-open brief", "in_postclose": "India post-close brief", "in_flows": "India institutional flows"}
 
 
 def brief_item(window, lines, now_ts):

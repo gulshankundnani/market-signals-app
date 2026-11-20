@@ -1,7 +1,7 @@
 {
   "name": "Stock Signals",
   "short_name": "Signals",
-  "description": "Buy, hold and sell signals for Indian and US stocks",
+  "description": "Buy, hold and sell signals for Indian stocks",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

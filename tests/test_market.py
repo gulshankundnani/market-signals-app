@@ -156,12 +156,11 @@ class AnalyseTests(unittest.TestCase):
 
 class StatusTests(unittest.TestCase):
     CONFIG = {"market_watch": [1, 2, 3]}
-    ACCURACY = {"IN": {"source": "NSE end-of-day file", "verified": 100, "match": 99, "mismatch": 0, "unverified": 2, "agreement_pct": 99.0, "median_diff_pct": 0.0},
-                "US": {"source": "Cboe delayed-quote history", "verified": 40, "match": 40, "mismatch": 0, "unverified": 0, "agreement_pct": 100.0, "median_diff_pct": 0.001}}
+    ACCURACY = {"IN": {"source": "NSE end-of-day file", "verified": 100, "match": 99, "mismatch": 0, "unverified": 2, "agreement_pct": 99.0, "median_diff_pct": 0.0}}
 
     def status(self, **over):
         args = dict(config=self.CONFIG, records=[{"news": {}}, {"news": {}}], errors=[], carried=[],
-                    overview={"watch": [1, 2, 3]}, conditions={"IN": {"regime": {"score": 1}}, "US": {"regime": {"score": 0}}},
+                    overview={"watch": [1, 2, 3]}, conditions={"IN": {"regime": {"score": 1}}},
                     ipos={"india_ok": True}, delivery={"2026-11-13": {}}, track_record={"calls_total": 4}, pending=[],
                     token="T", chat="C", accuracy=self.ACCURACY)
         args.update(over)
@@ -173,21 +172,16 @@ class StatusTests(unittest.TestCase):
     def details(self, out):
         return {c["name"]: c["detail"] for c in out["checks"]}
 
-    def test_a_refused_ipo_calendar_and_nse_feed_show_up_as_warnings_with_their_reason(self):
-        us = {"state": "stale", "error": "HTTP 403 Access Denied: the source refuses automated requests", "last_success": "2026-11-14T11:05:13+00:00"}
-        out = self.status(ipos={"india_ok": True, "us_status": us}, official_events={"ok": False, "error": "HTTP 403: the NSE refuses automated requests", "fetched_at": None})
-        self.assertEqual((self.states(out)["US IPO calendar"], self.states(out)["NSE official events"]), ("warn", "warn"))
-        self.assertIn("403", self.details(out)["US IPO calendar"])
-        self.assertIn("2026-11-14", self.details(out)["US IPO calendar"])
+    def test_a_refused_nse_feed_shows_up_as_a_warning_with_its_reason(self):
+        out = self.status(official_events={"ok": False, "error": "HTTP 403: the NSE refuses automated requests", "fetched_at": None})
+        self.assertEqual(self.states(out)["NSE official events"], "warn")
         self.assertIn("last success never", self.details(out)["NSE official events"])
 
     def test_healthy_sources_are_ok_and_absent_ones_are_not_reported(self):
-        out = self.status(ipos={"india_ok": True, "us_status": {"state": "current", "error": None}}, official_events={"ok": True, "fetched_at": "2026-11-16T12:00:00+00:00", "reused": True})
-        self.assertEqual((self.states(out)["US IPO calendar"], self.states(out)["NSE official events"]), ("ok", "ok"))
+        out = self.status(official_events={"ok": True, "fetched_at": "2026-11-16T12:00:00+00:00", "reused": True})
+        self.assertEqual(self.states(out)["NSE official events"], "ok")
         self.assertIn("reused", self.details(out)["NSE official events"])
-        plain = self.states(self.status())
-        self.assertNotIn("US IPO calendar", plain)
-        self.assertNotIn("NSE official events", plain)
+        self.assertNotIn("NSE official events", self.states(self.status()))
 
     def test_a_healthy_run_is_all_ok(self):
         out = self.status()
@@ -230,7 +224,7 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(check["state"], "ok")
         self.assertIn("India: 99 of 100 match NSE end-of-day file within 0.5%", check["detail"])
         self.assertIn("2 not covered", check["detail"])
-        self.assertIn("US: 40 of 40 match Cboe delayed-quote history", check["detail"])
+        self.assertNotIn("US", check["detail"])
         bad = {**self.ACCURACY, "IN": {**self.ACCURACY["IN"], "mismatch": 3, "match": 90, "agreement_pct": 90.0}}
         check = next(c for c in self.status(accuracy=bad)["checks"] if c["name"] == "Price cross-check")
         self.assertEqual(check["state"], "warn")
