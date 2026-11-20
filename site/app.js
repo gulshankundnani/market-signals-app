@@ -352,10 +352,48 @@
   }
   const inSector = (s, sector) => !sector || sector === 'ALL' || s.lists.includes(sector);
 
+  /* Search is a "like" match, not an exact one: case, punctuation and the order of words do not matter ("bajaj auto", "auto bajaj" and "bajaj-auto" all
+     find Bajaj Auto), a word can be typed in part ("hdfc ba"), "&" and "and" are the same, and the legal suffix and exchange ending are ignored.
+     If nothing matches that way, close matches are shown instead (one or two letters wrong, such as "relaince"), and the page says so. */
+  const normText = (text) => String(text || '').toLowerCase().replace(/&/g, ' and ').replace(/\.(ns|bo)$/, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  function withinEdits(a, b, max) {
+    if (Math.abs(a.length - b.length) > max) return false;
+    let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i += 1) {
+      const row = [i];
+      for (let j = 1; j <= b.length; j += 1) row[j] = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (Math.min(...row) > max) return false;
+      prev = row;
+    }
+    return prev[b.length] <= max;
+  }
+  // A search word matches when a word of the name or the symbol starts with it, or (3 letters or more) it appears inside the name.
+  // A symbol is only matched from its start, so "tcs" does not find a stock whose symbol happens to contain those letters.
+  function searchKey(s) {
+    if (!s._k) {
+      const name = normText(s.name), symbol = normText(s.symbol);
+      s._k = { name, symbol, compact: symbol.replace(/ /g, ''), words: name.split(' ').concat(symbol.split(' ')) };
+    }
+    return s._k;
+  }
+  function matchesQuery(s, tokens, fuzzy) {
+    const key = searchKey(s);
+    return tokens.every((tok) => key.words.some((w) => w.startsWith(tok)) || (tok.length >= 3 && key.name.includes(tok))
+      || (fuzzy && tok.length >= 4 && key.words.some((w) => withinEdits(w.slice(0, tok.length), tok, tok.length >= 7 ? 2 : 1))));
+  }
+  // How good a match is: 0 the symbol or the whole name, 1 the start of the name or symbol, 2 anything else that matched.
+  function matchRank(s, q) {
+    const key = searchKey(s), compact = q.replace(/ /g, '');
+    if (key.compact === compact || key.name === q) return 0;
+    return key.name.startsWith(q) || key.compact.startsWith(compact) ? 1 : 2;
+  }
+
   function visibleStocks(skipSignal) {
     const f = S.filters;
-    const q = S.q.trim().toLowerCase();
-    const rows = S.data.stocks.concat(S.others).filter((s) => {
+    const query = normText(S.q);
+    let tokens = query.split(' ').filter(Boolean);
+    if (tokens.length > 1) tokens = tokens.filter((w) => w !== 'and');          // "m&m" and "m and m" are the same; "and" alone says nothing
+    const pass = (fuzzy) => S.data.stocks.concat(S.others).filter((s) => {
       if (f.market !== 'ALL' && s.market !== f.market) return false;
       if (!inList(s, f.list) || !inSector(s, f.sector)) return false;
       const label = s[f.horizon].label;
@@ -363,12 +401,17 @@
       else if (f.signal === 'BUY' && side(label) !== 'buy') return false;
       else if (f.signal === 'HOLD' && label !== 'Hold') return false;
       else if (f.signal === 'SELL' && side(label) !== 'sell') return false;
-      if (q && !(s.name.toLowerCase().includes(q) || s.symbol.toLowerCase().includes(q))) return false;
+      if (tokens.length && !matchesQuery(s, tokens, fuzzy)) return false;
       return true;
     });
+    let rows = pass(false);
+    S.fuzzy = false;
+    if (tokens.length && !rows.length) { rows = pass(true); S.fuzzy = rows.length > 0; }
     const asc = currentDir() === 'asc';
+    const byMatch = tokens.length && f.sort === 'score' && !skipSignal;       // while searching with the default order, the best matches come first
     const present = (v) => isNum(v) || (typeof v === 'string' && v !== '');
     rows.sort((a, b) => {
+      if (byMatch) { const d = matchRank(a, query) - matchRank(b, query); if (d) return d; }
       const av = sortValue(a), bv = sortValue(b);
       if (!present(av) && !present(bv)) return 0;
       if (!present(av)) return 1;                       // rows without a value always go last
@@ -572,6 +615,7 @@
     chips.replaceChildren(...[h('div', { class: 'chips', role: 'group', 'aria-label': 'Lists and technical screens' }, strips.lists),
       strips.sectors.length ? h('div', { class: 'chips', role: 'group', 'aria-label': 'Sectors' }, strips.sectors) : null].filter(Boolean));
     const rows = visibleStocks();
+    const fuzzy = S.fuzzy;                 // a later call below recomputes S.fuzzy
     const f = S.filters;
     const signature = [f.market, f.list, f.sector, f.signal, S.q].join('|');
     if (signature !== S.sig) { S.sig = signature; S.shown = {}; }        // a new search or filter starts again at the first page
@@ -583,7 +627,7 @@
         : info && info.analysed < info.count * 0.98 ? h('p', { class: 'muted small notice' }, `${info.analysed.toLocaleString()} of ${info.count.toLocaleString()} other listed stocks are analysed so far. The rest show their quote only and fill in over the next few hours.`) : null;
     const head = h('div', { class: 'row small muted', style: 'justify-content:space-between;margin-bottom:6px' },
       h('span', null, `${rows.length} stock${rows.length === 1 ? '' : 's'} · ${f.horizon === 'short' ? 'weeks view' : 'months-to-years view'} reading`,
-        hidden ? ` · ${hidden.toLocaleString()} without a reading yet hidden by the Reading filter` : ''),
+        hidden ? ` · ${hidden.toLocaleString()} without a reading yet hidden by the Reading filter` : '', fuzzy ? ` · no exact match for "${S.q.trim()}", showing close matches` : ''),
       f.list.startsWith('C:') ? h('button', { type: 'button', class: 'chip', onclick: () => {
         if (!confirm(`Delete the list "${f.list.slice(2)}"? The stocks are not deleted.`)) return;
         delete S.lists[f.list.slice(2)]; store.set('lists', S.lists); f.list = 'ALL'; saveFilters(); updateSignals();
