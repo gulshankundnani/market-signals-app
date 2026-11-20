@@ -394,6 +394,9 @@ Then open http://127.0.0.1:8765/. Python 3.10+ and Node 18+ are the only require
 * **Which stocks are covered:** every stock on the NSE main board (EQ series, plus the BE and BZ series, many of them penny stocks, shown with their series), the
   NSE SME platform (Emerge) and the S&P 500, as long as Yahoo has a quote for it (about 3,100 in all). Companies listed only on the BSE are not covered: the BSE
   publishes no list the app can read, so there is nothing to build the list from. A search that finds nothing says so.
+* **The chip counts match the table:** a count on a category or sector chip is the number of stocks you would see if you picked it, with the market, Reading,
+  technical filters and search that are on already applied. A "Filters on:" row above the table lists every filter that is on (market, Reading, search,
+  each technical filter), each with a ✕ to remove it. Filters are remembered in the browser, so one set last time still applies when you come back.
 * **Layout of the Signals page:** on a screen 1100 px wide or more, the categories (lists and screens) are a column on the left of the table and the sectors
   a column on the right, both staying in view as you scroll; India and the US sit side by side from 1560 px and stack below that. On a phone or small
   window they are the two horizontal strips above the table, as before.

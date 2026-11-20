@@ -417,23 +417,29 @@
   const hasTech = (s) => (s.slim ? !!s.analysed : !!s.indicators);
   const techPass = (s) => activeTech().every(([key, , , test]) => test(s, S.filters.tech[key]));
 
+  const searchTokens = () => {
+    const tokens = normText(S.q).split(' ').filter(Boolean);
+    return tokens.length > 1 ? tokens.filter((w) => w !== 'and') : tokens;          // "m&m" and "m and m" are the same; "and" alone says nothing
+  };
+  // Everything except the list and the sector: market, reading, search and technical filters. The chip counts use the same test as the table,
+  // so a count is always the number of stocks you would see if you picked that chip.
+  function passesOthers(s, tokens, fuzzy, skipSignal, skipTech) {
+    const f = S.filters;
+    if (f.market !== 'ALL' && s.market !== f.market) return false;
+    const label = s[f.horizon].label;
+    if (skipSignal) { /* counted separately */ }
+    else if (f.signal === 'BUY' && side(label) !== 'buy') return false;
+    else if (f.signal === 'HOLD' && label !== 'Hold') return false;
+    else if (f.signal === 'SELL' && side(label) !== 'sell') return false;
+    if (tokens.length && !matchesQuery(s, tokens, fuzzy)) return false;
+    return skipTech || techPass(s);
+  }
+
   function visibleStocks(skipSignal, skipTech) {
     const f = S.filters;
+    const tokens = searchTokens();
     const query = normText(S.q);
-    let tokens = query.split(' ').filter(Boolean);
-    if (tokens.length > 1) tokens = tokens.filter((w) => w !== 'and');          // "m&m" and "m and m" are the same; "and" alone says nothing
-    const pass = (fuzzy) => S.data.stocks.concat(S.others).filter((s) => {
-      if (f.market !== 'ALL' && s.market !== f.market) return false;
-      if (!inList(s, f.list) || !inSector(s, f.sector)) return false;
-      const label = s[f.horizon].label;
-      if (skipSignal) { /* counted separately */ }
-      else if (f.signal === 'BUY' && side(label) !== 'buy') return false;
-      else if (f.signal === 'HOLD' && label !== 'Hold') return false;
-      else if (f.signal === 'SELL' && side(label) !== 'sell') return false;
-      if (tokens.length && !matchesQuery(s, tokens, fuzzy)) return false;
-      if (!skipTech && !techPass(s)) return false;
-      return true;
-    });
+    const pass = (fuzzy) => S.data.stocks.concat(S.others).filter((s) => inList(s, f.list) && inSector(s, f.sector) && passesOthers(s, tokens, fuzzy, skipSignal, skipTech));
     let rows = pass(false);
     S.fuzzy = false;
     if (tokens.length && !rows.length) { rows = pass(true); S.fuzzy = rows.length > 0; }
@@ -480,9 +486,10 @@
     toast(`Exported ${rows.length} stock${rows.length === 1 ? '' : 's'}`);
   }
 
-  function listChips() {
+  function listChips(fuzzy) {
     const f = S.filters;
-    const pool = S.data.stocks.concat(S.others).filter((s) => f.market === 'ALL' || s.market === f.market);
+    const tokens = searchTokens();
+    const pool = S.data.stocks.concat(S.others).filter((s) => passesOthers(s, tokens, fuzzy));
     const inSectorPool = pool.filter((s) => inSector(s, f.sector));      // list counts follow the chosen sector
     const inListPool = pool.filter((s) => inList(s, f.list));            // sector counts follow the chosen list
     const names = new Set();
@@ -641,12 +648,12 @@
   function updateSignals() {
     const cats = $('#cats'), sectorRail = $('#sectorrail'), results = $('#results');
     if (!cats || !sectorRail || !results) return;
-    const strips = listChips();
+    const rows = visibleStocks();
+    const fuzzy = S.fuzzy;                 // a later call below recomputes S.fuzzy
+    const strips = listChips(fuzzy);
     cats.replaceChildren(h('div', { class: 'railtitle' }, 'Categories'), h('div', { class: 'chips', role: 'group', 'aria-label': 'Lists and technical screens' }, strips.lists));
     sectorRail.replaceChildren(...[strips.sectors.length ? h('div', { class: 'railtitle' }, 'Sectors') : null,
       strips.sectors.length ? h('div', { class: 'chips', role: 'group', 'aria-label': 'Sectors' }, strips.sectors) : null].filter(Boolean));
-    const rows = visibleStocks();
-    const fuzzy = S.fuzzy;                 // a later call below recomputes S.fuzzy
     const f = S.filters;
     const signature = [f.market, f.list, f.sector, f.signal, S.q, JSON.stringify(f.tech || {})].join('|');
     if (signature !== S.sig) { S.sig = signature; S.shown = {}; }        // a new search or filter starts again at the first page
@@ -657,6 +664,15 @@
       : S.catalog === 'failed' ? h('p', { class: 'small notice warnline' }, 'The full list of listed stocks could not be loaded, so only the main list is shown. ',
         h('button', { type: 'button', class: 'chip', onclick: () => loadCatalog() }, 'Try again'))
         : info && info.analysed < info.count * 0.98 ? h('p', { class: 'muted small notice' }, `${info.analysed.toLocaleString()} of ${info.count.toLocaleString()} other listed stocks are analysed so far. The rest show their quote only and fill in over the next few hours.`) : null;
+    const READING = { BUY: 'Aligned bullish', HOLD: 'Mixed', SELL: 'Aligned bearish' };
+    const on = [];
+    if (f.market !== 'ALL') on.push([f.market === 'IN' ? 'India only' : 'United States only', () => { f.market = 'ALL'; f.list = 'ALL'; f.sector = 'ALL'; }]);
+    if (f.signal !== 'ALL') on.push([`Reading: ${READING[f.signal]}`, () => { f.signal = 'ALL'; }]);
+    if (S.q.trim()) on.push([`Search: "${S.q.trim()}"`, () => { S.q = ''; const box = document.querySelector('input[type=search]'); if (box) box.value = ''; }]);
+    for (const [key, label, options] of activeTech()) on.push([`${label}: ${(options.find(([v]) => v === f.tech[key]) || [])[1] || f.tech[key]}`, () => { delete f.tech[key]; renderTech(); }]);
+    const activeBar = on.length ? h('div', { class: 'chips', role: 'group', 'aria-label': 'Filters that are on' },
+      h('span', { class: 'muted small', style: 'align-self:center' }, 'Filters on:'),
+      on.map(([text, undo]) => h('button', { type: 'button', class: 'chip on', title: 'Remove this filter', onclick: () => { undo(); saveFilters(); updateSignals(); } }, `${text} ✕`))) : null;
     const head = h('div', { class: 'row small muted', style: 'justify-content:space-between;margin-bottom:6px' },
       h('span', null, `${rows.length} stock${rows.length === 1 ? '' : 's'} · ${f.horizon === 'short' ? 'weeks view' : 'months-to-years view'} reading`,
         hidden ? ` · ${hidden.toLocaleString()} without a reading yet hidden by the Reading filter` : '',
@@ -667,7 +683,7 @@
       } }, 'Delete this list') : null);
     if (!rows.length) {
       const clear = () => { f.market = 'ALL'; f.list = 'ALL'; f.sector = 'ALL'; f.signal = 'ALL'; f.tech = {}; S.q = ''; saveFilters(); render(); };
-      results.replaceChildren(...[status, head, h('div', { class: 'empty' },
+      results.replaceChildren(...[status, activeBar, head, h('div', { class: 'empty' },
         f.list === 'WATCH' && !S.q ? 'Your watchlist is empty. Tap the star next to a stock to add it.'
           : S.catalog === 'loading' && S.q ? 'Nothing found in the main list yet. Every other listed stock is still loading.'
           : S.q ? `No stock matches "${S.q.trim()}". This app covers stocks listed on the NSE (main board and SME) and the S&P 500; a company listed only on the BSE is not included. ` : 'No stocks match these filters. ',
@@ -675,7 +691,7 @@
       return;
     }
     const codes = f.market === 'ALL' ? ['IN', 'US'] : [f.market];
-    results.replaceChildren(...[status, head, h('div', { class: 'cols' + (codes.length > 1 ? ' two' : '') + (f.view !== 'overview' ? ' wide-view' : '') }, codes.map((code) => marketPanel(code, rows.filter((s) => s.market === code))))].filter(Boolean));
+    results.replaceChildren(...[status, activeBar, head, h('div', { class: 'cols' + (codes.length > 1 ? ' two' : '') + (f.view !== 'overview' ? ' wide-view' : '') }, codes.map((code) => marketPanel(code, rows.filter((s) => s.market === code))))].filter(Boolean));
     decorateHelp(results);
   }
 
