@@ -391,6 +391,9 @@ Then open http://127.0.0.1:8765/. Python 3.10+ and Node 18+ are the only require
   average counts as the full +1 or -1). A stock sitting on an average therefore scores near zero and its reading cannot flip
   between two extremes when the price ticks across the line.
 * **Long-term (months to years):** price against the 200-day average, golden/death cross, 6-month return, 52-week position and volatility.
+* **Which stocks are covered:** every stock on the NSE main board (EQ series, plus the BE and BZ series, many of them penny stocks, shown with their series), the
+  NSE SME platform (Emerge) and the S&P 500, as long as Yahoo has a quote for it (about 3,100 in all). Companies listed only on the BSE are not covered: the BSE
+  publishes no list the app can read, so there is nothing to build the list from. A search that finds nothing says so.
 * **Layout of the Signals page:** on a screen 1100 px wide or more, the categories (lists and screens) are a column on the left of the table and the sectors
   a column on the right, both staying in view as you scroll; India and the US sit side by side from 1560 px and stack below that. On a phone or small
   window they are the two horizontal strips above the table, as before.

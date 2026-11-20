@@ -119,7 +119,7 @@ def index_row(stock, q, entry, record):
             "currency": "INR" if stock["symbol"].endswith(".NS") else "USD",
             "price": round(q["price"], 4), "change_pct": _round(q.get("change_pct"), 2), "cap": _round(q.get("cap"), 0), "volume": _round(q.get("volume"), 0),
             "avg_volume": _round(q.get("avg_volume"), 0),
-            "high52": _round(q.get("high52"), 2), "low52": _round(q.get("low52"), 2), "shard": shard_of(stock["symbol"]), "analysed": bool(record),
+            "high52": _round(q.get("high52"), 2), "low52": _round(q.get("low52"), 2), "shard": shard_of(stock["symbol"]), "analysed": bool(record), "series": stock.get("series"),
             "short": {"label": short.get("label"), "score": short.get("score")} if record else None,
             "long": {"label": long_.get("label"), "score": long_.get("score")} if record else None,
             "analysed_at": (entry or {}).get("at") if record else None,

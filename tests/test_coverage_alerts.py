@@ -42,7 +42,7 @@ class UniverseTests(unittest.TestCase):
         wide_list, cache = wide.load_universe(None, NOW_IN_MORNING, set(), fetch, lambda s: None)
         self.assertEqual(len(wide_list), 3)
         wide.load_universe(cache, NOW_IN_MORNING.replace(hour=5), set(), fetch, lambda s: None)
-        self.assertEqual(len(calls), 2, "a fresh list is not fetched again")
+        self.assertEqual(len(calls), 3, "a fresh list is not fetched again")   # the NSE equity list, the NSE SME list and the S&P 500
 
         def broken(url):
             raise FetchError("down")
@@ -454,3 +454,31 @@ class NearLowListTests(unittest.TestCase):
         self.assertIn("Near 52-week low", records[0]["lists"])
         self.assertNotIn("Near 52-week low", records[1]["lists"])
         self.assertNotIn("Near 52-week low", records[2]["lists"])
+
+
+class SmeAndSeriesTests(unittest.TestCase):
+    MAIN = "SYMBOL,NAME OF COMPANY, SERIES,DATE OF LISTING\nTCS,Tata Consultancy Services Limited, EQ,25-Aug-2004\nABAN,Aban Offshore Limited, BE,01-Jan-2000\nAGSTRA,AGS Transact Technologies Limited, BZ,01-Jan-2000\n"
+    SME = ("SYMBOL,NAME_OF_COMPANY,SERIES,DATE_OF_LISTING,PAID_UP_VALUE,ISIN_NUMBER,FACE_VALUE,\nSMEONE,Sme One Limited,SM,01-Jan-24,10,X,10,\n"
+           "IEML-RE1,Indian Emulsifiers Limited-RE,ST,16-Nov-26,10,X,10,\nBAD NAME,Bad,SM,01-Jan-24,10,X,10,\n")
+
+    def test_sme_list_leaves_out_rights_entitlements_and_bad_symbols(self):
+        from engine import discover
+        self.assertEqual(discover.sme_listings(self.SME), {"SMEONE.NS": "Sme One Limited"})
+
+    def test_universe_has_eq_be_bz_and_sme_with_their_series_and_a_failed_sme_list_keeps_the_old_ones(self):
+        def fetch(url, **kw):
+            if "SME_EQUITY" in url:
+                return self.SME.encode()
+            if "wikipedia" in url:
+                return UniverseTests.SP.encode()
+            return self.MAIN.encode()
+        listing, cache = wide.load_universe(None, NOW_IN_MORNING, set(), fetch, lambda s: None)
+        got = {s["symbol"]: s.get("series") for s in listing if s["market"] == "IN"}
+        self.assertEqual(got, {"TCS.NS": None, "ABAN.NS": "BE", "AGSTRA.NS": "BZ", "SMEONE.NS": "SME"})
+
+        def sme_down(url, **kw):
+            if "SME_EQUITY" in url:
+                raise FetchError("HTTP 503")
+            return fetch(url, **kw)
+        later, _ = wide.load_universe(cache, NOW_IN_MORNING.replace(day=19), set(), sme_down, lambda s: None)
+        self.assertIn("SMEONE.NS", {s["symbol"] for s in later})

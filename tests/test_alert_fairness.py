@@ -221,7 +221,8 @@ class CompanyNameTests(unittest.TestCase):
     def test_names_come_from_the_nse_equity_list(self):
         from engine import discover
         text = "SYMBOL,NAME OF COMPANY, SERIES,DATE OF LISTING\nGROWW,Billionbrains Garage Ventures Limited, EQ,12-Nov-2025\nXYZ,Not Equity Ltd, BE,01-Jan-2020\nBAD SYMBOL!,Bad, EQ,01-Jan-2020\n"
-        self.assertEqual(discover.nse_company_names(text), {"GROWW.NS": "Billionbrains Garage Ventures Limited"})
+        self.assertEqual(discover.nse_company_names(text), {"GROWW.NS": "Billionbrains Garage Ventures Limited", "XYZ.NS": "Not Equity Ltd"})   # BE and BZ are listed stocks too
+        self.assertEqual(discover.nse_series(text), {"XYZ.NS": "BE"})
         self.assertEqual(discover.nse_company_names(""), {})
 
 

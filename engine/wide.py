@@ -23,6 +23,7 @@ from .fetch import FetchError, http_get
 SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 QUOTE_URL = "https://query1.finance.yahoo.com/v7/finance/quote?symbols={symbols}"
 REFRESH_HOURS = 20
+LIST_VERSION = 2          # raised when the list's content rules change (version 2: the BE and BZ series are included), so a cached older list is rebuilt
 BATCH = 100
 NEWS_PER_RUN = 50
 NEWS_WORKERS = 6
@@ -72,10 +73,10 @@ def short_name(name):
     return name or (original or "")
 
 
-def build_universe(nse_names, sp500, curated):
-    """The wide list: [{"symbol", "name", "market"}] for every NSE and S&P 500 stock that is not in the curated list."""
-    skip = set(curated)
-    wide = [{"symbol": s, "name": n, "market": "IN"} for s, n in sorted(nse_names.items()) if s not in skip]
+def build_universe(nse_names, sp500, curated, series=None):
+    """The wide list: [{"symbol", "name", "market"}] for every NSE and S&P 500 stock that is not in the curated list. series: {symbol: "BE"|"BZ"}."""
+    skip, series = set(curated), series or {}
+    wide = [{"symbol": s, "name": n, "market": "IN", **({"series": series[s]} if s in series else {})} for s, n in sorted(nse_names.items()) if s not in skip]
     wide += [{"symbol": s, "name": v["name"], "market": "US"} for s, v in sorted(sp500.items()) if s not in skip]
     return wide
 
@@ -88,11 +89,20 @@ def load_universe(state, now, curated, fetcher=http_get, log=print):
         fresh = bool(stamp) and (now - datetime.fromisoformat(stamp)) < timedelta(hours=REFRESH_HOURS)
     except (TypeError, ValueError):
         fresh = False
-    if fresh and cache.get("list"):
+    if fresh and cache.get("list") and cache.get("v") == LIST_VERSION:
         return [s for s in cache["list"] if s["symbol"] not in set(curated)], cache
-    nse, sp = {}, {}
+    nse, sp, series, sme = {}, {}, {}, {}
     try:
-        nse = discover.nse_company_names(fetcher(discover.NSE_LIST_URL).decode("utf-8", "replace"))
+        text = fetcher(discover.NSE_LIST_URL).decode("utf-8", "replace")
+        nse, series = discover.nse_company_names(text), discover.nse_series(text)
+        try:                                         # the NSE's SME platform has its own list; if it fails the main list still loads
+            sme = discover.sme_listings(fetcher(discover.SME_LIST_URL).decode("utf-8", "replace"))
+        except FetchError as err:
+            sme = {}
+            log(f"Wide universe: the NSE SME list failed ({str(err)[-60:]})")
+        for symbol, name in sme.items():
+            if symbol not in nse:
+                nse[symbol], series[symbol] = name, "SME"
     except FetchError as err:
         log(f"Wide universe: the NSE equity list failed ({str(err)[-60:]})")
     try:
@@ -100,7 +110,9 @@ def load_universe(state, now, curated, fetcher=http_get, log=print):
     except FetchError as err:
         log(f"Wide universe: the S&P 500 list failed ({str(err)[-60:]})")
     previous = cache.get("list") or []
-    wide = build_universe(nse, sp, curated) if (nse or sp) else []
+    wide = build_universe(nse, sp, curated, series) if (nse or sp) else []
+    kept_sme = [s for s in previous if s.get("series") == "SME" and not any(w["symbol"] == s["symbol"] for w in wide)] if nse and not sme else []
+    wide += kept_sme                                 # an SME list that failed to load does not drop the SME stocks already known
     if not nse:                                      # keep the old Indian list rather than lose it
         wide = [s for s in previous if s["market"] == "IN"] + [s for s in wide if s["market"] == "US"]
     if not sp:
@@ -110,7 +122,7 @@ def load_universe(state, now, curated, fetcher=http_get, log=print):
     log(f"Wide universe: {sum(1 for s in wide if s['market'] == 'IN')} NSE and {sum(1 for s in wide if s['market'] == 'US')} US stocks beyond the curated list")
     complete = bool(nse) and bool(sp)
     # a partial refresh is used now but not stamped as done, so the missing source is asked for again on the next run
-    return wide, {"fetched_at": now.isoformat(timespec="seconds") if complete else cache.get("fetched_at"), "list": wide}
+    return wide, {"fetched_at": now.isoformat(timespec="seconds") if complete else cache.get("fetched_at"), "list": wide, "v": LIST_VERSION}
 
 
 def _num(value):

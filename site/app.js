@@ -599,7 +599,7 @@
     }, S.watch.has(s.symbol) ? '★' : '☆');
     const row = h('tr', { class: 'stock', tabindex: '0', 'aria-label': `${s.name} details` },
       h('td', null, star),
-      h('td', { class: 'name' }, h('b', null, s.name), h('span', null, s.symbol, s.new ? ' · new listing' : '', s.stale ? ' · stale price' : '', s.slim && !s.analysed ? ' · quote only' : '')),
+      h('td', { class: 'name' }, h('b', null, s.name), h('span', null, s.symbol, s.new ? ' · new listing' : '', s.stale ? ' · stale price' : '', s.slim && !s.analysed ? ' · quote only' : '', s.series ? ` · ${s.series} series` : '')),
       h('td', { class: 'num' }, money(s.price, s.currency)),
       h('td', { class: `num ${isNum(s.change_pct) ? (s.change_pct >= 0 ? 'up' : 'down') : ''}` }, signed(s.change_pct)),
       h('td', null, badge(s[f.horizon])),
@@ -669,7 +669,8 @@
       const clear = () => { f.market = 'ALL'; f.list = 'ALL'; f.sector = 'ALL'; f.signal = 'ALL'; f.tech = {}; S.q = ''; saveFilters(); render(); };
       results.replaceChildren(...[status, head, h('div', { class: 'empty' },
         f.list === 'WATCH' && !S.q ? 'Your watchlist is empty. Tap the star next to a stock to add it.'
-          : S.catalog === 'loading' && S.q ? 'Nothing found in the main list yet. Every other listed stock is still loading.' : 'No stocks match these filters. ',
+          : S.catalog === 'loading' && S.q ? 'Nothing found in the main list yet. Every other listed stock is still loading.'
+          : S.q ? `No stock matches "${S.q.trim()}". This app covers stocks listed on the NSE (main board and SME) and the S&P 500; a company listed only on the BSE is not included. ` : 'No stocks match these filters. ',
         f.list === 'WATCH' && !S.q ? null : h('button', { type: 'button', class: 'chip', onclick: clear }, 'Clear filters'))].filter(Boolean));
       return;
     }

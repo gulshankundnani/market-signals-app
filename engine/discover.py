@@ -43,14 +43,41 @@ def india_new_listings(text, today, days=INDIA_WINDOW_DAYS):
     return found
 
 
+# EQ is the normal series. BE (traded only for delivery, "trade for trade") and BZ (the exchange's surveillance list) are listed companies too, many of
+# them penny stocks, so they are in the app as well; their series is shown. Leaving them out hid about 220 real NSE stocks from the search.
+LISTED_SERIES = ("EQ", "BE", "BZ")
+
+
+def _rows(text):
+    for row in csv.DictReader(io.StringIO(text)):
+        row = {(k or "").strip(): (v or "").strip() for k, v in row.items()}
+        if row.get("SERIES") in LISTED_SERIES and re.match(r"^[A-Z0-9&-]{1,20}$", row.get("SYMBOL", "")) and row.get("NAME OF COMPANY"):
+            yield row
+
+
 def nse_company_names(text):
-    """{"SYMBOL.NS": company name} for every equity-series stock in the NSE equity list."""
+    """{"SYMBOL.NS": company name} for every listed stock in the NSE equity list (EQ, BE and BZ series)."""
+    return {row["SYMBOL"] + ".NS": row["NAME OF COMPANY"] for row in _rows(text)}
+
+
+SME_LIST_URL = "https://nsearchives.nseindia.com/emerge/corporates/content/SME_EQUITY_L.csv"
+
+
+def sme_listings(text):
+    """{"SYMBOL.NS": company name} for the stocks on the NSE's SME platform (Emerge). Rights-entitlement lines (symbols and names ending in -RE or
+    -RE1 and so on) are not companies and are left out."""
     out = {}
     for row in csv.DictReader(io.StringIO(text)):
         row = {(k or "").strip(): (v or "").strip() for k, v in row.items()}
-        if row.get("SERIES") == "EQ" and re.match(r"^[A-Z0-9&-]{1,20}$", row.get("SYMBOL", "")) and row.get("NAME OF COMPANY"):
-            out[row["SYMBOL"] + ".NS"] = row["NAME OF COMPANY"]
+        symbol, name = row.get("SYMBOL", ""), row.get("NAME_OF_COMPANY", "")
+        if symbol and name and re.match(r"^[A-Z0-9&-]{1,20}$", symbol) and not re.search(r"-RE\d*$", symbol) and not re.search(r"-RE\d*$", name):
+            out[symbol + ".NS"] = name
     return out
+
+
+def nse_series(text):
+    """{"SYMBOL.NS": "BE" or "BZ"} for the stocks that are not in the normal EQ series."""
+    return {row["SYMBOL"] + ".NS": row["SERIES"] for row in _rows(text) if row["SERIES"] != "EQ"}
 
 
 def parse_us_directory(text, symbol_col, test_col, etf_col):
