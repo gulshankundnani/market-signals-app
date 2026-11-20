@@ -446,7 +446,7 @@ def build_universe(config, registry, limit):
               for s, nm, m, sec, tags in config["stocks"]]
     known = {s["symbol"] for s in stocks}
     stocks += [{"symbol": e["symbol"], "name": e["name"], "market": e["market"], "sector": "New listings",
-                "tags": ["new"], "new": True, "listed": e["listed"]} for e in registry if e["symbol"] not in known]
+                "tags": ["new"], "new": True, "listed": e["listed"]} for e in registry if e["symbol"] not in known and e.get("market", "IN") == "IN"]
     if limit:
         picked = [s for s in stocks if s["market"] == "IN"][:limit]
         new = [s for s in stocks if s.get("new")][:2]

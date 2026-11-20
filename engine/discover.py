@@ -100,7 +100,7 @@ def merge_registry(registry, found, today):
 
 def discover(state, today, fetch=http_get):
     """Returns the registry of new NSE listings. Network failures keep the previous values."""
-    registry = state.get("new_listings", [])
+    registry = [e for e in state.get("new_listings", []) if e.get("market", "IN") == "IN"]       # US entries saved by earlier versions are dropped
     found = []
     try:
         found += india_new_listings(fetch(NSE_LIST_URL).decode("utf-8", "replace"), today)

@@ -393,3 +393,19 @@ if __name__ == "__main__":
     unittest.main()
 
 
+
+
+class UsRegistryEntriesTests(unittest.TestCase):
+    def test_us_listings_saved_by_an_earlier_version_are_dropped(self):
+        def offline(url, **kwargs):
+            raise FetchError("down")
+
+        state = {"new_listings": [{"symbol": "GM", "name": "GM", "market": "US", "listed": "2026-11-17"},
+                                  {"symbol": "KEEP.NS", "name": "Keep", "market": "IN", "listed": "2026-11-17"}]}
+        registry = discover.discover(state, date(2026, 11, 20), fetch=offline)
+        self.assertEqual([e["symbol"] for e in registry], ["KEEP.NS"])
+
+    def test_the_stock_list_never_adds_a_us_registry_entry(self):
+        config = {"stocks": [["TCS.NS", "TCS", "IN", "IT", []]]}
+        registry = [{"symbol": "GM", "name": "GM", "market": "US", "listed": "2026-11-17"}, {"symbol": "NEW.NS", "name": "New", "market": "IN", "listed": "2026-11-17"}]
+        self.assertEqual([s["symbol"] for s in build.build_universe(config, registry, 0)], ["TCS.NS", "NEW.NS"])
