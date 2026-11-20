@@ -163,7 +163,8 @@
      is a separate file, fetched only when the stock is opened. */
   const slimStock = (r) => ({ ...r, lists: r.lists || [], tags: [], news: { fresh: [] }, slim: true,
     short: r.short || { label: null, score: null }, long: r.long || { label: null, score: null },
-    fundamentals: { market_cap: r.cap }, indicators: { hi252: r.high52, lo252: r.low52 } });
+    dividend_yield: r.dividend_yield,
+    fundamentals: { market_cap: r.cap, pe: r.pe, forward_pe: r.forward_pe, pb: r.pb, eps: r.eps, book_value: r.book_value, ...(r.fund || {}) }, indicators: { hi252: r.high52, lo252: r.low52 } });
   async function loadCatalog(prefetched) {
     S.catalog = 'loading';
     if ($('#chips')) updateSignals();
@@ -458,10 +459,18 @@
       valuation: [
         { label: 'Mkt cap', num: true, render: (s) => big(fund(s).market_cap, s.currency) },
         { label: 'P/E', num: true, render: (s) => number(fund(s).pe, 1) },
+        { label: 'Forward P/E', num: true, render: (s) => number(fund(s).forward_pe, 1), hideMd: true },
         { label: 'P/B', num: true, render: (s) => number(fund(s).pb, 1) },
+        { label: 'EV/EBITDA', num: true, render: (s) => number(fund(s).ev_ebitda, 1) },
+        { label: 'P/S', num: true, render: (s) => number(fund(s).price_to_sales, 1), hideMd: true },
+        { label: 'EPS', num: true, render: (s) => number(fund(s).eps, 2), hideMd: true },
+        { label: 'EBITDA', num: true, render: (s) => big(fund(s).ebitda, s.currency), hideMd: true },
+        { label: 'Op. margin', num: true, render: (s) => percent(fund(s).operating_margin, 0), hideMd: true },
         { label: 'ROE', num: true, render: (s) => percent(fund(s).roe, 0) },
-        { label: 'Revenue growth', num: true, render: (s) => percent(fund(s).revenue_growth, 0) },
+        { label: 'Revenue growth', num: true, render: (s) => percent(fund(s).revenue_growth, 0), hideMd: true },
         { label: 'Debt/Equity', num: true, render: (s) => number(fund(s).debt_to_equity) },
+        { label: 'Free cash flow', num: true, render: (s) => big(fund(s).free_cash_flow, s.currency), hideMd: true },
+        { label: 'Current ratio', num: true, render: (s) => number(fund(s).current_ratio, 2), hideMd: true },
       ],
       dividend: [
         { label: 'Yield (12m)', num: true, render: (s) => (s.dividend_yield > 0 ? percent(s.dividend_yield, 2) : DASH) },
@@ -493,6 +502,8 @@
       Dividend: (s) => s.dividend_yield, News: (s) => s.news.fresh.length,
       'Mkt cap': (s) => fund(s).market_cap, 'P/E': (s) => fund(s).pe, 'P/B': (s) => fund(s).pb, ROE: (s) => fund(s).roe,
       'Revenue growth': (s) => fund(s).revenue_growth, 'Debt/Equity': (s) => fund(s).debt_to_equity,
+      'Forward P/E': (s) => fund(s).forward_pe, 'EV/EBITDA': (s) => fund(s).ev_ebitda, 'P/S': (s) => fund(s).price_to_sales, EPS: (s) => fund(s).eps,
+      EBITDA: (s) => fund(s).ebitda, 'Op. margin': (s) => fund(s).operating_margin, 'Free cash flow': (s) => fund(s).free_cash_flow, 'Current ratio': (s) => fund(s).current_ratio,
       'Yield (12m)': (s) => s.dividend_yield, 'Recurring yield': (s) => (s.dividend ? s.dividend.forward_yield : null),
       Pays: (s) => (s.dividend ? s.dividend.frequency : null), 'Last payment': (s) => (s.dividend ? s.dividend.last_date : null),
       Change: (s) => (s.dividend ? s.dividend.growth : null), Payout: (s) => fund(s).payout_ratio,
@@ -558,8 +569,8 @@
     const chips = $('#chips'), results = $('#results');
     if (!chips || !results) return;
     const strips = listChips();
-    chips.replaceChildren(h('div', { class: 'chips', role: 'group', 'aria-label': 'Lists and technical screens' }, strips.lists),
-      strips.sectors.length ? h('div', { class: 'chips', role: 'group', 'aria-label': 'Sectors' }, strips.sectors) : null);
+    chips.replaceChildren(...[h('div', { class: 'chips', role: 'group', 'aria-label': 'Lists and technical screens' }, strips.lists),
+      strips.sectors.length ? h('div', { class: 'chips', role: 'group', 'aria-label': 'Sectors' }, strips.sectors) : null].filter(Boolean));
     const rows = visibleStocks();
     const f = S.filters;
     const signature = [f.market, f.list, f.sector, f.signal, S.q].join('|');
@@ -579,14 +590,14 @@
       } }, 'Delete this list') : null);
     if (!rows.length) {
       const clear = () => { f.market = 'ALL'; f.list = 'ALL'; f.sector = 'ALL'; f.signal = 'ALL'; S.q = ''; saveFilters(); render(); };
-      results.replaceChildren(status, head, h('div', { class: 'empty' },
+      results.replaceChildren(...[status, head, h('div', { class: 'empty' },
         f.list === 'WATCH' && !S.q ? 'Your watchlist is empty. Tap the star next to a stock to add it.'
           : S.catalog === 'loading' && S.q ? 'Nothing found in the main list yet. Every other listed stock is still loading.' : 'No stocks match these filters. ',
-        f.list === 'WATCH' && !S.q ? null : h('button', { type: 'button', class: 'chip', onclick: clear }, 'Clear filters')));
+        f.list === 'WATCH' && !S.q ? null : h('button', { type: 'button', class: 'chip', onclick: clear }, 'Clear filters'))].filter(Boolean));
       return;
     }
     const codes = f.market === 'ALL' ? ['IN', 'US'] : [f.market];
-    results.replaceChildren(status, head, h('div', { class: 'cols' + (codes.length > 1 ? ' two' : '') + (f.view !== 'overview' ? ' wide-view' : '') }, codes.map((code) => marketPanel(code, rows.filter((s) => s.market === code)))));
+    results.replaceChildren(...[status, head, h('div', { class: 'cols' + (codes.length > 1 ? ' two' : '') + (f.view !== 'overview' ? ' wide-view' : '') }, codes.map((code) => marketPanel(code, rows.filter((s) => s.market === code))))].filter(Boolean));
     decorateHelp(results);
   }
 
@@ -627,6 +638,7 @@
           S.watch.has(row.symbol) ? '★ In watchlist' : '☆ Add to watchlist'),
           h('button', { type: 'button', class: 'dclose', 'aria-label': 'Close', onclick: closeDetail }, '✕'))),
       h('div', { class: 'kv', style: 'padding:0 12px' }, [['Price', money(row.price, row.currency)], ['Day', signed(row.change_pct)], ['Market cap', big(row.cap, row.currency)],
+        ['P/E', number(row.pe, 1)], ['P/B', number(row.pb, 1)], ['EPS', number(row.eps, 2)], ['Book value per share', number(row.book_value, 2)],
         ['Position in 52-week range', range], ['Volume vs average', isNum(row.volume) && row.avg_volume ? `${(row.volume / row.avg_volume).toFixed(1)}x` : DASH]]
         .map(([k, v]) => h('div', null, h('span', null, k), h('b', null, naOr(v))))),
       h('p', { class: 'muted small', style: 'padding:8px 12px' }, note),
@@ -833,9 +845,19 @@
   function fundamentalsBlock(s) {
     const f = s.fundamentals || {};
     if (!Object.keys(f).length && !isNum(s.dividend_yield)) return h('p', { class: 'muted small' }, 'Fundamentals are not available for this stock right now.');
-    return kv([['Market cap', big(f.market_cap, s.currency)], ['P/E', number(f.pe, 1)], ['Forward P/E', number(f.forward_pe, 1)], ['Price/Book', number(f.pb, 1)],
-      ['Return on equity', percent(f.roe)], ['Profit margin', percent(f.profit_margin)], ['Revenue growth', percent(f.revenue_growth)], ['Earnings growth', percent(f.earnings_growth)],
-      ['Debt/Equity', number(f.debt_to_equity)], ['Dividend yield (12 months)', percent(s.dividend_yield, 2)], ['Payout ratio', percent(f.payout_ratio, 0)]]);
+    const cur = s.currency;
+    const group = (title, pairs) => h('div', { style: 'margin-bottom:10px' }, h('h4', { style: 'margin:8px 0 4px' }, title), kv(pairs));
+    return h('div', null,
+      group('Valuation', [['Market cap', big(f.market_cap, cur)], ['Enterprise value', big(f.enterprise_value, cur)], ['P/E (trailing)', number(f.pe, 1)], ['Forward P/E', number(f.forward_pe, 1)],
+        ['PEG', number(f.peg, 2)], ['Price/Book', number(f.pb, 1)], ['Price/Sales', number(f.price_to_sales, 1)], ['EV/EBITDA', number(f.ev_ebitda, 1)], ['EV/Revenue', number(f.ev_revenue, 1)]]),
+      group('Earnings and margins', [['Revenue', big(f.revenue, cur)], ['EBITDA', big(f.ebitda, cur)], ['EBITDA margin', percent(f.ebitda_margin)], ['Operating margin', percent(f.operating_margin)],
+        ['Gross margin', percent(f.gross_margin)], ['Profit margin', percent(f.profit_margin)], ['EPS (trailing)', number(f.eps, 2)], ['Revenue growth', percent(f.revenue_growth)],
+        ['Earnings growth', percent(f.earnings_growth)]]),
+      group('Balance sheet and returns', [['Return on equity', percent(f.roe)], ['Return on assets', percent(f.roa)], ['Debt/Equity', number(f.debt_to_equity)], ['Total debt', big(f.total_debt, cur)],
+        ['Cash', big(f.total_cash, cur)], ['Current ratio', number(f.current_ratio, 2)], ['Free cash flow', big(f.free_cash_flow, cur)], ['Operating cash flow', big(f.operating_cash_flow, cur)],
+        ['Book value per share', number(f.book_value, 2)]]),
+      group('Shareholder returns', [['Dividend yield (12 months)', percent(s.dividend_yield, 2)], ['Payout ratio', percent(f.payout_ratio, 0)]]),
+      h('p', { class: 'muted small' }, 'Figures are as reported by Yahoo Finance for the last twelve months, in the company\'s reporting currency. A blank (n/a) means Yahoo has no value; nothing is estimated. They are shown as they are: no rating or "cheap/expensive" label is made from them.'));
   }
 
   function dividendBlock(s) {

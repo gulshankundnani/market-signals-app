@@ -341,7 +341,8 @@ def status_block(config, records, errors, carried, overview, conditions, ipos, d
             if not s:
                 continue
             name = "India" if market == "IN" else "US"
-            parts.append(f"{name}: {s['match']} of {s['verified']} match {s['source']} within 0.5% (median difference {s['median_diff_pct']:.3f}%)"
+            spread = f" (median difference {s['median_diff_pct']:.3f}%)" if isinstance(s.get("median_diff_pct"), (int, float)) else " (nothing to compare yet)"
+            parts.append(f"{name}: {s['match']} of {s['verified']} match {s['source']} within 0.5%{spread}"
                          + (f", {s['mismatch']} disagree" if s["mismatch"] else "") + (f", {s['unverified']} not covered" if s["unverified"] else ""))
             healthy = healthy and s["mismatch"] == 0 and (s["agreement_pct"] or 0) >= 95
         add("Price cross-check", "ok" if healthy else "warn", "; ".join(parts))
@@ -383,7 +384,7 @@ def fundamentals_fresh(cached, now_ts):
     example no market capitalisation for Reliance and TCS), and keeping that for a whole day left the gap on the page.
     An answer without a market cap is therefore asked for again after half an hour, and after a few incomplete answers
     in a row (some small companies really have none) once a day again."""
-    if not cached or "events" not in cached.get("data", {}):
+    if not cached or "events" not in cached.get("data", {}) or cached["data"].get("v") != fundamentals.VERSION:
         return False
     age = now_ts - cached.get("ts", 0)
     if cached["data"].get("market_cap") is None:
@@ -736,7 +737,8 @@ def run(args):
     track_record, pending, queue, notified, outcome_lines = track(args, state, prev_data, calls, ctx, now_ts, token, chat, link_for_symbol)
     if outcome_lines:
         alert_log, _ = alerts.update_log(alert_log, [text for _, text in outcome_lines], now_ts, [sym for sym, _ in outcome_lines])
-    analysis_index = catalog.update(now, state.get("analysis_index"), wide_list, quotes, analyse, ctx, args.prev, load_previous, Path(args.out), lists_fn=add_lists, curated_records=records)
+    analysis_index = catalog.update(now, state.get("analysis_index"), wide_list, quotes, analyse, ctx, args.prev, load_previous, Path(args.out), lists_fn=add_lists, curated_records=records,
+                                    fundamentals_fn=lambda symbol: fundamentals.fetch_fundamentals(quote_session, symbol))
     status = status_block(config, records, errors, carried, overview, conditions, ipos, delivery, track_record, pending, token, chat, accuracy, official_events, live_deals)
     data = {"version": 1, "generated_at": now.isoformat(timespec="seconds"), "market": overview, "conditions": conditions,
             "status": status, "accuracy": accuracy, "backtest_method": {"costs": costs.describe(cost_overrides), "notes": BACKTEST_NOTES}, "events": events_data, "ipos": ipos,

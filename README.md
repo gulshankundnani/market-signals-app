@@ -392,6 +392,12 @@ Then open http://127.0.0.1:8765/. Python 3.10+ and Node 18+ are the only require
   between two extremes when the price ticks across the line.
 * **Long-term (months to years):** price against the 200-day average, golden/death cross, 6-month return, 52-week position and volatility.
 * **Sorting:** click any table header on the Signals page to sort by that column (numbers largest first, text A to Z); click again to reverse. Rows with no value always go last.
+* **Fundamentals** (from Yahoo Finance, last twelve months, shown as reported, never estimated, no rating made from them): market cap, enterprise value,
+  P/E, forward P/E, PEG, P/B, P/S, EV/EBITDA, EV/revenue, revenue, EBITDA and its margin, operating, gross and profit margins, EPS, revenue and earnings
+  growth, ROE, ROA, debt/equity, total debt, cash, current ratio, free and operating cash flow, book value per share, dividend yield and payout ratio.
+  Main-list stocks get them from one request each, once a day. Every other listed stock gets P/E, forward P/E, P/B, EPS, book value and dividend yield
+  from the bulk quote at no extra cost, and the rest (EBITDA, margins, cash flow and so on) as it is analysed in turn; an older record is analysed again
+  when the fields were added. The Valuation table view shows them, and every column sorts.
 * **Chart patterns** (shown on the stock page, not part of the score): fixed rules on the latest completed candles. Candle shapes: doji, hammer,
   shooting star, bullish/bearish engulfing, morning/evening star, three white soldiers/black crows, bullish/bearish harami, inside day.
   Price structure: golden/death cross (last 10 days), MACD cross (last 3 days), 20-day breakout/breakdown, within 3% of the 52-week high or low,

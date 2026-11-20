@@ -119,3 +119,65 @@ class LiteRecordTests(unittest.TestCase):
                        curated_records=[{**catalog.lite(full), "carried": True}])
         kept = json.loads((Path(out2) / "detail" / f"{catalog.shard_of('KEEP.NS')}.json").read_text())
         self.assertNotIn("lite", kept["KEEP.NS"])
+
+
+class RatioTests(unittest.TestCase):
+    def test_summary_parses_ebitda_and_the_other_added_ratios(self):
+        from engine import fundamentals
+        payload = {"quoteSummary": {"result": [{
+            "financialData": {"ebitda": {"raw": 5e9}, "ebitdaMargins": {"raw": 0.21}, "operatingMargins": {"raw": 0.17}, "freeCashflow": {"raw": 1e9},
+                              "currentRatio": {"raw": 1.4}, "returnOnAssets": {"raw": 0.08}, "totalRevenue": {"raw": 2.4e10}},
+            "defaultKeyStatistics": {"enterpriseToEbitda": {"raw": 11.5}, "trailingEps": {"raw": 42.0}, "bookValue": {"raw": 300.0}, "pegRatio": {"raw": 1.2}},
+            "summaryDetail": {"priceToSalesTrailing12Months": {"raw": 3.1}}}]}}
+        out = fundamentals.parse_summary(payload)
+        self.assertEqual((out["ebitda"], out["ev_ebitda"], out["eps"], out["book_value"], out["peg"], out["price_to_sales"], out["current_ratio"], out["v"]),
+                         (5e9, 11.5, 42.0, 300.0, 1.2, 3.1, 1.4, fundamentals.VERSION))
+        self.assertIsNone(out["ev_revenue"])                      # missing stays missing, never zero
+
+    def test_bulk_quote_carries_pe_eps_and_book_value(self):
+        from engine import wide
+        payload = {"quoteResponse": {"result": [{"symbol": "A.NS", "regularMarketPrice": 100.0, "trailingPE": 20.5, "epsTrailingTwelveMonths": 4.9,
+                                                 "bookValue": 40.0, "priceToBook": 2.5, "trailingAnnualDividendYield": 0.01}]}}
+        q = wide.parse_quotes(payload)["A.NS"]
+        self.assertEqual((q["pe"], q["eps"], q["book_value"], q["pb"], q["dividend_yield"]), (20.5, 4.9, 40.0, 2.5, 0.01))
+        self.assertIsNone(q["forward_pe"])
+
+    def test_index_row_has_quote_ratios_and_the_analysed_stocks_fundamentals(self):
+        q = {"price": 100.0, "pe": 20.0, "eps": 5.0, "book_value": 40.0, "pb": 2.5, "dividend_yield": 0.01}
+        record = {"short": {}, "long": {}, "fundamentals": {"ebitda": 5e9, "ev_ebitda": 11.5, "roe": 0.2, "sector": "X", "events": {}}}
+        row = catalog.index_row({"symbol": "A.NS", "name": "A", "market": "IN"}, q, {"at": "t"}, record)
+        self.assertEqual((row["pe"], row["eps"], row["book_value"]), (20.0, 5.0, 40.0))
+        self.assertEqual(row["fund"], {"ebitda": 5e9, "ev_ebitda": 11.5, "roe": 0.2})       # only the numeric ratios the table uses
+        self.assertEqual(catalog.index_row({"symbol": "B.NS", "name": "B", "market": "IN"}, q, None, None)["fund"], {})
+
+    def test_rotation_fetches_fundamentals_and_keeps_the_old_ones_when_yahoo_has_none(self):
+        shard = catalog.shard_of("S0.NS")
+        previous = {"S0.NS": {"symbol": "S0.NS", "fundamentals": {"market_cap": 1e9, "ebitda": 7.0}}}
+        out = tempfile.mkdtemp()
+        answers = {"S0.NS": {}, "S1.NS": {"market_cap": 2e9, "ebitda": 9.0}}
+        catalog.update(NOW, {}, WIDE[:2], QUOTES, fake_analyse, {"bars": {}}, "prev", lambda prev, name: previous if name == f"detail/{shard}.json" else {}, out,
+                       log=lambda *_: None, fundamentals_fn=lambda symbol: answers[symbol])
+        got = {}
+        for f in (Path(out) / "detail").glob("*.json"):
+            got.update(json.loads(f.read_text()))
+        self.assertEqual(got["S0.NS"]["fundamentals"]["ebitda"], 7.0)    # an empty answer never wipes an earlier one
+        self.assertEqual(got["S1.NS"]["fundamentals"]["ebitda"], 9.0)
+
+
+class StatusWithoutComparisonsTests(unittest.TestCase):
+    def test_price_check_status_survives_a_run_with_nothing_verified(self):
+        from engine import build
+        accuracy = {"IN": {"match": 0, "verified": 0, "source": "NSE bhavcopy", "median_diff_pct": None, "mismatch": 0, "unverified": 5, "agreement_pct": None}}
+        status = build.status_block({"stocks": []}, [], [], [], {}, {}, {}, {}, {}, [], None, None, accuracy)
+        check = next(c for c in status["checks"] if c["name"] == "Price cross-check")
+        self.assertIn("nothing to compare yet", check["detail"])
+
+
+class FundamentalsCatchUpTests(unittest.TestCase):
+    def test_stocks_analysed_before_the_new_fields_are_picked_again_soon(self):
+        recent = (NOW - timedelta(hours=1)).isoformat()
+        index = {s["symbol"]: {"at": recent, "ok": True, "fv": 1} for s in WIDE}
+        self.assertEqual(catalog.pick(WIDE, QUOTES, index, NOW), [])
+        self.assertEqual(len(catalog.pick(WIDE, QUOTES, index, NOW, fund_version=2)), 5)
+        index["S0.NS"]["fv"] = 2
+        self.assertNotIn("S0.NS", [s["symbol"] for s in catalog.pick(WIDE, QUOTES, index, NOW, fund_version=2)])

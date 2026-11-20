@@ -130,7 +130,9 @@ def parse_quotes(payload):
         out[row["symbol"]] = {"price": price, "change_pct": _num(row.get("regularMarketChangePercent")), "volume": _num(row.get("regularMarketVolume")),
                               "avg_volume": _num(row.get("averageDailyVolume3Month")), "high52": _num(row.get("fiftyTwoWeekHigh")),
                               "low52": _num(row.get("fiftyTwoWeekLow")), "cap": _num(row.get("marketCap")), "state": row.get("marketState"),
-                              "time": _num(row.get("regularMarketTime"))}
+                              "time": _num(row.get("regularMarketTime")), "pe": _num(row.get("trailingPE")), "forward_pe": _num(row.get("forwardPE")),
+                              "eps": _num(row.get("epsTrailingTwelveMonths")), "book_value": _num(row.get("bookValue")), "pb": _num(row.get("priceToBook")),
+                              "dividend_yield": _num(row.get("trailingAnnualDividendYield"))}
     return out
 
 

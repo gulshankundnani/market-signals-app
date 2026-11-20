@@ -2,7 +2,7 @@
 import inspect
 import unittest
 
-from engine import build, signals
+from engine import build, fundamentals, signals
 
 
 class FakeSession:
@@ -11,11 +11,11 @@ class FakeSession:
 
 
 def complete(cap=1_000.0):
-    return {"market_cap": cap, "pe": 20.0, "events": {"earnings": [], "ex_dividend": None, "dividend_pay": None}}
+    return {"market_cap": cap, "pe": 20.0, "events": {"earnings": [], "ex_dividend": None, "dividend_pay": None}, "v": fundamentals.VERSION}
 
 
 def partial():
-    return {"market_cap": None, "pe": 20.0, "events": {"earnings": [], "ex_dividend": None, "dividend_pay": None}}
+    return {"market_cap": None, "pe": 20.0, "events": {"earnings": [], "ex_dividend": None, "dividend_pay": None}, "v": fundamentals.VERSION}
 
 
 class FreshnessTests(unittest.TestCase):

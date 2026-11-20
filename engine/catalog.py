@@ -17,6 +17,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
+from . import fundamentals
+
 SHARDS = 64
 PER_RUN = 60
 REFRESH_HOURS = 20
@@ -60,7 +62,7 @@ def _age_hours(stamp, now):
         return None
 
 
-def pick(wide_list, quotes, index, now, size=PER_RUN):
+def pick(wide_list, quotes, index, now, size=PER_RUN, fund_version=None):
     """The stocks to analyse this run: never analysed first (most traded first), then the stalest. Only stocks that have a quote."""
     due = []
     for stock in wide_list:
@@ -70,7 +72,8 @@ def pick(wide_list, quotes, index, now, size=PER_RUN):
         entry = index.get(stock["symbol"])
         if entry:
             age = _age_hours(entry.get("at"), now)
-            if age is not None and age < (REFRESH_HOURS if entry.get("ok") else RETRY_HOURS):
+            behind = bool(fund_version) and entry.get("ok") and entry.get("fv") != fund_version      # analysed before the fundamentals had these fields
+            if age is not None and age < (REFRESH_HOURS if entry.get("ok") else RETRY_HOURS) and not behind:
                 continue
         turnover = (q.get("avg_volume") or 0) * q["price"]
         due.append(((1, entry.get("at") or "", 0) if entry else (0, "", -turnover), stock))
@@ -92,6 +95,8 @@ def _round(value, digits):
     return round(value, digits) if isinstance(value, (int, float)) else None
 
 
+FUND_KEYS = ("roe", "roa", "debt_to_equity", "profit_margin", "operating_margin", "ebitda_margin", "revenue_growth", "earnings_growth", "payout_ratio",
+             "ebitda", "ev_ebitda", "ev_revenue", "price_to_sales", "peg", "free_cash_flow", "current_ratio", "revenue")
 NEAR = 0.05          # the same 5% as the "Near 52-week high / low" lists of the curated stocks
 
 
@@ -117,10 +122,13 @@ def index_row(stock, q, entry, record):
             "short": {"label": short.get("label"), "score": short.get("score")} if record else None,
             "long": {"label": long_.get("label"), "score": long_.get("score")} if record else None,
             "analysed_at": (entry or {}).get("at") if record else None,
+            "pe": _round(q.get("pe"), 2), "forward_pe": _round(q.get("forward_pe"), 2), "pb": _round(q.get("pb"), 2), "eps": _round(q.get("eps"), 2),
+            "book_value": _round(q.get("book_value"), 2), "dividend_yield": _round(q.get("dividend_yield"), 4),
+            "fund": {k: v for k, v in ((record or {}).get("fundamentals") or {}).items() if k in FUND_KEYS and isinstance(v, (int, float))},
             "lists": list(dict.fromkeys(quote_lists(q) + [n for n in (record or {}).get("lists", []) if n != "Other"]))}
 
 
-def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, log=print, lists_fn=None, curated_records=()):
+def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, log=print, lists_fn=None, curated_records=(), fundamentals_fn=None):
     """Analyse this run's slice, rewrite the shards and the index. Returns the analysis index to keep in the saved state.
 
     analyse(entry, ctx) is the same function the curated list uses. One bad stock never stops the run."""
@@ -131,7 +139,7 @@ def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, l
     for symbol in list(index):                           # an index entry whose record is gone (a shard that failed to load) is analysed again
         if index[symbol].get("ok") and symbol not in shards.get(shard_of(symbol), {}):
             del index[symbol]
-    chosen = pick(wide_list, quotes, index, now)
+    chosen = pick(wide_list, quotes, index, now, fund_version=fundamentals.VERSION if fundamentals_fn else None)
     local = {**ctx, "bars": {}, "completed_bars": {}, "news_breaker": _NoNews()}
 
     def one(stock):
@@ -144,6 +152,12 @@ def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, l
     with ThreadPoolExecutor(WORKERS) as pool:
         results = list(pool.map(one, chosen))
     stamp, done = now.isoformat(timespec="seconds"), 0
+    if fundamentals_fn:                                  # one request per stock, in the same slice, so the whole list fills in over hours
+        for symbol, record, error in results:
+            if record is not None:
+                old = (shards.get(shard_of(symbol), {}).get(symbol) or {}).get("fundamentals") or {}
+                fresh = fundamentals_fn(symbol)
+                record["fundamentals"] = fresh if fresh and fresh.get("market_cap") is not None else (old or fresh or {})
     for symbol, record, error in results:
         if record is not None:
             try:
@@ -156,7 +170,7 @@ def update(now, index, wide_list, quotes, analyse, ctx, prev, loader, out_dir, l
         if lists_fn:
             lists_fn([record])                          # the lists (Oversold, Low debt and so on) the curated stocks get
         shards[shard_of(symbol)][symbol] = record
-        index[symbol] = {"at": stamp, "ok": True}
+        index[symbol] = {"at": stamp, "ok": True, "fv": fundamentals.VERSION if fundamentals_fn else None}
         done += 1
     for record in curated_records:                       # the curated stocks' full records, loaded when one is opened (a carried-over or already slim record never replaces them)
         if not record.get("carried") and not record.get("lite"):

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from .fetch import FetchError
 
+VERSION = 2          # raised when fields are added, so answers cached by an older version are fetched again
 MODULES = "summaryDetail,defaultKeyStatistics,financialData,assetProfile,price,calendarEvents"
 URL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules=" + MODULES
 
@@ -54,7 +55,27 @@ def parse_summary(payload):
         "revenue_growth": _raw(result, "financialData", "revenueGrowth"),
         "earnings_growth": _raw(result, "financialData", "earningsGrowth"),
         "payout_ratio": _raw(result, "summaryDetail", "payoutRatio"),
+        # Added in version 2, all as reported by Yahoo for the last twelve months (the amounts are in the company's reporting currency)
+        "ebitda": _raw(result, "financialData", "ebitda"),
+        "ebitda_margin": _raw(result, "financialData", "ebitdaMargins"),
+        "enterprise_value": _raw(result, "defaultKeyStatistics", "enterpriseValue"),
+        "ev_ebitda": _raw(result, "defaultKeyStatistics", "enterpriseToEbitda"),
+        "ev_revenue": _raw(result, "defaultKeyStatistics", "enterpriseToRevenue"),
+        "eps": _raw(result, "defaultKeyStatistics", "trailingEps"),
+        "book_value": _raw(result, "defaultKeyStatistics", "bookValue"),
+        "peg": _raw(result, "defaultKeyStatistics", "pegRatio"),
+        "price_to_sales": _raw(result, "summaryDetail", "priceToSalesTrailing12Months"),
+        "revenue": _raw(result, "financialData", "totalRevenue"),
+        "operating_margin": _raw(result, "financialData", "operatingMargins"),
+        "gross_margin": _raw(result, "financialData", "grossMargins"),
+        "free_cash_flow": _raw(result, "financialData", "freeCashflow"),
+        "operating_cash_flow": _raw(result, "financialData", "operatingCashflow"),
+        "current_ratio": _raw(result, "financialData", "currentRatio"),
+        "roa": _raw(result, "financialData", "returnOnAssets"),
+        "total_debt": _raw(result, "financialData", "totalDebt"),
+        "total_cash": _raw(result, "financialData", "totalCash"),
         "events": parse_events(result),
+        "v": VERSION,
     }
 
 

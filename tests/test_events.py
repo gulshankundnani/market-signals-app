@@ -152,7 +152,7 @@ class CachedFundamentalsTests(unittest.TestCase):
     def test_a_cached_record_without_events_is_fetched_again_but_a_complete_one_is_reused(self):
         now = int(time.time())
         records = [{"symbol": "OLD"}, {"symbol": "NEW"}]
-        state = {"fundamentals": {"OLD": {"ts": now, "data": {"pe": 10}}, "NEW": {"ts": now, "data": {"pe": 11, "events": {"earnings": []}}}}}
+        state = {"fundamentals": {"OLD": {"ts": now, "data": {"pe": 10}}, "NEW": {"ts": now, "data": {"pe": 11, "events": {"earnings": []}, "v": fundamentals.VERSION}}}}
         session = mock.MagicMock()
         session.start.return_value = True
         with mock.patch.object(fundamentals, "fetch_fundamentals", return_value={"pe": 12, "events": {"earnings": ["2026-12-01"]}}) as fetched, \
